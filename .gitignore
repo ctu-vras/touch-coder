@@ -1,0 +1,44 @@
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore distribution/build directories
+build/
+dist/
+
+# Ignore executables
+*.exe
+
+# Ignore flagged folder (if not needed in the repo)
+flagged/
+
+# Ignore the icons folder (if not needed in the repo)
+
+
+# Include the Videos folder and its contents
+!Videos/
+!Videos/cat3_mp4.mp4
+
+# Include the Labeled_data folder and its contents
+!Labeled_data/
+!Labeled_data/cat3_mp4/
+
+# Ignore config and environment files
+
+*.env
+
+# Ignore log files
+*.log
+
+# Ignore text files that aren't documentation
+*.txt
+!README.txt
+
+# Ignore hidden system files
+.DS_Store
+Thumbs.db
+
+# Ignore virtual environments
+venv/
+.env/
