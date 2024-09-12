@@ -7,8 +7,6 @@ __pycache__/
 build/
 dist/
 
-# Ignore executables
-*.exe
 
 # Ignore flagged folder (if not needed in the repo)
 flagged/
