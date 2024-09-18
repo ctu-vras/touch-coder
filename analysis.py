@@ -12,8 +12,10 @@ from collections import Counter
 import statistics
     
 
-def do_analysis(folder_path,output_folder,name,debug):
-    
+def do_analysis(folder_path,output_folder,name,debug,frame_rate):
+    if frame_rate == None:
+        print("Analysis error: Frame rate is None.")
+        return 0
     
     
     
@@ -523,10 +525,14 @@ def do_analysis(folder_path,output_folder,name,debug):
         combined_total_touches = sum(total_touches_list)
         combined_total_duration_seconds = sum(total_duration_list_seconds)
         if total_frames != 0: combined_percentage_touching_seconds = (combined_total_duration_seconds / (total_frames / frame_rate)) * 100
-        if combined_total_touches != 0: combined_average_touch_duration_seconds = sum(
-            [sum(durations) for durations in touch_durations_list_seconds]
-        ) / combined_total_touches
-        if combined_total_duration_seconds != 0:combined_touch_rate_seconds = 100*(combined_total_touches /(total_frames/frame_rate))
+        if combined_total_touches != 0:
+            combined_average_touch_duration_seconds = sum([sum(durations) for durations in touch_durations_list_seconds]) / combined_total_touches
+        else:
+            combined_average_touch_duration_seconds = 0
+        if combined_total_duration_seconds != 0:
+            combined_touch_rate_seconds = 100*(combined_total_touches /(total_frames/frame_rate))
+        else:
+            combined_touch_rate_seconds = 0
         touch_durations_list_in_one = [item for sublist in touch_durations_list_seconds for item in sublist]
         if len(touch_durations_list_in_one)>=2:
             stdev_of_all = statistics.stdev(touch_durations_list_in_one)
@@ -576,7 +582,10 @@ def do_analysis(folder_path,output_folder,name,debug):
         combined_total_touches = sum(total_touches_list)
         combined_total_duration = sum(total_duration_list)
         if total_frames != 0:combined_percentage_touching = (combined_total_duration / total_frames) * 100
-        combined_average_touch_duration = sum([sum(durations) for durations in touch_durations_list]) / combined_total_touches
+        if combined_total_touches != 0:
+            combined_average_touch_duration = sum([sum(durations) for durations in touch_durations_list]) / combined_total_touches
+        else:
+            combined_average_touch_duration = 0
         if total_frames != 0:combined_touch_rate = (combined_total_touches / total_frames)* 100
         touch_durations_list_in_one = [item for sublist in touch_durations_list for item in sublist]
         if len(touch_durations_list_in_one)>=2:
@@ -626,7 +635,7 @@ def do_analysis(folder_path,output_folder,name,debug):
         total_frames=total_frames,
         stdev_list = stdev_list
     )
-    frame_rate = 30
+    
     output_file_path = output_folder + '/analysis_table_seconds.csv'
     result_df = analyze_baby_touch_data_seconds(
         limbs=limbs,
@@ -813,4 +822,4 @@ if __name__ == "__main__":
     output_folder = "Labeled_data/test/plots/"
     name = "test"
     debug = False
-    do_analysis(data_path,output_folder,name,debug)
+    do_analysis(data_path,output_folder,name,debug,frame_rate=30)

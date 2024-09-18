@@ -1,3 +1,4 @@
 {
-    "diagram_size": "small"
+    "diagram_size": "small",
+    "minimal_touch_lenght": 280 
 }

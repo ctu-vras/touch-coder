@@ -54,7 +54,7 @@ class ClothApp:
     def __init__(self, master, on_close_callback):
         # Vytvoření nového okna pomocí Toplevel
         self.top_level = tk.Toplevel(master)
-        self.top_level.title("Cloth App")
+        self.top_level.title("Clothes App")
         self.top_level.geometry("225x348")  # Double the original dimensions for the window size
         self.on_close_callback = on_close_callback
         
@@ -129,6 +129,7 @@ class Video:
         self.touch_to_next_zone = [False for _ in range(self.number_zones)]
         self.last_green = [(10, 10),(5, 5),(50, 50)]
         self.play = False
+        self.frame_rate = None
     
     def get_total_frames(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -167,7 +168,7 @@ class LabelingApp(tk.Tk):
         self.color_end = "red"
         self.frame_cache = {}
         self.image = None
-        self.diagram_size = self.load_config()
+        self.diagram_size, self.minimal_touch_lenght = self.load_config()
         self.img_buffer = {}
         self.play = False
         self.play_thread_on = False
@@ -178,6 +179,7 @@ class LabelingApp(tk.Tk):
         self.timeline_frame = tk.Frame(self, bg='grey',height=50)
         self.notes_file_path = None
         self.progress = {}
+        self.frame_rate = None
         #self.looking_dic = {}
         #self.cat3_mp4looking= None
         
@@ -192,7 +194,9 @@ class LabelingApp(tk.Tk):
         
         
         
-        self.control_frame = tk.Frame(self, bg='lightgrey',height=50)
+        self.control_frame = tk.Frame(self, bg='lightgrey',height=100)
+        #self.control_frame_2 = tk.Frame(self, bg='red',height=100)
+        
         self.diagram_frame = tk.Frame(self, bg='lightgrey')
         
         
@@ -200,6 +204,7 @@ class LabelingApp(tk.Tk):
         self.video_frame.grid(row=1, column=0, sticky="nsew")
         self.timeline_frame.grid(row=2, column=0, sticky="ew")
         self.control_frame.grid(row=0, column=0, columnspan=1, sticky="ew")
+        #self.control_frame_2.grid(row=0, column=0, columnspan=1, sticky="ew")
         self.diagram_frame.grid(row=0, column=1, rowspan=3, sticky="ns")
         
         # Configure the main window to make the video and timeline frames resizable
@@ -336,8 +341,9 @@ class LabelingApp(tk.Tk):
         with open('config.json', 'r') as file:
             config = json.load(file)
             diagram_size = config.get('diagram_size', 'small')  # Default to 'medium' if not specified
+            minimal_touch_lenght = config.get('minimal_touch_lenght', '280')
             print("INFO: Loaded diagram size:", diagram_size)
-            return diagram_size
+            return diagram_size, minimal_touch_lenght
     #diagram 
     def on_mouse_wheel(self, event):
             if event.delta > 0 or event.num == 4:  # Scrolling up
@@ -768,11 +774,11 @@ class LabelingApp(tk.Tk):
             else:
                 self.frame_label = tk.Label(self.video_frame, image=photo_img)
                 self.frame_label.pack(expand=True)
-            self.loading_label.config(text="Loaded", bg='green')
+            self.loading_label.config(text="Buffer Loaded", bg='green')
             self.image = photo_img  # Keep a reference to prevent garbage collection
         else:
             print("INFO: Frame not in buffer. You may need to wait or trigger a buffer update.")
-            self.loading_label.config(text="Loading", bg='red')
+            self.loading_label.config(text="Buffer Loading", bg='red')
             #self.background_thread.run()
             #self.display_first_frame()
         #rame = cv2.imread(first_frame_path)
@@ -965,42 +971,56 @@ class LabelingApp(tk.Tk):
             return None
     
     def init_controls(self):
-        # Initialize control buttons here
-        # Example: Add a 'Next Frame' button
+        # Initialize control buttons here, using grid layout
         load_video_btn = tk.Button(self.control_frame, text="Load Video", command=self.load_video)
-        load_video_btn.pack(side=tk.LEFT, padx=10, pady=10)
-        
+        load_video_btn.grid(row=0, column=0, padx=5, pady=5)
+
         back_10_frame_btn = tk.Button(self.control_frame, text="<<", command=lambda: self.next_frame(-7))
-        back_10_frame_btn.pack(side=tk.LEFT, padx=10, pady=10)
+        back_10_frame_btn.grid(row=0, column=1, padx=5, pady=5)
+
         back_frame_btn = tk.Button(self.control_frame, text="<", command=lambda: self.next_frame(-1))
-        back_frame_btn.pack(side=tk.LEFT, padx=10, pady=10)
+        back_frame_btn.grid(row=0, column=2, padx=5, pady=5)
+
         self.frame_counter_label = tk.Label(self.control_frame, text="0 / 0")
-        self.frame_counter_label.pack(side=tk.LEFT, padx=5)
-   
+        self.frame_counter_label.grid(row=0, column=3, padx=5)
+
         next_frame_btn = tk.Button(self.control_frame, text=">", command=lambda: self.next_frame(1))
-        next_frame_btn.pack(side=tk.LEFT, padx=10, pady=10) 
+        next_frame_btn.grid(row=0, column=4, padx=5, pady=5)
+
         next_10_frame_btn = tk.Button(self.control_frame, text=">>", command=lambda: self.next_frame(7))
-        next_10_frame_btn.pack(side=tk.LEFT, padx=10, pady=10)
+        next_10_frame_btn.grid(row=0, column=5, padx=5, pady=5)
+
         save_btn = tk.Button(self.control_frame, text="Save", command=self.save_data)
-        save_btn.pack(side=tk.LEFT, padx=10, pady=10)
-        self.cloth_btn = tk.Button(self.control_frame, text="Cloth", command=self.open_cloth_app)
-        self.cloth_btn.pack(side=tk.LEFT, padx=10, pady=10)
-        
+        save_btn.grid(row=0, column=6, padx=5, pady=5)
+
+        self.cloth_btn = tk.Button(self.control_frame, text="Clothes", command=self.open_cloth_app)
+        self.cloth_btn.grid(row=0, column=7, padx=5, pady=5)
+
         play_btn = tk.Button(self.control_frame, text="Play", command=self.play_video)
-        play_btn.pack(side=tk.LEFT, padx=10, pady=10)
-        
+        play_btn.grid(row=0, column=8, padx=5, pady=5)
+
         stop_btn = tk.Button(self.control_frame, text="Stop", command=self.stop_video)
-        stop_btn.pack(side=tk.LEFT, padx=10, pady=10)
-        
+        stop_btn.grid(row=0, column=9, padx=5, pady=5)
+
         analysis_btn = tk.Button(self.control_frame, text="Analysis", command=self.analysis)
-        analysis_btn.pack(side=tk.LEFT, padx=10, pady=10)
+        analysis_btn.grid(row=0, column=10, padx=5, pady=5)
+
         
-        self.name_label = tk.Label(self.control_frame, text="-----")
-        self.name_label.pack(side=tk.LEFT, padx=10, pady=10)  # Add some vertical padding
-        
+
+
+        self.framerate_label = tk.Label(self.control_frame, text=f"Frame Rate: -----")
+        self.framerate_label.grid(row=0, column=11, padx=5, pady=5)
+
+        self.min_touch_lenght_label = tk.Label(self.control_frame, text=f"Minimal Touch Length: -----")
+        self.min_touch_lenght_label.grid(row=0, column=12, padx=5, pady=5)
+
         self.loading_label = tk.Label(self.control_frame, text="Buffer loaded")
-        self.loading_label.pack(side=tk.LEFT, padx=10, pady=10)  # Add some vertical padding
+        self.loading_label.grid(row=0, column=13, padx=5, pady=5)
         
+        # Now place the labels in a new row
+        self.name_label = tk.Label(self.control_frame, text="Video Name: -----")
+        self.name_label.grid(row=1, column=11, columnspan=3, padx=5, pady=5, sticky="w")
+
         
         
         
@@ -1025,7 +1045,7 @@ class LabelingApp(tk.Tk):
             data_path ="C:/Users/lukan/Desktop/Projects/Projects_git/Labeling App/Labeled_data/cat3_mp4/data/"
             output_folder = "C:/Users/lukan/Desktop/Projects/Projects_git/Labeling App/Labeled_data/cat3_mp4/plots/"
             name = "cat3_mp4"
-            analysis.do_analysis(directory_path,plots_path,self.video_name,debug=True)
+            analysis.do_analysis(directory_path,plots_path,self.video_name,debug=True,frame_rate=self.frame_rate)
     
     def play_video(self):
         if self.play == False:
@@ -1060,7 +1080,7 @@ class LabelingApp(tk.Tk):
     def update_data_clothes(self, dots):
         # Aktualizace 'self.data_clothes' novými daty
         self.data_clothes = dots
-        print("Data cloth updated:", self.data_clothes) 
+        print("Data clothes updated:", self.data_clothes) 
         self.save_clothes_to_text()
     
     def save_clothes_to_text(self):
@@ -1244,6 +1264,11 @@ class LabelingApp(tk.Tk):
             return  # User cancelled the dialog
 
         self.video = Video(video_path)
+        self.video.frame_rate = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS)
+        self.frame_rate = self.video.frame_rate
+        self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
+        min_lenght_in_frames = self.minimal_touch_lenght*self.frame_rate/1000
+        self.min_touch_lenght_label.config(text=f"Minimal Touch Length: {min_lenght_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         self.video_name = video_name
         base_dir = os.path.join("Labeled_data", video_name)
@@ -1284,7 +1309,7 @@ class LabelingApp(tk.Tk):
         self.display_first_frame()
         self.draw_timeline()
         self.draw_timeline2()
-        self.name_label.config(text=video_name)
+        self.name_label.config(text=f"Video Name: {video_name}")
         if not self.background_thread.is_alive():
             self.background_thread.start()
         else:
