@@ -1,8 +1,8 @@
-# Labeling Application
+# Self-contact Labeling Application
 
 ## Introduction
 
-This application is designed to help psychologists label and analyze video data with ease.
+This application is designed for behavioral researchers to code self-contact (self-touch) in videos.
 
 ## How to Use
 
@@ -94,3 +94,8 @@ This application is designed to help psychologists label and analyze video data 
 
 - **Diagram Interaction:**
   - Avoid clicking on the black lines in the diagram.
+ 
+  ## Related publications
+  Example of analysis based on this type of coding is:
+  Khoury, J., Popescu, S. T., Gama, F., Marcel, V. and Hoffmann, M. (2022), Self-touch and other spontaneous behavior patterns in early infancy, in 'IEEE International Conference on Development and Learning (ICDL)', pp. 148-155. [link to pdf](https://drive.google.com/file/d/1iVgMr-8eJFPH8jU31ksDNmv4xWY_4s5q/view?usp=sharing)
+  
