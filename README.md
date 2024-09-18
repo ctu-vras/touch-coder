@@ -70,9 +70,6 @@ This application is designed for behavioral researchers to code self-contact (se
 
 ## Additional Notes
 
-- **Config File:**
-  - You can change `"small"` to `"large"` in the config file to double the size of the diagram.
-
 - **Performance Tips:**
   - If you experience performance issues, consider making the application window smaller. Smaller pictures will load faster.
 
