@@ -4,6 +4,8 @@
 
 This application is designed for behavioral researchers to code self-contact (self-touch) in videos.
 
+
+![Showcase](readme_images/showcase.png)
 ## How to Use
 
 ### Step 1: Download and Extract the ZIP File

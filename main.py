@@ -1265,9 +1265,13 @@ class LabelingApp(tk.Tk):
 
         self.video = Video(video_path)
         self.video.frame_rate = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS)
+        self.video.frame_rate = round(self.video.frame_rate, 1)
+
         self.frame_rate = self.video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
         min_lenght_in_frames = self.minimal_touch_lenght*self.frame_rate/1000
+        
+        self.min_touch_lenght_label = round(self.min_touch_lenght_label, 1)
         self.min_touch_lenght_label.config(text=f"Minimal Touch Length: {min_lenght_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         self.video_name = video_name
