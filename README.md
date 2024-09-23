@@ -1,4 +1,4 @@
-# Self-contact Labeling Application
+# Self-contact Coding Application
 
 ## Introduction
 
