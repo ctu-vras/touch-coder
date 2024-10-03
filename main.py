@@ -11,6 +11,8 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import analysis
 import csv
+import sys
+import pandas as pd
 
 #-----------------------------to do main
 #indication of clothes
@@ -130,6 +132,10 @@ class Video:
         self.last_green = [(10, 10),(5, 5),(50, 50)]
         self.play = False
         self.frame_rate = None
+        self.parameter_button1_state_dict = {}
+        self.parameter_button2_state_dict = {}
+        self.parameter_button3_state_dict = {}
+        self.dataNotes_path_to_csv = None
     
     def get_total_frames(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -336,6 +342,16 @@ class LabelingApp(tk.Tk):
                     
                     del self.img_buffer[k]
                     #print("INFO: Deleting frame number: ",k)
+    def load_paramter_name(self):
+        with open('config.json', 'r') as file:
+            config = json.load(file)
+            parameter1 = config.get('parameter1', 'Parameter 1')  # Default to 'medium' if not specified
+            parameter2 = config.get('parameter2', 'Parameter 2')  # Default to 'medium' if not specified
+            parameter3 = config.get('parameter3', 'Parameter 3')  # Default to 'medium' if not specified
+            self.par1_btn.config(text=f"{parameter1}")
+            self.par2_btn.config(text=f"{parameter2}")
+            self.par3_btn.config(text=f"{parameter3}")
+
 
     def load_config(self):
         with open('config.json', 'r') as file:
@@ -902,7 +918,91 @@ class LabelingApp(tk.Tk):
                         self.looking_btn.config(bg='green')
                     elif look == "NL":
                         self.not_looking_btn.config(bg='green')
-                 
+
+
+            self.update_button_colors()
+
+    def update_button_colors(self):
+        """Periodically update button colors based on the current state in the dictionaries."""
+
+        # Dictionary mapping parameter numbers to their corresponding state dictionaries
+        parameter_dicts = {
+            1: self.video.parameter_button1_state_dict,
+            2: self.video.parameter_button2_state_dict,
+            3: self.video.parameter_button3_state_dict,
+
+        }
+
+        # Dictionary mapping parameter numbers to their corresponding buttons
+        parameter_buttons = {
+            1: self.par1_btn,
+            2: self.par2_btn,
+            3: self.par3_btn,
+
+        }
+
+        # Get the current frame (key)
+        key = self.video.current_frame
+
+        # Iterate over each parameter number and corresponding button
+        for param_num, param_dict in parameter_dicts.items():
+            # Get the current state for this parameter
+            current_state = param_dict.get(key, None)
+
+            # Update the corresponding button's color based on its state
+            if current_state is None:
+                parameter_buttons[param_num].config(bg='lightgrey')  # Default color
+            elif current_state == "ON":
+                parameter_buttons[param_num].config(bg='green')  # Button is ON
+            elif current_state == "OFF":
+                parameter_buttons[param_num].config(bg='red')  # Button is OFF
+
+        # Optionally, you can schedule this function to be called periodically
+        # Example: self.root.after(1000, self.update_button_colors)
+    def parameter_dic_insert(self, parameter):
+        """Toggle the state of the button between 'ON', 'OFF', and None dynamically for any parameter."""
+
+        # Dictionary mapping parameter numbers to their corresponding state dictionaries
+        parameter_dicts = {
+            1: self.video.parameter_button1_state_dict,
+            2: self.video.parameter_button2_state_dict,
+            3: self.video.parameter_button3_state_dict,
+
+        }
+
+        # Dictionary mapping parameter numbers to their corresponding buttons (if needed)
+        parameter_buttons = {
+            1: self.par1_btn,
+            2: self.par2_btn,
+            3: self.par3_btn,
+
+        }
+
+        # Retrieve the current frame (key)
+        key = self.video.current_frame
+
+        # Get the state dictionary for the given parameter
+        current_dict = parameter_dicts.get(parameter)
+
+        # Get the current state for the given key (default is None)
+        current_state = current_dict.get(key, None)
+
+        # Cycle through the states: None -> ON -> OFF -> None
+        if current_state is None:
+            new_state = "ON"
+            parameter_buttons[parameter].config(bg='green')  # Change button color to green
+        elif current_state == "ON":
+            new_state = "OFF"
+            parameter_buttons[parameter].config(bg='red')  # Change button color to red
+        elif current_state == "OFF":
+            new_state = None
+            parameter_buttons[parameter].config(bg='grey')  # Change button color to grey
+
+        # Update the dictionary with the new state
+        current_dict[key] = new_state
+
+        # For debugging or tracking, you can print the updated dictionary
+        print("Dictionary",parameter,current_dict)
     def looking_dic_insert(self,parametr):
         
         if parametr == 1:
@@ -975,58 +1075,166 @@ class LabelingApp(tk.Tk):
         load_video_btn = tk.Button(self.control_frame, text="Load Video", command=self.load_video)
         load_video_btn.grid(row=0, column=0, padx=5, pady=5)
 
-        back_10_frame_btn = tk.Button(self.control_frame, text="<<", command=lambda: self.next_frame(-7))
-        back_10_frame_btn.grid(row=0, column=1, padx=5, pady=5)
-
-        back_frame_btn = tk.Button(self.control_frame, text="<", command=lambda: self.next_frame(-1))
-        back_frame_btn.grid(row=0, column=2, padx=5, pady=5)
-
-        self.frame_counter_label = tk.Label(self.control_frame, text="0 / 0")
-        self.frame_counter_label.grid(row=0, column=3, padx=5)
-
-        next_frame_btn = tk.Button(self.control_frame, text=">", command=lambda: self.next_frame(1))
-        next_frame_btn.grid(row=0, column=4, padx=5, pady=5)
-
-        next_10_frame_btn = tk.Button(self.control_frame, text=">>", command=lambda: self.next_frame(7))
-        next_10_frame_btn.grid(row=0, column=5, padx=5, pady=5)
+        self.cloth_btn = tk.Button(self.control_frame, text="Clothes", command=self.open_cloth_app)
+        self.cloth_btn.grid(row=0, column=1, padx=5, pady=5)
 
         save_btn = tk.Button(self.control_frame, text="Save", command=self.save_data)
-        save_btn.grid(row=0, column=6, padx=5, pady=5)
-
-        self.cloth_btn = tk.Button(self.control_frame, text="Clothes", command=self.open_cloth_app)
-        self.cloth_btn.grid(row=0, column=7, padx=5, pady=5)
-
-        play_btn = tk.Button(self.control_frame, text="Play", command=self.play_video)
-        play_btn.grid(row=0, column=8, padx=5, pady=5)
-
-        stop_btn = tk.Button(self.control_frame, text="Stop", command=self.stop_video)
-        stop_btn.grid(row=0, column=9, padx=5, pady=5)
+        save_btn.grid(row=0, column=2, padx=5, pady=5)
 
         analysis_btn = tk.Button(self.control_frame, text="Analysis", command=self.analysis)
-        analysis_btn.grid(row=0, column=10, padx=5, pady=5)
+        analysis_btn.grid(row=0, column=3, padx=5, pady=5)
 
-        
+        export_btn = tk.Button(self.control_frame, text="Export", command=self.export)
+        export_btn.grid(row=0, column=4, padx=5, pady=5)
+
+        back_10_frame_btn = tk.Button(self.control_frame, text="<<", command=lambda: self.next_frame(-7))
+        back_10_frame_btn.grid(row=0, column=5, padx=5, pady=5)
+
+        back_frame_btn = tk.Button(self.control_frame, text="<", command=lambda: self.next_frame(-1))
+        back_frame_btn.grid(row=0, column=6, padx=5, pady=5)
+
+        self.frame_counter_label = tk.Label(self.control_frame, text="0 / 0")
+        self.frame_counter_label.grid(row=0, column=7, padx=5)
+
+        next_frame_btn = tk.Button(self.control_frame, text=">", command=lambda: self.next_frame(1))
+        next_frame_btn.grid(row=0, column=8, padx=5, pady=5)
+
+        next_10_frame_btn = tk.Button(self.control_frame, text=">>", command=lambda: self.next_frame(7))
+        next_10_frame_btn.grid(row=0, column=9, padx=5, pady=5)
+
+        play_btn = tk.Button(self.control_frame, text="Play", command=self.play_video)
+        play_btn.grid(row=0, column=10, padx=5, pady=5)
+
+        stop_btn = tk.Button(self.control_frame, text="Stop", command=self.stop_video)
+        stop_btn.grid(row=0, column=11, padx=5, pady=5)
+
+
+
+
 
 
         self.framerate_label = tk.Label(self.control_frame, text=f"Frame Rate: -----")
-        self.framerate_label.grid(row=0, column=11, padx=5, pady=5)
+        self.framerate_label.grid(row=0, column=12, padx=5, pady=5)
 
         self.min_touch_lenght_label = tk.Label(self.control_frame, text=f"Minimal Touch Length: -----")
-        self.min_touch_lenght_label.grid(row=0, column=12, padx=5, pady=5)
+        self.min_touch_lenght_label.grid(row=0, column=13, padx=5, pady=5)
 
         self.loading_label = tk.Label(self.control_frame, text="Buffer loaded")
-        self.loading_label.grid(row=0, column=13, padx=5, pady=5)
+        self.loading_label.grid(row=1, column=7, padx=5, pady=5)
         
         # Now place the labels in a new row
         self.name_label = tk.Label(self.control_frame, text="Video Name: -----")
-        self.name_label.grid(row=1, column=11, columnspan=3, padx=5, pady=5, sticky="w")
+        self.name_label.grid(row=1, column=12, columnspan=3, padx=5, pady=5, sticky="w")
 
         
         
         
         self.background_thread_play = Thread(target=self.background_update_play)
         self.background_thread_play.daemon = True
-    
+
+    def export(self):
+        self.save_data()
+        """
+        Merge the limb data, looking data, and notes from the provided CSV files into one CSV file.
+        """
+        lh_path = self.video.dataLH_path_to_csv
+        ll_path = self.video.dataLL_path_to_csv
+        rh_path = self.video.dataRH_path_to_csv
+        rl_path = self.video.dataRL_path_to_csv
+
+        # Load the limb data from the CSV files
+        lh_df = pd.read_csv(lh_path)
+        ll_df = pd.read_csv(ll_path)
+        rh_df = pd.read_csv(rh_path)
+        rl_df = pd.read_csv(rl_path)
+
+        # Rename the columns to identify each limb's data clearly
+        lh_df.columns = [f'LH_{col}' if col != 'Frame' else 'Frame' for col in lh_df.columns]
+        ll_df.columns = [f'LL_{col}' if col != 'Frame' else 'Frame' for col in ll_df.columns]
+        rh_df.columns = [f'RH_{col}' if col != 'Frame' else 'Frame' for col in rh_df.columns]
+        rl_df.columns = [f'RL_{col}' if col != 'Frame' else 'Frame' for col in rl_df.columns]
+
+        # Merge the dataframes based on the 'Frame' column
+        merged_df = pd.merge(lh_df, ll_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, rh_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, rl_df, on='Frame', how='outer')
+
+        # Load the looking data
+        looking_lh_path = self.video.datalookingLH_path_to_csv
+        looking_ll_path = self.video.datalookingLL_path_to_csv
+        looking_rh_path = self.video.datalookingRH_path_to_csv
+        looking_rl_path = self.video.datalookingRL_path_to_csv
+
+        looking_lh_df = pd.read_csv(looking_lh_path)
+        looking_ll_df = pd.read_csv(looking_ll_path)
+        looking_rh_df = pd.read_csv(looking_rh_path)
+        looking_rl_df = pd.read_csv(looking_rl_path)
+
+        # Rename the columns to identify each limb's looking data clearly
+        looking_lh_df.columns = [f'LH_{col}' if col != 'Frame' else 'Frame' for col in looking_lh_df.columns]
+        looking_ll_df.columns = [f'LL_{col}' if col != 'Frame' else 'Frame' for col in looking_ll_df.columns]
+        looking_rh_df.columns = [f'RH_{col}' if col != 'Frame' else 'Frame' for col in looking_rh_df.columns]
+        looking_rl_df.columns = [f'RL_{col}' if col != 'Frame' else 'Frame' for col in looking_rl_df.columns]
+
+        # Merge looking data into the merged dataframe
+        merged_df = pd.merge(merged_df, looking_lh_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, looking_ll_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, looking_rh_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, looking_rl_df, on='Frame', how='outer')
+
+        # Delete all _Look_x columns and rename _Look_y to _Look_x for each limb
+        for limb in ['LH', 'LL', 'RH', 'RL']:
+            # Remove _Look_x columns
+            merged_df = merged_df.drop([col for col in merged_df.columns if col == f'{limb}_Look_x'], axis=1)
+
+            # Rename _Look_y columns to _Look_x
+            merged_df = merged_df.rename(columns={f'{limb}_Look_y': f'{limb}_Look_x'})
+
+        # Remove duplicate rows based on 'Frame'
+        merged_df = merged_df.drop_duplicates(subset=['Frame'])
+
+        # Remove columns that end with _y
+        merged_df = merged_df.drop([col for col in merged_df.columns if col.endswith('_y')], axis=1)
+
+        # Rename columns by removing _x from the names
+        merged_df.columns = [col.replace('_x', '') for col in merged_df.columns]
+
+        # Load the notes data
+        notes_path = self.video.dataNotes_path_to_csv
+        notes_df = pd.read_csv(notes_path)
+
+        # Ensure that the 'Notes' column exists in the notes data
+        if 'Frame' in notes_df.columns and 'Notes' in notes_df.columns:
+            notes_df.columns = ['Frame', 'Notes']  # Ensure columns are correctly named
+            # Merge the notes data based on 'Frame'
+            merged_df = pd.merge(merged_df, notes_df, on='Frame', how='outer')
+        else:
+            print("Warning: 'Notes' or 'Frame' column not found in the notes CSV.")
+
+        # Reorder the columns so that columns for each limb are next to each other
+        columns = ['Frame']
+        for limb in ['RH', 'LH', 'LL', 'RL']:
+            limb_columns = [col for col in merged_df.columns if col.startswith(limb)]
+            columns.extend(limb_columns)
+
+        # Check if the 'Notes' column exists before adding it to the order
+        if 'Notes' in merged_df.columns:
+            columns.append('Notes')  # Ensure Notes is the last column
+
+        # Reorder the dataframe based on the new column order
+        merged_df = merged_df[columns]
+
+        # Extract the directory and video name
+        directory = os.path.dirname(rh_path)
+        video_name = self.video_name
+
+        # Construct the output path
+        output_csv = os.path.join(directory, f"{video_name}_export.csv")
+
+        # Save the final merged data to a CSV file
+        merged_df.to_csv(output_csv, index=False)
+        print(f"INFO: Merged CSV with notes saved to {output_csv}")
+
     def analysis(self):
         if self.video:
             self.save_data()
@@ -1168,17 +1376,28 @@ class LabelingApp(tk.Tk):
         # Oddělovací prvek pro vizuální rozdělení dvou skupin
         separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
         separator.pack(fill="x", padx=5, pady=5)
-        
-        # Skupina pro druhý toggle s 3 možnostmi
-        # Create a text entry widget
-        self.note_entry = tk.Entry(self,width=50)
+        #parametr
+        self.par1_btn = tk.Button(self.diagram_frame, text="Parametr 1",
+                                  command=lambda: self.parameter_dic_insert(1))
+        self.par1_btn.pack(anchor="n")
+
+        self.par2_btn = tk.Button(self.diagram_frame, text="Parametr 2",
+                                  command=lambda: self.parameter_dic_insert(2))
+        self.par2_btn.pack(anchor="n")
+
+        self.par3_btn = tk.Button(self.diagram_frame, text="Parametr 3",
+                                  command=lambda: self.parameter_dic_insert(3))
+        self.par3_btn.pack(anchor="n")
+
+
+        self.note_entry = tk.Entry(self,width=40)
         self.note_entry.grid(row=2, column=1, padx=5, pady=(5, 60))
 
         # Create a button to save the note
         self.save_note_button = tk.Button(self, text="Save Note", command=self.save_note)
-        self.save_note_button.grid(row=2, column=1, padx=(250, 5), pady=5)
+        self.save_note_button.grid(row=2, column=1, padx=(185, 5), pady=5)
         self.select_frame_button = tk.Button(self, text="Select Frame", command=self.select_frame)
-        self.select_frame_button.grid(row=2, column=1, padx=(100, 5), pady=5)
+        self.select_frame_button.grid(row=2, column=1, padx=(35, 5), pady=5)
         self.periodic_print_dot()
         #self.dot_thread = Thread(target=self.periodic_print_dot_thread)
         #self.dot_thread.daemon = True
@@ -1211,8 +1430,55 @@ class LabelingApp(tk.Tk):
         else:
             print("Error selecting frame: The frame number cannot be selected when a video is not loaded!")
         self.note_entry.delete(0, 'end')
-        
+
+    def save_parameter_to_csv(self, parameter_number):
+        """Save the data from the parameter dictionary to a CSV file."""
+
+        # Dictionary mapping parameter numbers to their corresponding state dictionaries
+        parameter_dicts = {
+            1: self.video.parameter_button1_state_dict,
+            2: self.video.parameter_button2_state_dict,
+            3: self.video.parameter_button3_state_dict,
+
+        }
+
+        # Dictionary mapping parameter numbers to the CSV paths
+        csv_paths = {
+            1: self.video.dataparameter_1_path_to_csv,
+            2: self.video.dataparameter_2_path_to_csv,
+            3: self.video.dataparameter_3_path_to_csv,
+
+        }
+
+        # Get the dictionary and path based on the parameter_number
+        parameter_dict = parameter_dicts.get(parameter_number)
+        csv_path = csv_paths.get(parameter_number)
+
+        if parameter_dict and csv_path:
+            # Write the dictionary to the CSV file
+            with open(csv_path, mode='w', newline='') as csv_file:
+                writer = csv.writer(csv_file)
+
+                # Write headers (Optional: Customize if you need more columns)
+                writer.writerow(['Frame', 'State'])
+
+                # Write the key-value pairs to the CSV
+                for key, value in parameter_dict.items():
+                    writer.writerow([key, value])
+
+            print(f"Data for parameter {parameter_number} saved to {csv_path}")
+        else:
+            print(f"Parameter {parameter_number} data or CSV path not found.")
+
+    import csv
+    import os
+
+    import csv
+    import os
+
     def save_note(self):
+        """Save the current frame and note to a CSV file in the same directory as the previous logic."""
+
         # Current frame as the key
         print("INFO: Saving note...")
         current_frame = self.video.current_frame
@@ -1229,7 +1495,7 @@ class LabelingApp(tk.Tk):
         self.note_entry.delete(0, 'end')
 
         # Determine the directory from dataRH (assuming it contains a path, adjust if it's stored differently)
-        if hasattr(self.video, 'dataRH_path_to_csv'):  # Let's assume this is where the path is stored
+        if hasattr(self.video, 'dataRH_path_to_csv'):  # Assume this is where the path is stored
             notes_dir = os.path.dirname(self.video.dataRH_path_to_csv)
         else:
             notes_dir = os.getcwd()  # Default to current working directory if no path is specified
@@ -1241,13 +1507,26 @@ class LabelingApp(tk.Tk):
         # Get the video file name without the extension
         video_name = os.path.splitext(os.path.basename(self.video.video_path))[0]
 
-        # Construct the full path for the notes.txt file, including the video name
-        notes_file_path = os.path.join(notes_dir, f"{video_name}_notes.txt")
+        # Construct the full path for the notes.csv file, including the video name
+        notes_file_path = os.path.join(notes_dir, f"{video_name}_notes.csv")
 
-        # Append the current frame and note to the notes file in the specified directory
-        with open(notes_file_path, "a") as file:
-            file.write(f"Frame {current_frame}: {note_text}\n")
-        print("INFO: Note saved")
+        self.video.dataNotes_path_to_csv =  notes_file_path
+        print("Notes path:",self.video.dataNotes_path_to_csv)
+        file_exists = os.path.isfile(notes_file_path)
+
+        # Write or append the note to the CSV file
+        with open(notes_file_path, mode='a', newline='') as csv_file:
+            writer = csv.writer(csv_file)
+
+            # If the file is new, write the header
+            if not file_exists:
+                writer.writerow(['Frame', 'Note'])
+
+            # Write the current frame and note
+            writer.writerow([current_frame, note_text])
+
+        print(f"INFO: Note saved to {notes_file_path}")
+
     #loading and saving
     def load_video(self):
         if self.video is not None:
@@ -1271,7 +1550,7 @@ class LabelingApp(tk.Tk):
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
         min_lenght_in_frames = self.minimal_touch_lenght*self.frame_rate/1000
         
-        self.min_touch_lenght_label = round(self.min_touch_lenght_label, 1)
+        #self.min_touch_lenght = round(self.min_touch_lenght, 1)
         self.min_touch_lenght_label.config(text=f"Minimal Touch Length: {min_lenght_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         self.video_name = video_name
@@ -1288,7 +1567,7 @@ class LabelingApp(tk.Tk):
         self.video.frames_dir = frames_dir
 
         # Create or load CSV files for each type of data
-        data_types = ['RH', 'LH', 'RL', 'LL','looking','lookingRH','lookingLH','lookingRL','lookingLL',]
+        data_types = ['RH', 'LH', 'RL', 'LL','looking','lookingRH','lookingLH','lookingRL','lookingLL']
         for type in data_types:
             suffix = type
             csv_path = os.path.join(data_dir, f"{video_name}{suffix}.csv")
@@ -1302,7 +1581,19 @@ class LabelingApp(tk.Tk):
                     writer = csv.writer(csvfile)
                     writer.writerow(['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones', 'Touch'])
 
+        data_types = ['parameter_1', 'parameter_2', 'parameter_3']
+        for type in data_types:
+            suffix = type
+            csv_path = os.path.join(data_dir, f"{video_name}{suffix}.csv")
+            setattr(self.video, f"data{suffix}_path_to_csv", csv_path)
+            if os.path.exists(csv_path):
+                print(f"INFO: CSV {suffix} already exists")
+                print("INFO: Loading dictionary from csv in path:", csv_path)
+
+        for i in range(3):
+            self.load_parameter_from_csv(i+1)
         # Check and handle frame discrepancies
+        self.load_paramter_name()
         if not self.check_items_count(frames_dir, self.video.total_frames):
             print("ERROR: Number of frames is different, creating new frames")
             self.create_frames(video_path, frames_dir)
@@ -1319,23 +1610,36 @@ class LabelingApp(tk.Tk):
         else:
             self.img_buffer.clear()
             print("INFO: Thread is already running.")
+        self.save_note()
         print("INFO: Welcome back! I wish you happy labeling session! :)")
-    
+
     def create_frames(self, video_path, frames_dir):
         print("INFO: Creating frames...")
+
+        # Open the video capture
         vidcap = cv2.VideoCapture(video_path)
+
+        # Get total frame count (optional but helpful for progress calculation)
+        total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+
         success, image = vidcap.read()
         count = 0
+
+        # Loop through video frames
         while success:
             frame_path = os.path.join(frames_dir, f"frame{count}.jpg")
             cv2.imwrite(frame_path, image)  # Save frame as JPEG file
             success, image = vidcap.read()
             count += 1
-            #self.progress['value'] = (count + 1) / self.video.total_frames * 100
-            #if count % 10 == 0:
-                #self.control_frame.update_idletasks()  # Update UI
-        #self.progress.destroy()
-        print("INFO: Frames have been created succesfully")
+
+            # Calculate progress percentage
+            progress = (count / total_frames) * 100
+
+            # Print progress on the same line using carriage return
+            sys.stdout.write(f"\rProgress: {progress:.2f}%")
+            sys.stdout.flush()
+
+        print("\nINFO: Frames have been created successfully")
     
     def check_items_count(self,folder_path, expected_count):
         
@@ -1494,8 +1798,11 @@ class LabelingApp(tk.Tk):
         save_dataset(self.video.dataRL_path_to_csv, self.video.dataRL)
         save_dataset(self.video.dataLL_path_to_csv, self.video.dataLL, touch_data=True)  # Example of specifying touch data
         self.save_looking_new()
+        for i in range(3):
+            self.save_parameter_to_csv(i+1)
         print("INFO: Saved")
-    
+
+
     def on_close(self):
         if messagebox.askokcancel("Close Aplication", "Do you want to close the aplication?"):
             if self.video:
@@ -1505,6 +1812,50 @@ class LabelingApp(tk.Tk):
                 print("INFO: See you soon!")
             self.destroy()
 
+    def load_parameter_from_csv(self, parameter_number):
+        """Load the data from the CSV file into the corresponding parameter dictionary."""
+
+        # Dictionary mapping parameter numbers to their corresponding state dictionaries
+        parameter_dicts = {
+            1: self.video.parameter_button1_state_dict,
+            2: self.video.parameter_button2_state_dict,
+            3: self.video.parameter_button3_state_dict,
+
+        }
+
+        # Dictionary mapping parameter numbers to the CSV paths
+        csv_paths = {
+            1: self.video.dataparameter_1_path_to_csv,
+            2: self.video.dataparameter_2_path_to_csv,
+            3: self.video.dataparameter_3_path_to_csv,
+
+        }
+
+        # Get the dictionary and path based on the parameter_number
+        parameter_dict = parameter_dicts.get(parameter_number)
+        csv_path = csv_paths.get(parameter_number)
+
+        if parameter_dict is not None and csv_path is not None:
+            # Clear the current dictionary before loading new data
+            parameter_dict.clear()
+
+            try:
+                # Open the CSV file and load the data into the dictionary
+                with open(csv_path, mode='r') as csv_file:
+                    reader = csv.reader(csv_file)
+                    next(reader)  # Skip the header row
+
+                    for row in reader:
+                        if len(row) == 2:  # Expecting two columns: 'Frame' and 'State'
+                            key = int(row[0])  # Convert the frame number to an integer (key)
+                            value = row[1]  # The state can be 'ON', 'OFF', or 'None'
+                            parameter_dict[key] = value
+
+                print(f"Data for parameter {parameter_number} loaded from {csv_path}")
+            except FileNotFoundError:
+                print(f"CSV file for parameter {parameter_number} not found: {csv_path}")
+        else:
+            print(f"Parameter {parameter_number} data or CSV path not found.")
 if __name__ == "__main__":
     app = LabelingApp()
     app.mainloop()

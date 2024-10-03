@@ -274,7 +274,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
                 '1L', '2L', '3L', '4L', '5L', '6L', '7L', '8L', '9L', '10L', '11L',
                 '13L', '16L', '17L', '13LB', '17LB',
                 '1R', '2R', '3R', '4R', '5R', '6R', '7R', '8R', '9R', '10R', '11R',
-                '13R', '16R', '17R', '13RB', '17RB','NN'
+                '13R', '16R', '17R', '13RB', '17RB','BOX1','BOX2','BOX3','BOX4','NN'
             ]
             
             # Initialize a transition matrix with all zones set to 0
@@ -684,7 +684,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
 
     # Update layout for better presentation
     fig.update_layout(
-        title=f"Touch Analysis Data (Lenght of video: {total_frames/frame_rate} Seconds)",
+        title=f"Touch Analysis Data (Length of video: {total_frames/frame_rate} Seconds)",
         title_x=0.5,  # Center the title
         margin=dict(l=10, r=10, t=50, b=10),  # Adjust margins
         width=800,
@@ -720,8 +720,8 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
     # Update layout
     fig.update_layout(
         barmode='stack',
-        title='Touch lenght distribution',
-        xaxis_title='Lenght of touch [number of zones]',
+        title='Touch length distribution',
+        xaxis_title='Length of touch [number of zones]',
         yaxis_title='Number of touches',
     )
 
