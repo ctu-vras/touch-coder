@@ -136,6 +136,11 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
+        self.program_version = 4.0
+        self.parameter1_name = None
+        self.parameter2_name = None
+        self.parameter3_name = None
+        self.clothes_file_path = None
     
     def get_total_frames(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -348,6 +353,13 @@ class LabelingApp(tk.Tk):
             parameter1 = config.get('parameter1', 'Parameter 1')  # Default to 'medium' if not specified
             parameter2 = config.get('parameter2', 'Parameter 2')  # Default to 'medium' if not specified
             parameter3 = config.get('parameter3', 'Parameter 3')  # Default to 'medium' if not specified
+            self.video.parameter1_name = parameter1
+            self.video.parameter2_name = parameter2
+            self.video.parameter3_name = parameter3
+            self.par1_btn.config(text=parameter1)
+            self.par2_btn.config(text=parameter2)
+            self.par3_btn.config(text=parameter3)
+
             self.par1_btn.config(text=f"{parameter1}")
             self.par2_btn.config(text=f"{parameter2}")
             self.par3_btn.config(text=f"{parameter3}")
@@ -1132,34 +1144,61 @@ class LabelingApp(tk.Tk):
         self.background_thread_play = Thread(target=self.background_update_play)
         self.background_thread_play.daemon = True
 
+    def extract_zones_from_file(self, file_path):
+        """
+        Extract zones covered by clothes from the given .txt file.
+
+        Args:
+            file_path (str): Path to the .txt file.
+
+        Returns:
+            List[str] or None: A list of unique zones covered by clothes, or None if the file doesn't exist.
+        """
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            return None
+
+        zones = set()  # Using a set to avoid duplicates
+
+        # Open the file and read it line by line
+        with open(file_path, 'r') as file:
+            for line in file:
+                # Check if the line contains the word 'Zones'
+                if 'Zones=' in line:
+                    # Extract the part after 'Zones='
+                    zone_data = line.split('Zones=')[-1].strip()
+                    # Add the zone to the set
+                    zones.add(zone_data)
+
+        return list(zones)  # Return the list of unique zones
     def export(self):
         self.save_data()
         """
-        Merge the limb data, looking data, and notes from the provided CSV files into one CSV file.
+        Merge the limb data, looking data, notes, and parameters from the provided CSV files into one CSV file.
         """
         lh_path = self.video.dataLH_path_to_csv
         ll_path = self.video.dataLL_path_to_csv
         rh_path = self.video.dataRH_path_to_csv
         rl_path = self.video.dataRL_path_to_csv
 
-        # Load the limb data from the CSV files
+        # Load the limb data from the CSV files (read-only)
         lh_df = pd.read_csv(lh_path)
         ll_df = pd.read_csv(ll_path)
         rh_df = pd.read_csv(rh_path)
         rl_df = pd.read_csv(rl_path)
 
-        # Rename the columns to identify each limb's data clearly
+        # Rename the columns to identify each limb's data clearly (temporary renaming)
         lh_df.columns = [f'LH_{col}' if col != 'Frame' else 'Frame' for col in lh_df.columns]
         ll_df.columns = [f'LL_{col}' if col != 'Frame' else 'Frame' for col in ll_df.columns]
         rh_df.columns = [f'RH_{col}' if col != 'Frame' else 'Frame' for col in rh_df.columns]
         rl_df.columns = [f'RL_{col}' if col != 'Frame' else 'Frame' for col in rl_df.columns]
 
-        # Merge the dataframes based on the 'Frame' column
+        # Merge the dataframes based on the 'Frame' column (creates a new dataframe)
         merged_df = pd.merge(lh_df, ll_df, on='Frame', how='outer')
         merged_df = pd.merge(merged_df, rh_df, on='Frame', how='outer')
         merged_df = pd.merge(merged_df, rl_df, on='Frame', how='outer')
 
-        # Load the looking data
+        # Load the looking data (read-only)
         looking_lh_path = self.video.datalookingLH_path_to_csv
         looking_ll_path = self.video.datalookingLL_path_to_csv
         looking_rh_path = self.video.datalookingRH_path_to_csv
@@ -1170,19 +1209,19 @@ class LabelingApp(tk.Tk):
         looking_rh_df = pd.read_csv(looking_rh_path)
         looking_rl_df = pd.read_csv(looking_rl_path)
 
-        # Rename the columns to identify each limb's looking data clearly
+        # Rename the columns to identify each limb's looking data clearly (temporary renaming)
         looking_lh_df.columns = [f'LH_{col}' if col != 'Frame' else 'Frame' for col in looking_lh_df.columns]
         looking_ll_df.columns = [f'LL_{col}' if col != 'Frame' else 'Frame' for col in looking_ll_df.columns]
         looking_rh_df.columns = [f'RH_{col}' if col != 'Frame' else 'Frame' for col in looking_rh_df.columns]
         looking_rl_df.columns = [f'RL_{col}' if col != 'Frame' else 'Frame' for col in looking_rl_df.columns]
 
-        # Merge looking data into the merged dataframe
+        # Merge looking data into the merged dataframe (creates a new dataframe)
         merged_df = pd.merge(merged_df, looking_lh_df, on='Frame', how='outer')
         merged_df = pd.merge(merged_df, looking_ll_df, on='Frame', how='outer')
         merged_df = pd.merge(merged_df, looking_rh_df, on='Frame', how='outer')
         merged_df = pd.merge(merged_df, looking_rl_df, on='Frame', how='outer')
 
-        # Delete all _Look_x columns and rename _Look_y to _Look_x for each limb
+        # Delete all _Look_x columns and rename _Look_y to _Look_x for each limb (does not modify original data)
         for limb in ['LH', 'LL', 'RH', 'RL']:
             # Remove _Look_x columns
             merged_df = merged_df.drop([col for col in merged_df.columns if col == f'{limb}_Look_x'], axis=1)
@@ -1199,17 +1238,27 @@ class LabelingApp(tk.Tk):
         # Rename columns by removing _x from the names
         merged_df.columns = [col.replace('_x', '') for col in merged_df.columns]
 
-        # Load the notes data
+        # Load the notes data (read-only)
         notes_path = self.video.dataNotes_path_to_csv
-        notes_df = pd.read_csv(notes_path)
+        parameter_1_path = self.video.dataparameter_1_path_to_csv
+        parameter_2_path = self.video.dataparameter_2_path_to_csv
+        parameter_3_path = self.video.dataparameter_3_path_to_csv
 
-        # Ensure that the 'Notes' column exists in the notes data
-        if 'Frame' in notes_df.columns and 'Notes' in notes_df.columns:
-            notes_df.columns = ['Frame', 'Notes']  # Ensure columns are correctly named
-            # Merge the notes data based on 'Frame'
-            merged_df = pd.merge(merged_df, notes_df, on='Frame', how='outer')
-        else:
-            print("Warning: 'Notes' or 'Frame' column not found in the notes CSV.")
+        notes_df = pd.read_csv(notes_path)
+        parameter_1_df = pd.read_csv(parameter_1_path)
+        parameter_2_df = pd.read_csv(parameter_2_path)
+        parameter_3_df = pd.read_csv(parameter_3_path)
+
+        # Merge parameter data into the dataframe (on 'Frame')
+        notes_df.columns = ['Frame', 'Note']
+        parameter_1_df.columns = ['Frame', 'Parameter_1']
+        parameter_2_df.columns = ['Frame', 'Parameter_2']
+        parameter_3_df.columns = ['Frame', 'Parameter_3']
+
+        merged_df = pd.merge(merged_df, notes_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, parameter_1_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, parameter_2_df, on='Frame', how='outer')
+        merged_df = pd.merge(merged_df, parameter_3_df, on='Frame', how='outer')
 
         # Reorder the columns so that columns for each limb are next to each other
         columns = ['Frame']
@@ -1217,9 +1266,10 @@ class LabelingApp(tk.Tk):
             limb_columns = [col for col in merged_df.columns if col.startswith(limb)]
             columns.extend(limb_columns)
 
-        # Check if the 'Notes' column exists before adding it to the order
-        if 'Notes' in merged_df.columns:
-            columns.append('Notes')  # Ensure Notes is the last column
+
+
+        # Add parameter columns to the end
+        columns.extend(['Parameter_1', 'Parameter_2', 'Parameter_3','Note'])
 
         # Reorder the dataframe based on the new column order
         merged_df = merged_df[columns]
@@ -1231,9 +1281,51 @@ class LabelingApp(tk.Tk):
         # Construct the output path
         output_csv = os.path.join(directory, f"{video_name}_export.csv")
 
-        # Save the final merged data to a CSV file
+        # Save the final merged data to a new CSV file
         merged_df.to_csv(output_csv, index=False)
-        print(f"INFO: Merged CSV with notes saved to {output_csv}")
+        print(f"INFO: Merged CSV with notes and parameters saved to {output_csv}")
+
+
+
+        # Construct the output path
+        output_csv = os.path.join(directory, f"{video_name}_export.csv")
+
+        # Save the final merged data to a temporary CSV file
+        temp_csv = os.path.join(directory, f"{video_name}_temp.csv")
+        # Remove duplicate rows based on 'Frame'
+        merged_df = merged_df.drop_duplicates(subset='Frame', keep='first')
+
+        merged_df.to_csv(temp_csv, index=False)
+        if self.video.clothes_file_path is not None:
+            clothes_list = self.extract_zones_from_file(self.video.clothes_file_path)
+        else:
+            # Use the path to notes_csv and replace '_notes.csv' with '_clothes.txt'
+            notes_path = self.video.dataNotes_path_to_csv
+            clothes_path = notes_path.replace('_notes.csv', '_clothes.txt')
+
+            # Now extract the zones from this clothes file
+            clothes_list = self.extract_zones_from_file(clothes_path)
+
+        # Add metadata as the first few rows, followed by the actual data
+        with open(output_csv, 'w') as f_out:
+            # Write the metadata
+            f_out.write(f"Program Version: {self.video.program_version}\n")
+            f_out.write(f"Video Name: {self.video_name}\n")
+            f_out.write(f"Frame Rate: {self.frame_rate}\n")
+            f_out.write(f"Zones Covered With Clothes: {clothes_list}\n")
+            f_out.write(f"Parameter 1: {self.video.parameter1_name}\n")
+            f_out.write(f"Parameter 2: {self.video.parameter2_name}\n")
+            f_out.write(f"Parameter 3: {self.video.parameter3_name}\n")
+            f_out.write("\n")  # Blank line to separate metadata from data
+
+            # Append the actual CSV data
+            with open(temp_csv, 'r') as f_in:
+                f_out.write(f_in.read())
+
+        # Remove the temporary CSV
+        os.remove(temp_csv)
+
+        print(f"INFO: Merged CSV with metadata saved to {output_csv}")
 
     def analysis(self):
         if self.video:
@@ -1305,7 +1397,7 @@ class LabelingApp(tk.Tk):
             os.makedirs(data_folder, exist_ok=True)
         video_name = os.path.splitext(os.path.basename(self.video.video_path))[0]
         text_file_path = os.path.join(data_folder, f"{video_name}_clothes.txt")
-
+        self.video.clothes_file_path = text_file_path
         with open(text_file_path, mode='w') as text_file:
             # Write header or introductory information (optional)
             text_file.write("Coordinates and Zones for Clothing Items:\n")

@@ -1,5 +1,5 @@
 Frame,X,Y,Onset,Bodypart,Look,Zones,Touch
-0,322,588,On,LL,No,['BOX1'],1
+0
 1
 2
 3
@@ -16,7 +16,7 @@ Frame,X,Y,Onset,Bodypart,Look,Zones,Touch
 14
 15
 16
-17,374,632,On,LL,No,['BOX4'],1
+17
 18
 19
 20
@@ -24,7 +24,7 @@ Frame,X,Y,Onset,Bodypart,Look,Zones,Touch
 22
 23
 24
-25,322,632,On,LL,No,['BOX3'],1
+25
 26
 27
 28
@@ -32,7 +32,7 @@ Frame,X,Y,Onset,Bodypart,Look,Zones,Touch
 30
 31
 32
-33,378,594,Off,LL,No,['BOX2'],0
+33
 34
 35
 36
@@ -112,7 +112,7 @@ Frame,X,Y,Onset,Bodypart,Look,Zones,Touch
 110
 111
 112
-113,148,290,On,LL,No,['6L'],1
+113
 114
 115
 116
@@ -120,12 +120,12 @@ Frame,X,Y,Onset,Bodypart,Look,Zones,Touch
 118
 119
 120
-121,148,370,On,LL,No,['5L'],1
+121
 122
 123
 124
 125
-126,164,402,Off,LL,No,['5L'],0
+126
 127
 128
 129

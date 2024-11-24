@@ -3,7 +3,21 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
-        <entry key="\Labeled_data\cat3_mp4\data\cat3_export.csv">
+        <entry key="4_0\Labeled_data\cat3_mp4\data\cat3_mp4_export.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4RH.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4RL.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />
@@ -11,6 +25,34 @@
           </value>
         </entry>
         <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4_export.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4_notes.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4parameter_1.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4parameter_2.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\Labeled_data\cat3_mp4\data\cat3_mp4parameter_3.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

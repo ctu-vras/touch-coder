@@ -502,7 +502,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
     for duration in stdev_list
 ]
         # Adjust touch rate to be per second instead of per 100 frames
-        touch_rate_list_seconds = [rate *frame_rate for rate in touch_rate_list]
+        touch_rate_list_seconds = [rate * frame_rate * 60 /100 for rate in touch_rate_list]
         
         # Recalculate percentage touching in seconds
         if total_frames != 0 and frame_rate !=0: percentage_touching_list_seconds = [(duration / (total_frames / frame_rate)) * 100 for duration in total_duration_list_seconds]
@@ -515,7 +515,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
             'Total Duration [Seconds]': total_duration_list_seconds,
             'Average Touch Duration [Seconds]': average_touch_duration_list_seconds,
             'Percentage Touching [Seconds]': percentage_touching_list_seconds,
-            'Touch Rate [Touches per 100 Seconds]': touch_rate_list_seconds,
+            'Touch Rate [Touches per Minute]': touch_rate_list_seconds,
             'Standart Deviation [Seconds]': stdev_list_seconds
         }
 
@@ -530,7 +530,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
         else:
             combined_average_touch_duration_seconds = 0
         if combined_total_duration_seconds != 0:
-            combined_touch_rate_seconds = 100*(combined_total_touches /(total_frames/frame_rate))
+            combined_touch_rate_seconds = 60*(combined_total_touches /(total_frames/frame_rate))
         else:
             combined_touch_rate_seconds = 0
         touch_durations_list_in_one = [item for sublist in touch_durations_list_seconds for item in sublist]
@@ -546,7 +546,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
             'Total Duration [Seconds]': combined_total_duration_seconds,
             'Average Touch Duration [Seconds]': combined_average_touch_duration_seconds,
             'Percentage Touching [Seconds]': combined_percentage_touching_seconds,
-            'Touch Rate [Touches per 100 Seconds]': combined_touch_rate_seconds,
+            'Touch Rate [Touches per Minute]': combined_touch_rate_seconds,
             'Standart Deviation [Seconds]': stdev_of_all
         }
 
@@ -663,7 +663,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
     data = result_df
 
     # Define the columns you want to show and the order in which you want them
-    columns_to_display = ['Limb','Total Touches','Total Duration [Seconds]','Average Touch Duration [Seconds]','Standart Deviation [Seconds]','Percentage Touching [Seconds]','Touch Rate [Touches per 100 Seconds]']  # Replace with actual column names and order
+    columns_to_display = ['Limb','Total Touches','Total Duration [Seconds]','Average Touch Duration [Seconds]','Standart Deviation [Seconds]','Percentage Touching [Seconds]','Touch Rate [Touches per Minute]']  # Replace with actual column names and order
 
     # Format data, excluding the columns that are not in 'columns_to_display'
     formatted_data = {
