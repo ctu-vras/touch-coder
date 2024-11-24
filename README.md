@@ -18,6 +18,11 @@ This application is designed for behavioral researchers to code self-contact (se
 1. Open the extracted folder.
 2. Double-click on `LabelingApplication_version.exe` to launch the application.
 
+## Bugs
+
+  - Please select each parameter to "ON" atleast once. If they are not selected the .csv files for them are not created. Then export button doesnt work.
+
+
 ## Application Workflow
 
 1. **Extract the ZIP File:**
