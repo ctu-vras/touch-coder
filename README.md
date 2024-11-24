@@ -16,7 +16,7 @@ This application is designed for behavioral researchers to code self-contact (se
 ### Step 2: Run the Application
 
 1. Open the extracted folder.
-2. Double-click on `LabelingApplication_v2_5.exe` to launch the application.
+2. Double-click on `LabelingApplication_version.exe` to launch the application.
 
 ## Application Workflow
 
@@ -37,8 +37,8 @@ This application is designed for behavioral researchers to code self-contact (se
    - You can also navigate by clicking on Timeline 1 or Timeline 2.
 
 5. **Select Clothing Zones:**
-   - Click the "Cloth" button to select the zones that are covered with clothes.
-   - Save the selection by closing the Cloth window.
+   - Click the "Clothes" button to select the zones that are covered with clothes.
+   - Save the selection by closing the Clothes window.
 
 6. **Select Limb:**
    - Choose a limb using the radio buttons located under the diagram.
@@ -55,6 +55,21 @@ This application is designed for behavioral researchers to code self-contact (se
 
 9. **Close the Application:**
    - The application will automatically save your data when you close it.
+### Watch the Tutorial
+<video controls>
+  <source src="./assets/tutorial.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
+
+
+## Updates in Version 4
+
+- **Export Button:**
+  - After pressing the export button you can check all of the data (touches, notes, etc) in the `Labeled_data/name_of_video/data/name_of_video_export.csv` file"
+
+- **New Template:**
+  - After running the LabelingApplication_version_new_template.exe you can label with different zones"
+  
 
 ## Updates in Version 3
 

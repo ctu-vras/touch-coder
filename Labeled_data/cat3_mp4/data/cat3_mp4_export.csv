@@ -1,9 +1,9 @@
-Program Version: 4.0 new template
+Program Version: 4.0
 Video Name: cat3_mp4
 Frame Rate: 25.0
 Zones Covered With Clothes: None
 Parameter 1: Parameter 1
-Parameter 2: Parameter 2
+Parameter 2: Sleeping
 Parameter 3: Parent
 
 Frame,RH_X,RH_Y,RH_Onset,RH_Bodypart,RH_Zones,RH_Touch,RH_Look,LH_X,LH_Y,LH_Onset,LH_Bodypart,LH_Zones,LH_Touch,LH_Look,LL_X,LL_Y,LL_Onset,LL_Bodypart,LL_Zones,LL_Touch,LL_Look,RL_X,RL_Y,RL_Onset,RL_Bodypart,RL_Zones,RL_Touch,RL_Look,Parameter_1,Parameter_2,Parameter_3,Note
