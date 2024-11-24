@@ -56,10 +56,7 @@ This application is designed for behavioral researchers to code self-contact (se
 9. **Close the Application:**
    - The application will automatically save your data when you close it.
 ### Watch the Tutorial
-<video controls>
-  <source src="./assets/tutorial.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+[Watch the tutorial video](./assets/tutorial.mp4)
 
 
 ## Updates in Version 4
