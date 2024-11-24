@@ -56,7 +56,7 @@ This application is designed for behavioral researchers to code self-contact (se
 9. **Close the Application:**
    - The application will automatically save your data when you close it.
 ### Watch the Tutorial
-[Watch the tutorial video](./assets/tutorial.mp4)
+[Watch the tutorial video (download it)](./assets/tutorial.mp4)
 
 
 ## Updates in Version 4
