@@ -8,11 +8,10 @@ This application is designed for behavioral researchers to code self-contact (se
 ![Showcase](readme_images/showcase.png)
 ## How to Use
 
-### Step 1: Download and Extract the ZIP File
+### Step 1: Download and Extract the ZIP File (Temporary Solution)
 
 1. **Download** the ZIP file containing the application. (In the repository click on **<>Code** and then **Download ZIP**)
 2. **Extract** the contents of the ZIP file into a folder on your computer.
-Temporary solution
 3. **Download** the .exe file. (In the repository click on the **.exe** and then on **Download raw file**)
 4. **Replace** the .exe file in the extracted folder with the new one.
 
