@@ -1,55 +1,77 @@
-from threading import Thread
-from collections import deque
-import json
-import time
-from tkinter import messagebox
-from tkinter import Label, ttk
-from tkinter import filedialog
+
 import cv2
 import os
-import tkinter as tk
-from PIL import Image, ImageTk
-import analysis
 import csv
 import sys
+import json
+import time
+import shutil 
 import pandas as pd
+import tkinter as tk
+from tkinter import messagebox
+from tkinter import filedialog
+from threading import Thread
+from PIL import Image, ImageTk
+import keyboard
+import analysis
 
-#-----------------------------to do main
-#indication of clothes
-#dlouhy touch nezbarvi timeline
-#timeline2 doesnt show yellow if touch starts in one zone and ends in let say 5 zones after it will higlight only two zones
+with open('config.json', 'r') as file:
+            config = json.load(file)
+            NEW_TEMPLATE = config.get('new_template', False)  # Default to 'medium' if not specified
+            print("INFO: Loaded new template:", NEW_TEMPLATE)
 
-#------------------------------to do features
-#second display
+#new tasks---------------------------------------------------------------------------------------
+#TODOO
+#test if export works
+#update readme
+#create new .exe
+#push to github
+
+#code review (after Json agrees)
+
+
+#Minor things---------------------
+#in export zone [] and """" problem
+#bigger entry for notes?
+#typo in loading parameter names
+#loading button fix
+
 #guide na zacatku
-#analysis
 #deleting confidential data
 #indication of saving
 #frame loading indication
-#play button
 
-#-----------------------------to do bugs
-#loading second video doesnt work
-#loading frames not showing
+#Bugs
+#when 
+
+#DONE---------------------------
+#arrow problem
+#note entry problem
+#turn of clothes button
+#displa time in export
+#display time on top
+#d to delete dost
+#when buffer loads it should automatilcy show user not stay in red
+#2 more squers BOX5, BOX6
+#loading (fix or remove button)
+#bug parent export
+#notes opening in the gui
+#newtamplate boxes
+#4h video problem
+#click on the line 
+#color scheme
+#buffer
+#new parameter like looking (small title)
+#-add to export
+#-add param names to export
+#-add custom name to config
+#remove export and put it into save
+#reliability
+#play button jumping timeline
 
 
-#-----------------------------to do optimizition
-#pri drzeni sipky to prestane stihat
-#saving doesnt have to happen for all the touches every time
 
-#-----------------------------done
-#move to specific frame
-#optimize
-#2x diagram size
-#scroling
-#7framu shift a button
-#note different path
-#2x zelena rozbije timeline
-#novej diagram s hlavou
-#pri skoku mimo buffer se nenacte nova fotka
-#looking
-#independent new looking
-#ghost touch
+
 
 class ClothApp:
     
@@ -136,11 +158,16 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 4.0
+        self.program_version = 5.3
+        print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
         self.parameter3_name = None
         self.clothes_file_path = None
+        self.notes = {}
+        self.limb_parameter1 = {}  # RH, LH, RL, LL each has its own entry
+        self.limb_parameter2 = {}
+        self.limb_parameter3 = {}
     
     def get_total_frames(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -180,6 +207,7 @@ class LabelingApp(tk.Tk):
         self.frame_cache = {}
         self.image = None
         self.diagram_size, self.minimal_touch_lenght = self.load_config()
+        
         self.img_buffer = {}
         self.play = False
         self.play_thread_on = False
@@ -198,10 +226,10 @@ class LabelingApp(tk.Tk):
         self.timeline2_canvas.pack(fill=tk.X, expand=True, pady=(0, 5))  # Add padding below the first timeline
         self.timeline2_canvas.bind("<Button-1>", self.on_timeline2_click)  # Bind click event
 
-        self.timeline_canvas = tk.Canvas(self.timeline_frame, bg='lightgrey', height=50)
+        self.timeline_canvas = tk.Canvas(self.timeline_frame, bg='grey', height=50)
         self.timeline_canvas.pack(fill=tk.X, expand=True, pady=(10, 0))  # Add padding above the second timeline
         self.timeline_canvas.bind("<Button-1>", self.on_timeline_click)  # Bind click event
-        
+        self.bind_all("<Button-1>", self.global_click, add="+")
         
         
         
@@ -240,12 +268,22 @@ class LabelingApp(tk.Tk):
         self.diagram_canvas = tk.Canvas(self.diagram_frame, bg='lightgrey', width=int(450*scale), height=int(696*scale))
         self.diagram_canvas.pack(padx=10, pady=10)
         self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
-        
+        self.last_mouse_x = 0
+        self.last_mouse_y = 0
+
+        # Bind mouse motion inside the diagram
+        self.diagram_canvas.bind("<Motion>", self.update_last_mouse_position)
         self.diagram_canvas.bind("<Button-3>",lambda event: self.on_diagram_click(event,right = False))
         self.diagram_canvas.bind("<Button-1>",lambda event: self.on_diagram_click(event,right = True))
         self.diagram_canvas.bind("<Button-2>", self.on_middle_click)
-        self.bind("<Right>", lambda event: self.next_frame(1))
-        self.bind("<Left>", lambda event: self.next_frame(-1))
+        self.bind("<KeyPress-d>", self.on_middle_click)  # Bind only within canvas
+        self.bind("<Left>", self.navigate_left)
+        self.bind("<Right>", self.navigate_right)
+        self.bind("<Shift-Left>", lambda event: self.next_frame(-7))
+        self.bind("<Shift-Right>", lambda event: self.next_frame(7))
+
+        # Detect focus on note entry to disable arrow navigation
+        
         self.bind("<Shift-Right>", lambda event: self.next_frame(7))
         self.bind("<Shift-Left>", lambda event: self.next_frame(-7))
         self.bind("<MouseWheel>", self.on_mouse_wheel)  # Windows
@@ -256,98 +294,123 @@ class LabelingApp(tk.Tk):
         
         self.background_thread = Thread(target=self.background_update)
         self.background_thread.daemon = True
+    
+    def global_click(self, event):
+        # If the current focus is on the note_entry and the click is outside of it
+        if self.focus_get() == self.note_entry and event.widget != self.note_entry:
+            # Transfer focus away (e.g., to the root window)
+            self.focus_set()
+    def navigate_left(self, event):
+        #print(f"Current focus: {self.focus_get()}, Note Entry: {self.note_entry}")
+
+        """ Moves to the previous frame only if note entry is not focused. """
         
+        self.next_frame(-1)
+
+    def navigate_right(self, event):
+        #print(f"Current focus: {self.focus_get()}, Note Entry: {self.note_entry}")
+
+        """ Moves to the next frame only if note entry is not focused. """
         
+        self.next_frame(1)   
+    
+    def disable_arrow_keys(self, event=None):
+        """ Unbinds arrow keys when note entry is focused. """
+        self.unbind("<Left>")
+        self.unbind("<Right>")
+        self.unbind("<Shift-Left>")
+        self.unbind("<Shift-Right>")
+
+    def enable_arrow_keys(self, event=None):
+        """ Rebinds arrow keys when note entry loses focus. """
+        self.bind("<Left>", self.navigate_left)
+        self.bind("<Right>", self.navigate_right)
+        self.bind("<Shift-Left>", lambda event: self.next_frame(-7))
+        self.bind("<Shift-Right>", lambda event: self.next_frame(7))    
         
         #self.periodic_call()
     
+    def update_last_mouse_position(self, event):
+        """ Stores the last mouse position for use when pressing 'D' """
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+    
     def on_resize(self, event):
-    # Function to handle resize events
         print("INFO: Resized to {}x{}".format(event.width, event.height))
-        self.img_buffer.clear()
+        self.img_buffer.clear()  # Clear buffer to remove old images
         if self.video:
-            self.display_first_frame()
-    # Add your code here to clear and reload the image buffer
+            self.display_first_frame()  # Reload the first frame after clearing buffer
+    
+    def load_frame(self, frame_number):
+        try:
+            frame_path = os.path.join(self.video.frames_dir, f"frame{frame_number}.jpg")
+            img = Image.open(frame_path)
+            img = self.resize_frame(img)
+            photo_img = ImageTk.PhotoImage(img)
+            self.img_buffer[frame_number] = photo_img
+        except Exception as e:
+            print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
+    
     def background_update(self, frame_number=None):
+        was_missing = False  # Track if the current frame was previously missing
+
         while True:
-            time.sleep(0.02)
-            #print("buffer lenght = ",len(self.img_buffer))
+            time.sleep(0.01)
+
             if self.video is not None:
-                #print("video")
-                
                 frame_number = self.video.current_frame
-                
-                    
-                if frame_number < 0:
-                    print("ERROR: Frame number cannot be negative")
-                    return
-                if frame_number > self.video.total_frames:
-                    print("ERROR: Frame number cannot be bigger than max number of frames")
+
+                if frame_number < 0 or frame_number > self.video.total_frames:
                     return
 
-                # Load and buffer frames from 10 frames before to 10 frames after the current frame
-                start_frame = max(0, frame_number - 50)  # Ensure we do not go below frame 0
-                end_frame = min(self.video.total_frames, frame_number + 100)  # Ensure we do not go beyond the last frame
-                #current frame:
-                if frame_number not in self.img_buffer:
-                        frame_path = os.path.join(self.video.frames_dir, f"frame{frame_number}.jpg")
-                        try:
-                            img = Image.open(frame_path)
-                            img = self.resize_frame(img)
-                            photo_img = ImageTk.PhotoImage(img)
-                            self.img_buffer[frame_number] = photo_img  # Store the image in the buffer
-                            print(f"INFO: Loading current frame {frame_number}")
-                            
-                            self.display_first_frame()
-                        except Exception as e:
-                            print(f"ERROR: Opening or processing frame {i}: {str(e)}")
-                            continue
-                        
+                start_frame = max(0, frame_number - 30)
+                end_frame = min(self.video.total_frames, frame_number + 50)
+
+                buffer_loaded = True  # Flag to track overall buffer status
+                current_frame_loaded = frame_number in self.img_buffer  # Is current frame in buffer?
+
+                # Check if we were missing this frame previously
+                if not current_frame_loaded:
+                    buffer_loaded = False
+                    self.load_frame(frame_number)
+                    was_missing = True  # Mark that the frame was missing before
+
+                # Preload future frames
                 for i in range(frame_number, end_frame + 1):
-                    
-                    if i not in self.img_buffer:  # Check if frame is already buffered
-                        frame_path = os.path.join(self.video.frames_dir, f"frame{i}.jpg")
-                        try:
-                            img = Image.open(frame_path)
-                            img = self.resize_frame(img)
-                            photo_img = ImageTk.PhotoImage(img)
-                            self.img_buffer[i] = photo_img  # Store the image in the buffer
-                            #print(f"Loading frame {i}")
-                            
-                        except Exception as e:
-                            print(f"ERROR: Opening or processing frame {i}: {str(e)}")
-                            continue
-                for i in range(frame_number, start_frame-1, -1):
-                    
-                    if i not in self.img_buffer:  # Check if frame is already buffered
-                        frame_path = os.path.join(self.video.frames_dir, f"frame{i}.jpg")
-                        try:
-                            img = Image.open(frame_path)
-                            img = self.resize_frame(img)
-                            photo_img = ImageTk.PhotoImage(img)
-                            self.img_buffer[i] = photo_img  # Store the image in the buffer
-                            #print(f"Loading frame {i}")
-                            
-                        except Exception as e:
-                            print(f"ERROR: Opening or processing frame {i}: {str(e)}")
-                            continue                    
-                # Clean up the buffer to hold only the 20 relevant frames
-                current_frame = self.video.current_frame
+                    if i not in self.img_buffer:
+                        buffer_loaded = False
+                        self.load_frame(i)
+
+                # Preload past frames
+                for i in range(frame_number, start_frame - 1, -1):
+                    if i not in self.img_buffer:
+                        buffer_loaded = False
+                        self.load_frame(i)
+
+                # Remove frames outside the buffer range
                 buffer_range = 200
+                min_keep = max(0, frame_number - buffer_range)
+                max_keep = min(self.video.total_frames, frame_number + buffer_range)
 
-                # Define the range of frames you want to keep in the buffer
-                start_frame = current_frame - buffer_range
-                end_frame = current_frame + buffer_range
+                frames_to_remove = [k for k in self.img_buffer if k < min_keep or k > max_keep]
 
-                # Identify keys (frames) that are outside the buffer range
-                keys_to_remove = [k for k in self.img_buffer if k < start_frame or k > end_frame]
-
-                # Remove the identified frames from the buffer
-                for k in keys_to_remove:
-                    
+                for k in frames_to_remove:
                     del self.img_buffer[k]
-                    #print("INFO: Deleting frame number: ",k)
-    def load_paramter_name(self):
+
+                # **Update buffer label:**
+                if current_frame_loaded:
+                    self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
+                else:
+                    self.loading_label.config(text="Buffer Loading", bg='#E57373')  # **Only red if current frame is missing**
+
+                # *** Force display update only if the frame was missing before and is now loaded ***
+                if was_missing and current_frame_loaded:
+                    self.after(0, self.display_first_frame)
+                
+                # Reset the flag if the frame is loaded
+                was_missing = not current_frame_loaded
+
+    def load_parameter_name(self):
         with open('config.json', 'r') as file:
             config = json.load(file)
             parameter1 = config.get('parameter1', 'Parameter 1')  # Default to 'medium' if not specified
@@ -356,63 +419,75 @@ class LabelingApp(tk.Tk):
             self.video.parameter1_name = parameter1
             self.video.parameter2_name = parameter2
             self.video.parameter3_name = parameter3
-            self.par1_btn.config(text=parameter1)
-            self.par2_btn.config(text=parameter2)
-            self.par3_btn.config(text=parameter3)
+            
 
             self.par1_btn.config(text=f"{parameter1}")
             self.par2_btn.config(text=f"{parameter2}")
             self.par3_btn.config(text=f"{parameter3}")
 
+                # Load limb-specific parameters
+            self.video.limb_parameter1_name = config.get('limb_parameter1', 'Limb Parameter 1')
+            self.video.limb_parameter2_name = config.get('limb_parameter2', 'Limb Parameter 2')
+            self.video.limb_parameter3_name = config.get('limb_parameter3', 'Limb Parameter 3')
+
+            
+            self.limb_par1_btn.config(text=f"{self.video.limb_parameter1_name}")
+            self.limb_par2_btn.config(text=f"{self.video.limb_parameter2_name}")
+            self.limb_par3_btn.config(text=f"{self.video.limb_parameter3_name}")
 
     def load_config(self):
         with open('config.json', 'r') as file:
             config = json.load(file)
             diagram_size = config.get('diagram_size', 'small')  # Default to 'medium' if not specified
             minimal_touch_lenght = config.get('minimal_touch_lenght', '280')
+            
             print("INFO: Loaded diagram size:", diagram_size)
             return diagram_size, minimal_touch_lenght
-    #diagram 
+    
     def on_mouse_wheel(self, event):
             if event.delta > 0 or event.num == 4:  # Scrolling up
                 self.next_frame(-1)
             elif event.delta < 0 or event.num == 5:  # Scrolling down
                 self.next_frame(1)
         
-    def on_middle_click(self, event):
-        # Get the currently selected limb data dictionary based on the option selected
+    def on_middle_click(self, event=None):
+        """ Deletes the closest dot using last mouse position if triggered by 'D' """
+        
+        # Use stored position if triggered by 'D' (event is None)
+        if event is None or isinstance(event, tk.Event):  
+            x_pos, y_pos = self.last_mouse_x, self.last_mouse_y  
+        else:  
+            x_pos, y_pos = event.x, event.y  
+
+        # Get the currently selected limb data dictionary
         limb_key = f'data{self.option_var_1.get()}'
         limb_data = getattr(self.video, limb_key, {})
+
         scale = 1 if self.diagram_size == "large" else 0.5
-        
+
         # Current frame to check
         current_frame = self.video.current_frame
 
-        # Check if there are coordinates for the current frame
         if current_frame in limb_data:
             details = limb_data[current_frame]
             closest_distance = float('inf')
             closest_index = None
 
-            # Iterate through coordinates in the current frame to find the closest point
+            # Find closest point
             for index, (x, y) in enumerate(details['xy']):
-                distance = ((x*scale - event.x)**2 + (y*scale - event.y)**2)**0.5
+                distance = ((x*scale - x_pos)**2 + (y*scale - y_pos)**2)**0.5
                 if distance <= 20 and distance < closest_distance:
                     closest_distance = distance
                     closest_index = index
 
-            # Delete the closest point if a suitable one was found
             if closest_index is not None:
-                del details['xy'][closest_index]  # Remove the coordinate from the list
+                del details['xy'][closest_index]  # Remove the coordinate
 
-                # If there are no coordinates left for the frame, remove the frame entry
-                if not details['xy']:
-                    del limb_data[current_frame]
+                if not details['xy']:  
+                    del limb_data[current_frame]  # Remove frame entry if empty
 
-                # Optional: Update the canvas or UI to reflect the change3
-                # This might involve re-drawing the frame or adjusting UI elements
-                print(f"INFO: Deleted point {closest_index} from frame {current_frame}")
-    
+                print(f"INFO: Deleted point {closest_index} at ({x_pos}, {y_pos}) in frame {current_frame}")
+
     def on_diagram_click(self, event,right):
         if right:
             onset = "On"
@@ -435,17 +510,34 @@ class LabelingApp(tk.Tk):
         print(f"INFO: Writing to {option} ...")
         setattr(self.video, f"is_touch{option}", True)
         
-        if current_frame in target_data and 'xy' in target_data[current_frame]:
-            target_data[current_frame]['xy'].append((x_pos, y_pos))
-            target_data[current_frame]['Zone'].append(zone_results[0])
-        else:
+        if current_frame not in target_data:
+            # If the frame doesn't exist in target_data, initialize it
             target_data[current_frame] = {
                 'xy': [(x_pos, y_pos)],
                 'Onset': onset,
                 'Bodypart': option,
                 'Look': "No",
-                'Zone':zone_results
+                'Zone': list(zone_results)  # Ensure this is always a list
             }
+            print(f"INFO: Created new entry for frame {current_frame} with Zone: {zone_results}")
+        else:
+            # If frame exists, ensure 'xy' is a list before appending
+            if 'xy' not in target_data[current_frame]:
+                target_data[current_frame]['xy'] = []
+            target_data[current_frame]['xy'].append((x_pos, y_pos))
+
+            # Ensure 'Zone' is a list before appending
+            if 'Zone' not in target_data[current_frame] or not isinstance(target_data[current_frame]['Zone'], list):
+                target_data[current_frame]['Zone'] = list(zone_results)
+            else:
+                target_data[current_frame]['Zone'].extend(zone_results)  # Append all detected zones
+
+            print(f"INFO: Updated frame {current_frame}: (x, y)={x_pos, y_pos}, Zone={target_data[current_frame]['Zone']}")
+            target_data[current_frame]['Bodypart'] = option
+            target_data[current_frame]['Onset'] = onset
+            target_data[current_frame]['Look'] = "No"
+
+        print("DEBUG:", target_data[current_frame])
     
     def find_last_green(self,data):
         #print("data to find last green dot:",data)
@@ -473,24 +565,36 @@ class LabelingApp(tk.Tk):
         
         
         touch = False
+
         if self.option_var_1.get() == "RH":
-            image_path = "icons/RH.png"
+            if NEW_TEMPLATE:
+                image_path = "icons/RH_new_template.png"
+            else:
+                image_path = "icons/RH.png"
             if self.video:
                 touch = self.video.is_touchRH
         elif self.option_var_1.get() == "LH":
             if self.video:
                 touch = self.video.is_touchLH
-            image_path = "icons/LH.png"
+            if NEW_TEMPLATE:
+                image_path = "icons/LH_new_template.png"
+            else:    
+                image_path = "icons/LH.png"
             
         elif self.option_var_1.get() == "RL":
             if self.video:
                 touch = self.video.is_touchRL
-            
-            image_path = "icons/RL.png"
+            if NEW_TEMPLATE:
+                image_path = "icons/RL_new_template.png"
+            else:
+                image_path = "icons/RL.png"
         elif self.option_var_1.get() == "LL":
             if self.video:
                 touch = self.video.is_touchLL
-            image_path = "icons/LL.png"
+            if NEW_TEMPLATE:
+                image_path = "icons/LL_new_template.png"
+            else:
+                image_path = "icons/LL.png"
         #self.bool_var = touch
         #self.display_text_var.set("Touch" if self.bool_var else "No Touch")
         img = Image.open(image_path)
@@ -503,7 +607,8 @@ class LabelingApp(tk.Tk):
         self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
         self.draw_timeline()
         self.draw_timeline2()
-       
+        self.update_limb_parameter_buttons()
+
     def periodic_print_dot(self):
         # Nejprve odstranit všechny předchozí body z plátna
         self.diagram_canvas.delete("all")  # Odstraní vše z plátna, můžete chtít odstranit jen specifické body
@@ -615,7 +720,10 @@ class LabelingApp(tk.Tk):
         # List to hold the names of the images where the pixel is white
         x = int(x)
         y = int(y)
-        directory = "icons/zones3"
+        if NEW_TEMPLATE:
+                directory = "icons/zones3_new_template"
+        else:
+            directory = "icons/zones3"
         images_with_white_pixel = []
         
         # Iterate over all files in the given directory
@@ -634,9 +742,8 @@ class LabelingApp(tk.Tk):
                     images_with_white_pixel.append(filename.rsplit('.', 1)[0])
                     #print("zone:", images_with_white_pixel)
                     return images_with_white_pixel
-        return ['NN']
-        
-    #timeline
+        return ['NN']    
+    
     def on_timeline_click(self, event):
         if self.video and self.video.total_frames > 0:
             click_position = event.x
@@ -648,45 +755,45 @@ class LabelingApp(tk.Tk):
             else:
                 print("ERROR: Frame Number")
     
-    def on_timeline2_click(self,event):
+    def on_timeline2_click(self, event):
         if self.video and self.video.total_frames > 0:
             click_position = event.x
             canvas_width = self.timeline2_canvas.winfo_width()
-            frame_number = int(click_position / canvas_width * self.video.number_zones)
-            if frame_number < self.video.current_frame_zone:
-                self.touch = False
-            self.video.current_frame_zone = frame_number
-            print("INFO: Current zone: ",self.video.current_frame_zone)
-            self.video.current_frame = self.video.number_frames_in_zone*self.video.current_frame_zone
+            
+            # Determine the exact clicked frame as a proportion of the total video length.
+            new_frame = int((click_position / canvas_width) * self.video.total_frames)
+
+            # Update current frame and its zone dynamically
+            self.video.current_frame = new_frame
+            self.video.current_frame_zone = new_frame // self.video.number_frames_in_zone
+
+            print("INFO: Jumping to exact frame:", new_frame)
             self.display_first_frame()
-            #self.display_first_frame(frame_number)
     
     def draw_timeline2(self):
         self.timeline2_canvas.delete("all")  # Clear existing drawings
         if self.video and self.video.total_frames > 0:
             canvas_width = self.timeline2_canvas.winfo_width()
-            sector_width = canvas_width / self.video.number_zones
+            canvas_height = self.timeline2_canvas.winfo_height()
 
-            # Assume `self.video.zone_touches` is a list where each index represents a zone and the value is a boolean indicating if a touch occurred.
-            # This list needs to be calculated or updated elsewhere in your code based on actual touch data.
-            
-            for frame in range(self.video.number_zones):
-                left = frame * sector_width
-                right = left + sector_width
-                top = 0
-                bottom = 100
-                
-                # Check if there is at least one touch in the current frame zone
-                has_touch = self.check_zone_for_touch(frame)  # This function needs to be defined or replace this with your logic
-                
-                if frame == self.video.current_frame_zone:
-                    fill_color = 'blue'
-                elif has_touch:
-                    fill_color = self.color_during
-                else:
-                    fill_color = 'gray'
-                
-                self.timeline2_canvas.create_rectangle(left, top, right, bottom, fill=fill_color, outline='black')
+            # Get the currently selected limb from the radio button
+            selected_limb_key = f'data{self.option_var_1.get()}'
+            limb_data = getattr(self.video, selected_limb_key, {})
+
+            # Draw yellow lines for touch frames
+            for frame, details in limb_data.items():
+                if 'Onset' in details and details['Onset'] == 'On':  # Check if there was a touch
+                    touch_pos = (frame / self.video.total_frames) * canvas_width
+                    self.timeline2_canvas.create_line(touch_pos, 0, touch_pos, canvas_height, fill='green', width=1)
+
+            # Draw red line for current frame position
+            current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
+            margin = 2
+            if current_pos < margin:
+                current_pos = margin
+            elif current_pos > canvas_width - margin:
+                current_pos = canvas_width - margin
+            self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
 
     def check_zone_for_touch(self, zone_index):
         # Dynamically calculate the number of frames per zone if not predefined
@@ -704,6 +811,49 @@ class LabelingApp(tk.Tk):
         return any(details.get('Onset') in {'On', 'Off'} for frame_idx, details in limb_data.items()
            if start_frame <= frame_idx < end_frame)
 
+    def parameter_color_at_frame(self, frame):
+        """
+        Return "green" if any parameter for the current limb is ON at the given frame,
+        or "red" if at least one parameter is OFF (and none are ON).
+        """
+        current_limb = self.option_var_1.get()
+        result = None
+
+        # Check general parameter dictionaries.
+        for d in [self.video.parameter_button1_state_dict,
+                self.video.parameter_button2_state_dict,
+                self.video.parameter_button3_state_dict]:
+            if frame in d:
+                state = d[frame]
+                if state == "ON":
+                    return "green"
+                elif state == "OFF":
+                    result = "red"
+
+        # Check limb-specific parameters (keys are tuples: (limb, frame)).
+        for i in range(1, 4):
+            limb_param = getattr(self.video, f"limb_parameter{i}")
+            if (current_limb, frame) in limb_param:
+                state = limb_param.get((current_limb, frame))
+                if state == "ON":
+                    return "green"
+                elif state == "OFF":
+                    result = "red"
+
+        # Check looking data for the current limb.
+        looking_attr = f"datalooking{current_limb}"
+        if hasattr(self.video, looking_attr):
+            looking_data = getattr(self.video, looking_attr)
+            if frame in looking_data:
+                look_state = looking_data[frame].get("Look")
+                # For example, if "L" means looking (active) and "NL" means not looking (inactive).
+                if look_state == "L":
+                    return "green"
+                elif look_state == "NL":
+                    result = "red"
+
+        return result
+
     def draw_timeline(self):
         self.timeline_canvas.delete("all")  # Clear existing drawings
         if not (self.video and self.video.total_frames > 0):
@@ -713,7 +863,7 @@ class LabelingApp(tk.Tk):
         sector_width = canvas_width / self.video.number_frames_in_zone
         offset = self.video.number_frames_in_zone * self.video.current_frame_zone
 
-        # Determine the data source based on option
+        # Determine the data source based on option.
         data_source = {
             'RH': self.video.dataRH,
             'LH': self.video.dataLH,
@@ -722,34 +872,28 @@ class LabelingApp(tk.Tk):
         }
         data = data_source.get(self.option_var_1.get(), self.video.data)
 
-        # Initialize variables
         top = 0
         bottom = 100
         self.is_touch_timeline = False if self.video.current_frame_zone == 0 else self.video.touch_to_next_zone[self.video.current_frame_zone]
 
-        # Function to determine color based on data presence and type
         def get_color(frame_idx, data):
             if frame_idx > self.video.total_frames:
                 return 'black'
             details = data.get(frame_idx, {})
             array = details.get('xy', (None, None))
-            
-            # Check if array is None or if it doesn't contain at least one element
             if array is None or not array:
-                return self.color_during if self.is_touch_timeline else 'grey'
-            
-            # Ensure the first element of array is not None and is subscriptable
+                return self.color_during if self.is_touch_timeline else 'lightgrey'
             if len(array) >= 1 and array[0] and array[0][0] is not None:
                 if details.get('Onset') == 'On':
                     self.is_touch_timeline = True
-                    return 'green'
+                    return 'lightgreen'
                 else:
                     self.is_touch_timeline = False
-                    return 'red'
+                    return '#E57373'
             else:
-                return self.color_during if self.is_touch_timeline else 'grey'
+                return self.color_during if self.is_touch_timeline else 'lightgrey'
 
-        # Draw each frame in the timeline
+        # Draw each frame in the timeline zone.
         for frame in range(self.video.number_frames_in_zone):
             left = frame * sector_width
             right = left + sector_width
@@ -758,21 +902,43 @@ class LabelingApp(tk.Tk):
             color = get_color(frame_offset, data)
             self.timeline_canvas.create_rectangle(left, top, right, bottom, fill=color, outline='black')
 
-            # Special case for the current frame
-            if frame_offset == self.video.current_frame:
-                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill='blue', outline='black')
+            # Overlay parameter indicator line.
+            # If any parameter is set, display a vertical line at the center of the sector:
+            param_color = self.parameter_color_at_frame(frame_offset)
+            if param_color is not None:
+                mid_x = (left + right) / 2
+                self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
 
-            # Check if the zone ends with a touch and safely update the list
+            # Special case for the current frame.
+            if frame_offset == self.video.current_frame:
+                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill='dodgerblue', outline='black')
+
+            # Update touch-to-next-zone for the last frame of the zone.
             if frame == self.video.number_frames_in_zone - 1:
                 if self.video.current_frame_zone + 1 < len(self.video.touch_to_next_zone):
                     self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
-                elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):  # Safely extend the list if at the end
+                elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
                     self.video.touch_to_next_zone.append(color == self.color_during)
-
     def update_frame_counter(self):
         if self.video:
             current_frame_text = f"{self.video.current_frame} / {self.video.total_frames}"
             self.frame_counter_label.config(text=current_frame_text)
+
+            def format_time(ms):
+                hours, remainder = divmod(ms, 3600000)
+                minutes, remainder = divmod(remainder, 60000)
+                seconds, milliseconds = divmod(remainder, 1000)
+                
+                if hours > 0:
+                    return f"{hours}:{minutes:02}:{seconds:02}.{milliseconds:03}"
+                else:
+                    return f"{minutes}:{seconds:02}.{milliseconds:03}"
+
+            current_time = self.video.current_frame / self.video.frame_rate * 1000
+            total_time = self.video.total_frames / self.video.frame_rate * 1000
+
+            current_time_text = f"{format_time(int(current_time))} / {format_time(int(total_time))}"
+            self.time_counter_label.config(text=current_time_text)
         else:
             self.frame_counter_label.config(text="0 / 0")
         
@@ -781,6 +947,8 @@ class LabelingApp(tk.Tk):
         #self.update_diagram()
     
     def display_first_frame(self, frame_number=None):
+        #print("INFO:self.play:",self.play)
+        #print("INFO: Displaying")
         #self.background_thread.run()
         if frame_number is None:
             frame_number = self.video.current_frame
@@ -802,40 +970,15 @@ class LabelingApp(tk.Tk):
             else:
                 self.frame_label = tk.Label(self.video_frame, image=photo_img)
                 self.frame_label.pack(expand=True)
-            self.loading_label.config(text="Buffer Loaded", bg='green')
+            self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
             self.image = photo_img  # Keep a reference to prevent garbage collection
         else:
             print("INFO: Frame not in buffer. You may need to wait or trigger a buffer update.")
-            self.loading_label.config(text="Buffer Loading", bg='red')
-            #self.background_thread.run()
-            #self.display_first_frame()
-        #rame = cv2.imread(first_frame_path)
-        #if frame is not None:
-            # Convert the frame to PIL format for resizing
-            #pil_frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            #self.pil_frame = pil_frame
-            # Resize the frame to fit the display area
-            #display_width = self.video_frame.winfo_width()
-            #display_height = self.video_frame.winfo_height()
-            #print("display_width:",display_width)
-            #print("display_height:",display_height)
-            #resized_frame = self.resize_frame()
-
-            # Convert back to ImageTk format
-            #frame_image = ImageTk.PhotoImage(image=resized_frame)
-            #if hasattr(self, 'frame_label'):
-                #self.frame_label.configure(image=frame_image)
-            #else:
-                #self.frame_label = tk.Label(self.video_frame, image=frame_image)
-                #self.frame_label.pack(expand=True)
-
-            #self.frame_label.image = frame_image  # Keep a reference!
-            
-        #else:
-           # print(f"Error loading frame {frame_number}.")
-        
+            self.loading_label.config(text="Buffer Loading", bg='#E57373')
+           
+        self.update_note_entry()
         self.update_frame_counter()
-        
+        self.update_limb_parameter_buttons()
         #self.draw_timeline()
         #self.draw_timeline2()
     
@@ -864,10 +1007,7 @@ class LabelingApp(tk.Tk):
             #print("resizing")
         return resized_img
     
-    def show_frame(self):
-        pass
-    
-    def next_frame(self,number_of_frames):
+    def next_frame(self,number_of_frames,play=False):
         #self.option_var_2.set("DNK")
         #number of frames is: -10,-1,1,10
         
@@ -882,7 +1022,11 @@ class LabelingApp(tk.Tk):
                 #self.update_diagram()
                 #print("Go next for:",number_of_frames)
                 self.display_first_frame()
-                self.draw_timeline()
+                if play:
+                    pass
+                    #self.draw_timeline()
+                else:
+                    self.draw_timeline()
                 self.draw_timeline2()
             elif number_of_frames < 0:
                 if self.video.current_frame+number_of_frames < 0:
@@ -891,7 +1035,11 @@ class LabelingApp(tk.Tk):
                     self.video.current_frame = self.video.current_frame+number_of_frames
                 #print("Go back for:",number_of_frames)
                 self.display_first_frame()
-                self.draw_timeline()
+                if play:
+                    pass
+                    #self.draw_timeline()
+                else:
+                    self.draw_timeline()
                 self.draw_timeline2()
             else:
                 print("ERROR: Wrong number of frames.")
@@ -925,11 +1073,11 @@ class LabelingApp(tk.Tk):
                     
                     look = details.get('Look', '')
                     if look == "DNK":
-                        self.do_not_know_btn.config(bg='green')
+                        self.do_not_know_btn.config(bg='lightgreen')
                     elif look == "L":
-                        self.looking_btn.config(bg='green')
+                        self.looking_btn.config(bg='lightgreen')
                     elif look == "NL":
-                        self.not_looking_btn.config(bg='green')
+                        self.not_looking_btn.config(bg='lightgreen')
 
 
             self.update_button_colors()
@@ -965,12 +1113,13 @@ class LabelingApp(tk.Tk):
             if current_state is None:
                 parameter_buttons[param_num].config(bg='lightgrey')  # Default color
             elif current_state == "ON":
-                parameter_buttons[param_num].config(bg='green')  # Button is ON
+                parameter_buttons[param_num].config(bg='lightgreen')  # Button is ON
             elif current_state == "OFF":
-                parameter_buttons[param_num].config(bg='red')  # Button is OFF
+                parameter_buttons[param_num].config(bg='#E57373')  # Button is OFF
 
         # Optionally, you can schedule this function to be called periodically
         # Example: self.root.after(1000, self.update_button_colors)
+    
     def parameter_dic_insert(self, parameter):
         """Toggle the state of the button between 'ON', 'OFF', and None dynamically for any parameter."""
 
@@ -1002,10 +1151,10 @@ class LabelingApp(tk.Tk):
         # Cycle through the states: None -> ON -> OFF -> None
         if current_state is None:
             new_state = "ON"
-            parameter_buttons[parameter].config(bg='green')  # Change button color to green
+            parameter_buttons[parameter].config(bg='lightgreen')  # Change button color to green
         elif current_state == "ON":
             new_state = "OFF"
-            parameter_buttons[parameter].config(bg='red')  # Change button color to red
+            parameter_buttons[parameter].config(bg='#E57373')  # Change button color to red
         elif current_state == "OFF":
             new_state = None
             parameter_buttons[parameter].config(bg='grey')  # Change button color to grey
@@ -1015,13 +1164,14 @@ class LabelingApp(tk.Tk):
 
         # For debugging or tracking, you can print the updated dictionary
         print("Dictionary",parameter,current_dict)
-    def looking_dic_insert(self,parametr):
+    
+    def looking_dic_insert(self,parameter):
         
-        if parametr == 1:
+        if parameter == 1:
             looking_data = "DNK"
-        if parametr == 2:
+        if parameter == 2:
             looking_data ="L"
-        if parametr == 3:
+        if parameter == 3:
             looking_data ="NL"
         # Current frame as the key
         if self.video is not None:
@@ -1084,8 +1234,8 @@ class LabelingApp(tk.Tk):
     
     def init_controls(self):
         # Initialize control buttons here, using grid layout
-        load_video_btn = tk.Button(self.control_frame, text="Load Video", command=self.load_video)
-        load_video_btn.grid(row=0, column=0, padx=5, pady=5)
+        self.load_video_btn = tk.Button(self.control_frame, text="Load Video", command=self.load_video)
+        self.load_video_btn.grid(row=0, column=0, padx=5, pady=5)
 
         self.cloth_btn = tk.Button(self.control_frame, text="Clothes", command=self.open_cloth_app)
         self.cloth_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -1096,8 +1246,8 @@ class LabelingApp(tk.Tk):
         analysis_btn = tk.Button(self.control_frame, text="Analysis", command=self.analysis)
         analysis_btn.grid(row=0, column=3, padx=5, pady=5)
 
-        export_btn = tk.Button(self.control_frame, text="Export", command=self.export)
-        export_btn.grid(row=0, column=4, padx=5, pady=5)
+        #export_btn = tk.Button(self.control_frame, text="Export", command=self.export)
+        #export_btn.grid(row=0, column=4, padx=5, pady=5)
 
         back_10_frame_btn = tk.Button(self.control_frame, text="<<", command=lambda: self.next_frame(-7))
         back_10_frame_btn.grid(row=0, column=5, padx=5, pady=5)
@@ -1106,7 +1256,10 @@ class LabelingApp(tk.Tk):
         back_frame_btn.grid(row=0, column=6, padx=5, pady=5)
 
         self.frame_counter_label = tk.Label(self.control_frame, text="0 / 0")
-        self.frame_counter_label.grid(row=0, column=7, padx=5)
+        self.frame_counter_label.grid(row=1, column=7, padx=5)
+
+        self.time_counter_label = tk.Label(self.control_frame, text="0 / 0")
+        self.time_counter_label.grid(row=0, column=7, padx=5)
 
         next_frame_btn = tk.Button(self.control_frame, text=">", command=lambda: self.next_frame(1))
         next_frame_btn.grid(row=0, column=8, padx=5, pady=5)
@@ -1125,20 +1278,22 @@ class LabelingApp(tk.Tk):
 
 
 
-        self.framerate_label = tk.Label(self.control_frame, text=f"Frame Rate: -----")
+        self.framerate_label = tk.Label(self.control_frame, text=f"Frame Rate: -----",bg='lightgrey')
         self.framerate_label.grid(row=0, column=12, padx=5, pady=5)
 
-        self.min_touch_lenght_label = tk.Label(self.control_frame, text=f"Minimal Touch Length: -----")
+        self.min_touch_lenght_label = tk.Label(self.control_frame, text=f"Minimal Touch Length: -----",bg='lightgrey')
         self.min_touch_lenght_label.grid(row=0, column=13, padx=5, pady=5)
 
-        self.loading_label = tk.Label(self.control_frame, text="Buffer loaded")
-        self.loading_label.grid(row=1, column=7, padx=5, pady=5)
+        self.loading_label = tk.Label(self.control_frame, text="Buffer Loaded",bg='lightgrey')
+        self.loading_label.grid(row=1, column=12, padx=5, pady=5)
         
         # Now place the labels in a new row
-        self.name_label = tk.Label(self.control_frame, text="Video Name: -----")
-        self.name_label.grid(row=1, column=12, columnspan=3, padx=5, pady=5, sticky="w")
+        self.name_label = tk.Label(self.control_frame, text="Video Name: -----",bg='lightgrey')
+        self.name_label.grid(row=1, column=13, columnspan=3, padx=5, pady=5, sticky="w")
 
-        
+        # Now place the labels in a new row
+        self.mode_label = tk.Label(self.control_frame, text="Mode: -----",bg='lightgrey')
+        self.mode_label.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="w")
         
         
         self.background_thread_play = Thread(target=self.background_update_play)
@@ -1171,55 +1326,47 @@ class LabelingApp(tk.Tk):
                     zones.add(zone_data)
 
         return list(zones)  # Return the list of unique zones
+     
     def export(self):
-        self.save_data()
+        
+        #self.save_data()
         """
-        Merge the limb data, looking data, notes, and parameters from the provided CSV files into one CSV file.
+        Merges limb data, looking data, general parameters, limb parameters, and notes into a single export file.
+        Ensures all parameter-limb combinations are present, even if missing data.
         """
-        lh_path = self.video.dataLH_path_to_csv
-        ll_path = self.video.dataLL_path_to_csv
-        rh_path = self.video.dataRH_path_to_csv
-        rl_path = self.video.dataRL_path_to_csv
+        
+        # Load the limb data
+        lh_df = pd.read_csv(self.video.dataLH_path_to_csv)
+        ll_df = pd.read_csv(self.video.dataLL_path_to_csv)
+        rh_df = pd.read_csv(self.video.dataRH_path_to_csv)
+        rl_df = pd.read_csv(self.video.dataRL_path_to_csv)
+        
+        # Rename columns to identify each limb clearly
+        for df, limb in zip([lh_df, ll_df, rh_df, rl_df], ['LH', 'LL', 'RH', 'RL']):
+            df.columns = [f"{limb}_{col}" if col != "Frame" else "Frame" for col in df.columns]
+        
+        # Merge all limb data
+        merged_df = lh_df.merge(ll_df, on="Frame", how="outer") \
+                        .merge(rh_df, on="Frame", how="outer") \
+                        .merge(rl_df, on="Frame", how="outer")
+        
+        # Load and merge looking data
+        for limb in ['LH', 'LL', 'RH', 'RL']:
+            looking_df = pd.read_csv(getattr(self.video, f'datalooking{limb}_path_to_csv'))
+            looking_df.columns = [f"{limb}_{col}" if col != "Frame" else "Frame" for col in looking_df.columns]
+            merged_df = merged_df.merge(looking_df, on="Frame", how="outer")
+        
+        for i in range(1, 4):
+            param_path = getattr(self.video, f'dataparameter_{i}_path_to_csv')
 
-        # Load the limb data from the CSV files (read-only)
-        lh_df = pd.read_csv(lh_path)
-        ll_df = pd.read_csv(ll_path)
-        rh_df = pd.read_csv(rh_path)
-        rl_df = pd.read_csv(rl_path)
-
-        # Rename the columns to identify each limb's data clearly (temporary renaming)
-        lh_df.columns = [f'LH_{col}' if col != 'Frame' else 'Frame' for col in lh_df.columns]
-        ll_df.columns = [f'LL_{col}' if col != 'Frame' else 'Frame' for col in ll_df.columns]
-        rh_df.columns = [f'RH_{col}' if col != 'Frame' else 'Frame' for col in rh_df.columns]
-        rl_df.columns = [f'RL_{col}' if col != 'Frame' else 'Frame' for col in rl_df.columns]
-
-        # Merge the dataframes based on the 'Frame' column (creates a new dataframe)
-        merged_df = pd.merge(lh_df, ll_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, rh_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, rl_df, on='Frame', how='outer')
-
-        # Load the looking data (read-only)
-        looking_lh_path = self.video.datalookingLH_path_to_csv
-        looking_ll_path = self.video.datalookingLL_path_to_csv
-        looking_rh_path = self.video.datalookingRH_path_to_csv
-        looking_rl_path = self.video.datalookingRL_path_to_csv
-
-        looking_lh_df = pd.read_csv(looking_lh_path)
-        looking_ll_df = pd.read_csv(looking_ll_path)
-        looking_rh_df = pd.read_csv(looking_rh_path)
-        looking_rl_df = pd.read_csv(looking_rl_path)
-
-        # Rename the columns to identify each limb's looking data clearly (temporary renaming)
-        looking_lh_df.columns = [f'LH_{col}' if col != 'Frame' else 'Frame' for col in looking_lh_df.columns]
-        looking_ll_df.columns = [f'LL_{col}' if col != 'Frame' else 'Frame' for col in looking_ll_df.columns]
-        looking_rh_df.columns = [f'RH_{col}' if col != 'Frame' else 'Frame' for col in looking_rh_df.columns]
-        looking_rl_df.columns = [f'RL_{col}' if col != 'Frame' else 'Frame' for col in looking_rl_df.columns]
-
-        # Merge looking data into the merged dataframe (creates a new dataframe)
-        merged_df = pd.merge(merged_df, looking_lh_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, looking_ll_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, looking_rh_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, looking_rl_df, on='Frame', how='outer')
+            if os.path.exists(param_path):  # Check if the file exists before reading
+                param_df = pd.read_csv(param_path)
+                param_df.columns = ['Frame', f'Parameter_{i}']
+                merged_df = merged_df.merge(param_df, on='Frame', how='outer')
+            else:
+                print(f"WARNING: {param_path} not found. Filling Parameter_{i} with None.")
+                if f'Parameter_{i}' not in merged_df.columns:
+                    merged_df[f'Parameter_{i}'] = None  # Ensure column exists
 
         # Delete all _Look_x columns and rename _Look_y to _Look_x for each limb (does not modify original data)
         for limb in ['LH', 'LL', 'RH', 'RL']:
@@ -1238,94 +1385,87 @@ class LabelingApp(tk.Tk):
         # Rename columns by removing _x from the names
         merged_df.columns = [col.replace('_x', '') for col in merged_df.columns]
 
-        # Load the notes data (read-only)
+
+        merged_df = merged_df.drop([col for col in merged_df.columns if col.endswith('_Touch')], axis=1)
+
         notes_path = self.video.dataNotes_path_to_csv
-        parameter_1_path = self.video.dataparameter_1_path_to_csv
-        parameter_2_path = self.video.dataparameter_2_path_to_csv
-        parameter_3_path = self.video.dataparameter_3_path_to_csv
 
-        notes_df = pd.read_csv(notes_path)
-        parameter_1_df = pd.read_csv(parameter_1_path)
-        parameter_2_df = pd.read_csv(parameter_2_path)
-        parameter_3_df = pd.read_csv(parameter_3_path)
-
-        # Merge parameter data into the dataframe (on 'Frame')
-        notes_df.columns = ['Frame', 'Note']
-        parameter_1_df.columns = ['Frame', 'Parameter_1']
-        parameter_2_df.columns = ['Frame', 'Parameter_2']
-        parameter_3_df.columns = ['Frame', 'Parameter_3']
-
-        merged_df = pd.merge(merged_df, notes_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, parameter_1_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, parameter_2_df, on='Frame', how='outer')
-        merged_df = pd.merge(merged_df, parameter_3_df, on='Frame', how='outer')
-
-        # Reorder the columns so that columns for each limb are next to each other
-        columns = ['Frame']
-        for limb in ['RH', 'LH', 'LL', 'RL']:
-            limb_columns = [col for col in merged_df.columns if col.startswith(limb)]
-            columns.extend(limb_columns)
-
-
-
-        # Add parameter columns to the end
-        columns.extend(['Parameter_1', 'Parameter_2', 'Parameter_3','Note'])
-
-        # Reorder the dataframe based on the new column order
-        merged_df = merged_df[columns]
-
-        # Extract the directory and video name
-        directory = os.path.dirname(rh_path)
-        video_name = self.video_name
-
-        # Construct the output path
-        output_csv = os.path.join(directory, f"{video_name}_export.csv")
-
-        # Save the final merged data to a new CSV file
-        merged_df.to_csv(output_csv, index=False)
-        print(f"INFO: Merged CSV with notes and parameters saved to {output_csv}")
-
-
-
-        # Construct the output path
-        output_csv = os.path.join(directory, f"{video_name}_export.csv")
-
-        # Save the final merged data to a temporary CSV file
-        temp_csv = os.path.join(directory, f"{video_name}_temp.csv")
-        # Remove duplicate rows based on 'Frame'
-        merged_df = merged_df.drop_duplicates(subset='Frame', keep='first')
-
-        merged_df.to_csv(temp_csv, index=False)
-        if self.video.clothes_file_path is not None:
-            clothes_list = self.extract_zones_from_file(self.video.clothes_file_path)
+        if os.path.exists(notes_path):  # Check if the file exists before reading
+            notes_df = pd.read_csv(notes_path)
+            merged_df = merged_df.merge(notes_df, on='Frame', how='outer')
         else:
-            # Use the path to notes_csv and replace '_notes.csv' with '_clothes.txt'
-            notes_path = self.video.dataNotes_path_to_csv
-            clothes_path = notes_path.replace('_notes.csv', '_clothes.txt')
+            print(f"WARNING: {notes_path} not found. Filling 'Note' column with None.")
+            if 'Note' not in merged_df.columns:
+                merged_df['Note'] = None  # Ensure column exists
 
-            # Now extract the zones from this clothes file
-            clothes_list = self.extract_zones_from_file(clothes_path)
+        # Load limb parameters
+        limb_param_path = os.path.join(os.path.dirname(self.video.dataRH_path_to_csv), f"{self.video_name}_limb_parameters.csv")
+        if os.path.exists(limb_param_path):
+            limb_params_df = pd.read_csv(limb_param_path)
+            if not limb_params_df.empty:
+                limb_params_df = limb_params_df.pivot(index='Frame', columns=['Limb', 'Parameter'], values='State')
+                limb_params_df.columns = [f"{limb}_{param}" for limb, param in limb_params_df.columns]
+                limb_params_df.reset_index(inplace=True)
+            merged_df = pd.merge(merged_df, limb_params_df, on='Frame', how='outer')
 
-        # Add metadata as the first few rows, followed by the actual data
-        with open(output_csv, 'w') as f_out:
-            # Write the metadata
-            f_out.write(f"Program Version: {self.video.program_version}\n")
-            f_out.write(f"Video Name: {self.video_name}\n")
-            f_out.write(f"Frame Rate: {self.frame_rate}\n")
-            f_out.write(f"Zones Covered With Clothes: {clothes_list}\n")
-            f_out.write(f"Parameter 1: {self.video.parameter1_name}\n")
-            f_out.write(f"Parameter 2: {self.video.parameter2_name}\n")
-            f_out.write(f"Parameter 3: {self.video.parameter3_name}\n")
-            f_out.write("\n")  # Blank line to separate metadata from data
+        # Ensure all parameter-limb combinations exist
+        expected_columns = ['Frame']  # Start with 'Frame' column
+        for limb in ['LH', 'LL', 'RH', 'RL']:
+            for param in ['Parameter_1', 'Parameter_2', 'Parameter_3']:
+                col_name = f"{limb}_{param}"
+                if col_name not in merged_df.columns:
+                    merged_df[col_name] = None  # Ensure column exists
+                expected_columns.append(col_name)  # Maintain expected order
 
-            # Append the actual CSV data
-            with open(temp_csv, 'r') as f_in:
-                f_out.write(f_in.read())
+        # Ensure unique rows per frame
+        merged_df = merged_df.drop_duplicates(subset=['Frame'])
 
-        # Remove the temporary CSV
-        os.remove(temp_csv)
+        # Reorder columns to match the expected structure
+        existing_columns = [col for col in expected_columns if col in merged_df.columns]
+        remaining_columns = [col for col in merged_df.columns if col not in existing_columns]
+        merged_df = merged_df[existing_columns + remaining_columns]
 
-        print(f"INFO: Merged CSV with metadata saved to {output_csv}")
+        # Move 'Note' column to the end
+
+                # Identify parameter columns for all limbs
+        limb_params = [f"{limb}_Parameter_{i}" for limb in ['LH', 'LL', 'RH', 'RL'] for i in range(1, 4)]
+
+        # Identify columns that should remain in the original order
+        other_columns = [col for col in merged_df.columns if col not in limb_params and col != 'Note']
+
+        # Reorder columns: Keep original order → Move limb parameters to end → Move Note to last
+        final_column_order = other_columns + limb_params + (['Note'] if 'Note' in merged_df.columns else [])
+
+        # Apply the new column order
+        merged_df = merged_df[final_column_order]
+        # Define output directory
+        export_folder = os.path.join(os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv)), "export")
+        os.makedirs(export_folder, exist_ok=True)
+        output_csv = os.path.join(export_folder, f"{self.video_name}_export.csv")
+
+        # Save merged data to CSV
+        merged_df.to_csv(output_csv, index=False)
+
+        # Add metadata
+        with open(output_csv, 'r') as file:
+            data = file.read()
+        with open(output_csv, 'w') as file:
+            file.write(f"Program Version: {self.video.program_version}\n")
+            file.write(f"Video Name: {self.video_name}\n")
+            file.write(f"Labeling Mode: {self.labeling_mode}\n")
+            file.write(f"Frame Rate: {self.frame_rate}\n")
+            clothes_list = self.extract_zones_from_file(self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt'))
+            file.write(f"Zones Covered With Clothes: {clothes_list}\n")
+            file.write(f"Limb Parameter 1: {self.video.limb_parameter1_name}\n")
+            file.write(f"Limb Parameter 2: {self.video.limb_parameter2_name}\n")
+            file.write(f"Limb Parameter 3: {self.video.limb_parameter3_name}\n")
+            file.write(f"Parameter 1: {self.video.parameter1_name}\n")
+            file.write(f"Parameter 2: {self.video.parameter2_name}\n")
+            file.write(f"Parameter 3: {self.video.parameter3_name}\n")
+            file.write("\n")  # Separate metadata from data
+            file.write(data)
+
+        print(f"INFO: Combined export saved to {output_csv}")
 
     def analysis(self):
         if self.video:
@@ -1364,12 +1504,14 @@ class LabelingApp(tk.Tk):
         if self.video is not None:
             while True:
                 if self.play:
-                    print("INFO: Moving to next frame")
-                    
-                    self.next_frame(1)
-                    self.display_first_frame()
-                time.sleep(0.03)
-        print("INFO: Ending of thread")
+                    self.next_frame(1,play=True)
+
+                    # **Only update the timeline every 5 frames to reduce flickering**
+                    if self.video.current_frame % 10 == 0:
+                        self.after(0, self.draw_timeline)
+
+                    self.after(0, self.display_first_frame)  # Ensure smooth playback
+                time.sleep(0.03)  # Controls play speed
     
     def open_cloth_app(self):
         if self.video == None:
@@ -1382,6 +1524,7 @@ class LabelingApp(tk.Tk):
         self.data_clothes = dots
         print("Data clothes updated:", self.data_clothes) 
         self.save_clothes_to_text()
+        self.cloth_btn.config(bg="lightgreen")
     
     def save_clothes_to_text(self):
         # Ensure the path is initialized
@@ -1396,6 +1539,7 @@ class LabelingApp(tk.Tk):
             print(f"Creating directory {data_folder} because it does not exist")
             os.makedirs(data_folder, exist_ok=True)
         video_name = os.path.splitext(os.path.basename(self.video.video_path))[0]
+        video_name = self.video_name
         text_file_path = os.path.join(data_folder, f"{video_name}_clothes.txt")
         self.video.clothes_file_path = text_file_path
         with open(text_file_path, mode='w') as text_file:
@@ -1429,19 +1573,21 @@ class LabelingApp(tk.Tk):
         # Vytvoření a umístění Label widgetu
         #display_label = tk.Label(self.diagram_frame, textvariable=self.display_text_var)
         #display_label.pack(anchor="n")
-        
+        button_width = 15  # Set a fixed width for all buttons
+        button_height = 1  # Set a fixed height
         
         self.option_var_1 = tk.StringVar()
         self.option_var_1.set("RH")  # Výchozí možnost
         
-        
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Hand", variable=self.option_var_1, value="RH")
+        label_after_separator1 = tk.Label(self.diagram_frame, text="Limb Selector", font=("Arial", 10, "bold"),bg='lightgrey')
+        label_after_separator1.pack(anchor="n", pady=(5, 2))
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Hand", variable=self.option_var_1, value="RH",bg='lightgrey')
         rb.pack(anchor="n")
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Hand", variable=self.option_var_1, value="LH")
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Hand", variable=self.option_var_1, value="LH",bg='lightgrey')
         rb.pack(anchor="n")
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Leg", variable=self.option_var_1, value="RL")
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Leg", variable=self.option_var_1, value="RL",bg='lightgrey')
         rb.pack(anchor="n")
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Leg", variable=self.option_var_1, value="LL")
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Leg", variable=self.option_var_1, value="LL",bg='lightgrey')
         rb.pack(anchor="n")
         # Oddělovací prvek pro vizuální rozdělení dvou skupin
         separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
@@ -1458,35 +1604,58 @@ class LabelingApp(tk.Tk):
         #rb_looking.pack(anchor="n")
         #rb_looking = tk.Radiobutton(self.diagram_frame, text=f"Not Looking", variable=self.option_var_2, value="NL")
         #rb_looking.pack(anchor="n")
-        self.do_not_know_btn = tk.Button(self.diagram_frame, text="Do Not Know",command=lambda: self.looking_dic_insert(1))
+        label_after_separator1 = tk.Label(self.diagram_frame, text="Looking", font=("Arial", 10, "bold"),bg='lightgrey')
+        label_after_separator1.pack(anchor="n", pady=(5, 2))
+        self.do_not_know_btn = tk.Button(self.diagram_frame, text="Do Not Know",command=lambda: self.looking_dic_insert(1), width=button_width, height=button_height)
         self.do_not_know_btn.pack(anchor="n")
-        self.looking_btn = tk.Button(self.diagram_frame, text="Looking", command=lambda: self.looking_dic_insert(2))
+        self.looking_btn = tk.Button(self.diagram_frame, text="Looking", command=lambda: self.looking_dic_insert(2), width=button_width, height=button_height)
         self.looking_btn.pack(anchor="n")
-        self.not_looking_btn = tk.Button(self.diagram_frame, text="Not Looking", command=lambda: self.looking_dic_insert(3))
+        self.not_looking_btn = tk.Button(self.diagram_frame, text="Not Looking", command=lambda: self.looking_dic_insert(3), width=button_width, height=button_height)
         self.not_looking_btn.pack(anchor="n")
-        
         # Oddělovací prvek pro vizuální rozdělení dvou skupin
         separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
         separator.pack(fill="x", padx=5, pady=5)
         #parametr
+        label_after_separator3 = tk.Label(self.diagram_frame, text="Parameters", font=("Arial", 10, "bold"),bg='lightgrey')
+        label_after_separator3.pack(anchor="n", pady=(5, 2))
         self.par1_btn = tk.Button(self.diagram_frame, text="Parametr 1",
-                                  command=lambda: self.parameter_dic_insert(1))
+                                  command=lambda: self.parameter_dic_insert(1), width=button_width, height=button_height)
         self.par1_btn.pack(anchor="n")
 
         self.par2_btn = tk.Button(self.diagram_frame, text="Parametr 2",
-                                  command=lambda: self.parameter_dic_insert(2))
+                                  command=lambda: self.parameter_dic_insert(2), width=button_width, height=button_height)
         self.par2_btn.pack(anchor="n")
 
         self.par3_btn = tk.Button(self.diagram_frame, text="Parametr 3",
-                                  command=lambda: self.parameter_dic_insert(3))
+                                  command=lambda: self.parameter_dic_insert(3), width=button_width, height=button_height)
         self.par3_btn.pack(anchor="n")
+        separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
+        separator.pack(fill="x", padx=5, pady=5)
+        label_after_separator2 = tk.Label(self.diagram_frame, text="Parameters (Limb-Specific)", font=("Arial", 10, "bold"),bg='lightgrey')
+        label_after_separator2.pack(anchor="n", pady=(5, 2))
+        # New buttons for limb-specific parameters
+        self.limb_par1_btn = tk.Button(self.diagram_frame, text="Limb Parameter 1",
+                                    command=lambda: self.toggle_limb_parameter(1), width=button_width, height=button_height)
+        self.limb_par1_btn.pack(anchor="n")
+
+        self.limb_par2_btn = tk.Button(self.diagram_frame, text="Limb Parameter 2",
+                                    command=lambda: self.toggle_limb_parameter(2), width=button_width, height=button_height)
+        self.limb_par2_btn.pack(anchor="n")
+
+        self.limb_par3_btn = tk.Button(self.diagram_frame, text="Limb Parameter 3",
+                                    command=lambda: self.toggle_limb_parameter(3), width=button_width, height=button_height)
+        self.limb_par3_btn.pack(anchor="n")
+        # Oddělovací prvek pro vizuální rozdělení dvou skupin
+        
 
 
         self.note_entry = tk.Entry(self,width=40)
         self.note_entry.grid(row=2, column=1, padx=5, pady=(5, 60))
-
+        self.note_entry.bind("<FocusIn>", self.disable_arrow_keys)
+        self.note_entry.bind("<FocusOut>", self.enable_arrow_keys)
         # Create a button to save the note
         self.save_note_button = tk.Button(self, text="Save Note", command=self.save_note)
+        
         self.save_note_button.grid(row=2, column=1, padx=(185, 5), pady=5)
         self.select_frame_button = tk.Button(self, text="Select Frame", command=self.select_frame)
         self.select_frame_button.grid(row=2, column=1, padx=(35, 5), pady=5)
@@ -1494,7 +1663,6 @@ class LabelingApp(tk.Tk):
         #self.dot_thread = Thread(target=self.periodic_print_dot_thread)
         #self.dot_thread.daemon = True
         #self.dot_thread.start()
-    
     def select_frame(self):
         frame = self.note_entry.get()
         #print("goto frame:", frame)
@@ -1522,7 +1690,76 @@ class LabelingApp(tk.Tk):
         else:
             print("Error selecting frame: The frame number cannot be selected when a video is not loaded!")
         self.note_entry.delete(0, 'end')
+    def toggle_limb_parameter(self, param_number):
+        """Toggle between ON, OFF, and None for the currently selected limb's parameter."""
+        # Get the currently selected limb
+        limb = self.option_var_1.get()  # RH, LH, RL, LL
 
+        # Select the correct dictionary based on parameter number
+        param_dicts = {
+            1: self.video.limb_parameter1,
+            2: self.video.limb_parameter2,
+            3: self.video.limb_parameter3,
+        }
+        param_buttons = {
+            1: self.limb_par1_btn,
+            2: self.limb_par2_btn,
+            3: self.limb_par3_btn,
+        }
+
+        param_dict = param_dicts[param_number]
+        param_button = param_buttons[param_number]
+
+        # Get the current state
+        frame = self.video.current_frame
+        current_state = param_dict.get((limb, frame), None)
+
+        # Cycle through states: None -> ON -> OFF -> None
+        if current_state is None:
+            new_state = "ON"
+            param_button.config(bg='lightgreen')  # Green for ON
+        elif current_state == "ON":
+            new_state = "OFF"
+            param_button.config(bg='#E57373')  # Red for OFF
+        else:  # "OFF"
+            new_state = None
+            param_button.config(bg='lightgray')  # Default gray
+
+        # Save the new state
+        param_dict[(limb, frame)] = new_state
+        print(f"INFO: {limb} - Parameter {param_number} at Frame {frame} set to {new_state}")
+    
+    def update_limb_parameter_buttons(self):
+        """Update the colors of limb parameter buttons based on current state."""
+        limb = self.option_var_1.get()  # RH, LH, RL, LL
+        if not self.video:
+            return
+        frame = self.video.current_frame
+
+        param_dicts = {
+            1: self.video.limb_parameter1,
+            2: self.video.limb_parameter2,
+            3: self.video.limb_parameter3,
+        }
+        param_buttons = {
+            1: self.limb_par1_btn,
+            2: self.limb_par2_btn,
+            3: self.limb_par3_btn,
+        }
+
+        for param_num in range(1, 4):
+            param_dict = param_dicts[param_num]
+            param_button = param_buttons[param_num]
+
+            current_state = param_dict.get((limb, frame), None)
+
+            if current_state == "ON":
+                param_button.config(bg='lightgreen')
+            elif current_state == "OFF":
+                param_button.config(bg='#E57373')
+            else:
+                param_button.config(bg='lightgray')
+    
     def save_parameter_to_csv(self, parameter_number):
         """Save the data from the parameter dictionary to a CSV file."""
 
@@ -1562,68 +1799,108 @@ class LabelingApp(tk.Tk):
         else:
             print(f"Parameter {parameter_number} data or CSV path not found.")
 
-    import csv
-    import os
+    def save_limb_parameters(self):
+        """Save limb parameters to a CSV file in the data folder."""
+        if not self.video:
+            return
 
-    import csv
-    import os
+        # Use the correct path for the data folder
+        data_folder = os.path.dirname(self.video.dataRH_path_to_csv)
+        csv_path = os.path.join(data_folder, f"{self.video_name}_limb_parameters.csv")
 
+        limb_params = {
+            "Parameter_1": self.video.limb_parameter1,
+            "Parameter_2": self.video.limb_parameter2,
+            "Parameter_3": self.video.limb_parameter3,
+        }
+
+        with open(csv_path, 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Limb", "Frame", "Parameter", "State"])  # Header
+
+            for param_name, param_dict in limb_params.items():
+                for (limb, frame), state in param_dict.items():
+                    writer.writerow([limb, frame, param_name, state])
+
+        print(f"INFO: Limb parameters saved to {csv_path}")
+        
     def save_note(self):
-        """Save the current frame and note to a CSV file in the same directory as the previous logic."""
-
-        # Current frame as the key
+        """Save or update the note for the current frame in the notes CSV."""
         print("INFO: Saving note...")
-        current_frame = self.video.current_frame
+        self.enable_arrow_keys()
+        current_frame = self.video.current_frame  # Get the current frame number
+        note_text = self.note_entry.get()  # Get text from the entry field
 
-        # Retrieve the note from the entry widget
-        note_text = self.note_entry.get()
+        # Update or delete the note in memory
+        if note_text.strip():  # If note is not empty, update it
+            self.video.notes[current_frame] = note_text
+        elif current_frame in self.video.notes:  # If empty, remove it from memory
+            del self.video.notes[current_frame]
 
-        # Save the text entry content to the notes dictionary
-        if not hasattr(self.video, 'notes'):
-            self.video.notes = {}  # Initialize the notes dictionary if it doesn't exist
-        self.video.notes[current_frame] = note_text
+        # Define the notes file path
+        notes_path = self.video.dataNotes_path_to_csv
+        if not notes_path:
+            print("ERROR: Notes CSV path is not set.")
+            return
 
-        # Optionally clear the entry after saving
-        self.note_entry.delete(0, 'end')
-
-        # Determine the directory from dataRH (assuming it contains a path, adjust if it's stored differently)
-        if hasattr(self.video, 'dataRH_path_to_csv'):  # Assume this is where the path is stored
-            notes_dir = os.path.dirname(self.video.dataRH_path_to_csv)
-        else:
-            notes_dir = os.getcwd()  # Default to current working directory if no path is specified
-
-        # Ensure the directory exists (optional, depends on setup)
-        if not os.path.exists(notes_dir):
-            os.makedirs(notes_dir)
-
-        # Get the video file name without the extension
-        video_name = os.path.splitext(os.path.basename(self.video.video_path))[0]
-
-        # Construct the full path for the notes.csv file, including the video name
-        notes_file_path = os.path.join(notes_dir, f"{video_name}_notes.csv")
-
-        self.video.dataNotes_path_to_csv =  notes_file_path
-        print("Notes path:",self.video.dataNotes_path_to_csv)
-        file_exists = os.path.isfile(notes_file_path)
-
-        # Write or append the note to the CSV file
-        with open(notes_file_path, mode='a', newline='') as csv_file:
+        # Overwrite the CSV with updated notes
+        with open(notes_path, mode='w', newline='') as csv_file:
             writer = csv.writer(csv_file)
+            writer.writerow(['Frame', 'Note'])  # Write header
 
-            # If the file is new, write the header
-            if not file_exists:
-                writer.writerow(['Frame', 'Note'])
+            # Write all notes from memory (sorted by frame)
+            for frame, note in sorted(self.video.notes.items()):
+                writer.writerow([frame, note])
 
-            # Write the current frame and note
-            writer.writerow([current_frame, note_text])
+        print(f"INFO: Note saved for frame {current_frame}: {note_text}")
+        keyboard.press_and_release('tab')
+    def ask_labeling_mode(self):
+        """Popup with buttons for selecting labeling mode."""
+        mode_window = tk.Toplevel(self)
+        mode_window.title("Select Labeling Mode")
+        mode_window.geometry("300x150")
+        mode_window.grab_set()  # Make this window modal
 
-        print(f"INFO: Note saved to {notes_file_path}")
+        label = tk.Label(mode_window, text="Choose the labeling mode:", font=("Arial", 12))
+        label.pack(pady=10)
 
-    #loading and saving
+        def set_mode(mode):
+            """Store the mode, update the existing label, and close the window."""
+            self.labeling_mode = mode
+            if mode == 'Reliability':
+                bg = 'yellow'
+            else:
+                bg = 'lightgreen'
+            self.mode_label.config(text=f"Mode: {mode}",bg=bg)  # Update the existing label
+            mode_window.destroy()
+
+        # Create buttons for selection
+        normal_button = tk.Button(mode_window, text="Normal", command=lambda: set_mode("Normal"), width=15)
+        normal_button.pack(pady=5)
+
+        reliability_button = tk.Button(mode_window, text="Reliability", command=lambda: set_mode("Reliability"), width=15)
+        reliability_button.pack(pady=5)
+
+        mode_window.wait_window()  # Wait for the user to make a selection
+    
     def load_video(self):
         if self.video is not None:
             print("INFO: Saving before loading new video.")
             self.save_data() 
+
+        if self.video is not None:
+            print("INFO: Saving before loading new video.")
+            self.save_data()
+
+        self.ask_labeling_mode()
+
+        if not hasattr(self, 'labeling_mode'):
+            print("INFO: No mode selected, cancelling video load.")
+            return  # User closed the selection window without choosinge
+
+
+
+
         video_path = filedialog.askopenfilename(
             title="Select Video File",
             filetypes=(
@@ -1645,6 +1922,8 @@ class LabelingApp(tk.Tk):
         #self.min_touch_lenght = round(self.min_touch_lenght, 1)
         self.min_touch_lenght_label.config(text=f"Minimal Touch Length: {min_lenght_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
+        if self.labeling_mode == "Reliability":
+            video_name = video_name+"_reliability"
         self.video_name = video_name
         base_dir = os.path.join("Labeled_data", video_name)
         os.makedirs(base_dir, exist_ok=True)
@@ -1652,9 +1931,12 @@ class LabelingApp(tk.Tk):
         data_dir = os.path.join(base_dir, "data")
         frames_dir = os.path.join(base_dir, "frames")
         plots_dir = os.path.join(base_dir, "plots")
+        export_dir = os.path.join(base_dir, "export")
+
         os.makedirs(data_dir, exist_ok=True)
         os.makedirs(frames_dir, exist_ok=True)
         os.makedirs(plots_dir, exist_ok=True)
+        os.makedirs(export_dir, exist_ok=True)
 
         self.video.frames_dir = frames_dir
 
@@ -1685,7 +1967,7 @@ class LabelingApp(tk.Tk):
         for i in range(3):
             self.load_parameter_from_csv(i+1)
         # Check and handle frame discrepancies
-        self.load_paramter_name()
+        self.load_parameter_name()
         if not self.check_items_count(frames_dir, self.video.total_frames):
             print("ERROR: Number of frames is different, creating new frames")
             self.create_frames(video_path, frames_dir)
@@ -1704,35 +1986,109 @@ class LabelingApp(tk.Tk):
             print("INFO: Thread is already running.")
         self.save_note()
         print("INFO: Welcome back! I wish you happy labeling session! :)")
+         # Initialize empty notes dictionary
+        self.video.notes = {}
 
+        # Load notes from CSV
+        # Ensure notes_path is set correctly
+        self.video.dataNotes_path_to_csv = os.path.join(data_dir, f"{video_name}_notes.csv")
+
+        notes_path = self.video.dataNotes_path_to_csv
+        if os.path.exists(notes_path):
+            with open(notes_path, mode='r', newline='') as csv_file:
+                reader = csv.reader(csv_file)
+                next(reader)  # Skip header row
+                for row in reader:
+                    if len(row) == 2:  # Ensure valid row format
+                        frame = int(row[0])
+                        note = row[1]
+                        self.video.notes[frame] = note  # Store notes by frame
+            print("INFO: Notes loaded successfully.")
+
+        # Ensure UI updates when video loads
+        self.update_note_entry()
+        #print("notes: ",self.video.notes)
+        self.load_limb_parameters()
+        # Check if clothes file exists and has data
+        self.video.clothes_file_path = os.path.join(data_dir, f"{video_name}_clothes.txt")
+        if self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
+            with open(self.video.clothes_file_path, 'r') as file:
+                clothes_data = file.readlines()
+            
+            if len(clothes_data) > 1:  # More than just the header
+                self.cloth_btn.config(bg="lightgreen")  # Change color to indicate data is present
+            else:
+                pass
+                #self.cloth_btn.config(bg="red")  # Change color if file is empty
+        else:
+            pass
+            #self.cloth_btn.config(bg="yellow")  # Default color if file does not exist
+        self.load_video_btn.config(state=tk.DISABLED, bg="gray",fg='lightgray')
+
+    def update_note_entry(self):
+        """Update the note entry field based on the current frame."""
+        current_frame = self.video.current_frame
+
+        # Retrieve the note for the current frame
+        note_text = self.video.notes.get(current_frame, "")  # Default to empty if no note
+
+        # Update the text entry in the GUI
+        self.note_entry.delete(0, tk.END)  # Clear existing text
+        self.note_entry.insert(0, note_text)  # Insert the new note
+
+        #print(f"INFO: Displaying note for frame {current_frame}: {note_text}")
+    
     def create_frames(self, video_path, frames_dir):
-        print("INFO: Creating frames...")
+        print("INFO: Checking if frames need to be created...")
 
-        # Open the video capture
+        # If in "Reliability" mode, check for an existing normal frames directory
+        if self.labeling_mode == "Reliability":
+            original_video_name = self.video_name.replace("_reliability", "")  # Remove "_reliability"
+            original_frames_dir = os.path.join("Labeled_data", original_video_name, "frames")
+
+            if os.path.exists(original_frames_dir):  # Check if original frames exist
+                print(f"INFO: Found existing frames at {original_frames_dir}. Copying instead of generating...")
+
+                # Ensure the target frames directory exists
+                os.makedirs(frames_dir, exist_ok=True)
+
+                frame_files = os.listdir(original_frames_dir)  # Get list of frame files
+                total_files = len(frame_files)  # Get total frame count
+
+                for index, filename in enumerate(frame_files):
+                    src_path = os.path.join(original_frames_dir, filename)
+                    dst_path = os.path.join(frames_dir, filename)
+                    shutil.copy2(src_path, dst_path)  # Preserve metadata while copying
+
+                    # Calculate and display progress
+                    progress = ((index + 1) / total_files) * 100
+                    sys.stdout.write(f"\rCopying frames... {progress:.2f}%")
+                    sys.stdout.flush()
+
+                print("\nINFO: Frames copied successfully.")
+                return  # Exit function early since frames are copied
+
+        # If not in "Reliability" mode or no existing frames found, generate new frames
+        print("INFO: Creating frames from video...")
         vidcap = cv2.VideoCapture(video_path)
 
-        # Get total frame count (optional but helpful for progress calculation)
         total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
-
         success, image = vidcap.read()
         count = 0
 
-        # Loop through video frames
         while success:
             frame_path = os.path.join(frames_dir, f"frame{count}.jpg")
             cv2.imwrite(frame_path, image)  # Save frame as JPEG file
             success, image = vidcap.read()
             count += 1
 
-            # Calculate progress percentage
+            # Display progress
             progress = (count / total_frames) * 100
-
-            # Print progress on the same line using carriage return
-            sys.stdout.write(f"\rProgress: {progress:.2f}%")
+            sys.stdout.write(f"\rGenerating frames... {progress:.2f}%")
             sys.stdout.flush()
 
-        print("\nINFO: Frames have been created successfully")
-    
+        print("\nINFO: Frames have been created successfully.")
+        
     def check_items_count(self,folder_path, expected_count):
         
         # Získání seznamu všech položek (souborů a složek) ve složce
@@ -1756,22 +2112,23 @@ class LabelingApp(tk.Tk):
                 xs = [int(x) for x in row['X'].split(',')] if row['X'] else []
                 ys = [int(y) for y in row['Y'].split(',')] if row['Y'] else []
                 onset = row.get('Onset', '')
-                
                 bodypart = row.get('Bodypart', '')
-                if bodypart == None:
-                    pass
-                else:
-                    zones = row.get('Zones', '')
-                    look = row.get('Look', '')
-                    xy = list(zip(xs, ys))
-                    data[frame] = {
-                        'xy': xy,
-                        'Onset': onset,
-                        'Bodypart': bodypart,
-                        'Look': look,
-                        'Zone': zones
-                    }
-        #print("Loaded from CSV:",data)
+                look = row.get('Look', '')
+
+                # Ensure 'Zone' is always stored as a proper list
+                try:
+                    zones = json.loads(row['Zones']) if row['Zones'] else []
+                except json.JSONDecodeError:
+                    zones = [row['Zones']] if row['Zones'] else []  # Fallback if not JSON formatted
+
+                xy = list(zip(xs, ys))
+                data[frame] = {
+                    'xy': xy,
+                    'Onset': onset,
+                    'Bodypart': bodypart,
+                    'Look': look,
+                    'Zone': zones  # This is now guaranteed to be a list
+                }
         return data
     
     def save_looking_new(self):
@@ -1849,13 +2206,13 @@ class LabelingApp(tk.Tk):
                             writer.writerow([frame])
 
         print("INFO: Saving new looking completed successfully.")
-    # Process and save data for each data set
+    
     def save_data(self):
         print("INFO: Saving...")
         def save_dataset(csv_path, data, touch_data=None):
             if not csv_path:
                 print("ERROR: CSV path is None")
-                return  # Optionally, handle the error more robustly here
+                return  
 
             with open(csv_path, mode='w', newline='') as file:
                 writer = csv.writer(file)
@@ -1863,27 +2220,28 @@ class LabelingApp(tk.Tk):
 
                 for frame in range(self.video.total_frames + 1):
                     details = data.get(frame, {})
-                    xs, ys = zip(*details.get('xy', [])) if 'xy' in details else ([], [])
+                    xy_data = details.get('xy', [])
+
+                    # Ensure xy_data is a list of tuples before unpacking
+                    if isinstance(xy_data, list) and all(isinstance(coord, tuple) and len(coord) == 2 for coord in xy_data) and xy_data:
+                        xs, ys = zip(*xy_data)
+                    else:
+                        xs, ys = [], []  # Default to empty lists if no valid data
+
                     x_str = ','.join(map(str, xs))
                     y_str = ','.join(map(str, ys))
                     onset = details.get('Onset', '')
                     bodypart = details.get('Bodypart', '')
                     look = details.get('Look', '')
-                    zones = details.get('Zone','')
                     
+                    # Ensure 'Zone' is stored properly as JSON string
+                    zones = json.dumps(details.get('Zone', []))  # Convert list to a JSON string
                     
-                    #zone_results = [self.find_image_with_white_pixel(x, y) for x, y in zip(xs, ys)]
-                    #zones = ', '.join([result[0] for result in zone_results if result])
-
                     touch = ''
                     if touch_data and onset:
                         touch = 1 if onset == "On" else 0
 
-                    if xs or ys or onset or bodypart or look:
-                        writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones, touch])
-                    else:
-                        writer.writerow([frame])  # Write frame number if no data is available.
-
+                    writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones, touch])
         # Process and save data for each data set
         save_dataset(self.video.dataRH_path_to_csv, self.video.dataRH)
         save_dataset(self.video.dataLH_path_to_csv, self.video.dataLH)
@@ -1893,7 +2251,8 @@ class LabelingApp(tk.Tk):
         for i in range(3):
             self.save_parameter_to_csv(i+1)
         print("INFO: Saved")
-
+        self.save_limb_parameters()
+        self.export()
 
     def on_close(self):
         if messagebox.askokcancel("Close Aplication", "Do you want to close the aplication?"):
@@ -1948,7 +2307,38 @@ class LabelingApp(tk.Tk):
                 print(f"CSV file for parameter {parameter_number} not found: {csv_path}")
         else:
             print(f"Parameter {parameter_number} data or CSV path not found.")
+
+    def load_limb_parameters(self):
+        """Load limb parameters from a CSV file in the data folder."""
+        if not self.video:
+            return
+
+        data_folder = os.path.dirname(self.video.dataRH_path_to_csv)
+        csv_path = os.path.join(data_folder, f"{self.video_name}_limb_parameters.csv")
+
+        if not os.path.exists(csv_path):
+            print("INFO: No saved limb parameters found in data folder.")
+            return
+
+        with open(csv_path, 'r', newline='') as file:
+            reader = csv.reader(file)
+            next(reader)  # Skip header
+
+            for row in reader:
+                limb, frame, param_name, state = row
+                frame = int(frame)
+
+                if param_name == "Parameter_1":
+                    self.video.limb_parameter1[(limb, frame)] = state
+                elif param_name == "Parameter_2":
+                    self.video.limb_parameter2[(limb, frame)] = state
+                elif param_name == "Parameter_3":
+                    self.video.limb_parameter3[(limb, frame)] = state
+
+        print("INFO: Limb parameters loaded successfully from data folder.")
+
 if __name__ == "__main__":
+    print("Labeling App starting...")
     app = LabelingApp()
     app.mainloop()
 

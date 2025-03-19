@@ -268,14 +268,9 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
 
         
 
-        def create_touch_transition_matrix(data_dict):
+        def create_touch_transition_matrix(data_dict, zones):
             # Define all possible zones
-            zones = [
-                '1L', '2L', '3L', '4L', '5L', '6L', '7L', '8L', '9L', '10L', '11L',
-                '13L', '16L', '17L', '13LB', '17LB',
-                '1R', '2R', '3R', '4R', '5R', '6R', '7R', '8R', '9R', '10R', '11R',
-                '13R', '16R', '17R', '13RB', '17RB','BOX1','BOX2','BOX3','BOX4','NN'
-            ]
+            
             
             # Initialize a transition matrix with all zones set to 0
             transition_matrix = pd.DataFrame(0, index=zones, columns=zones)
@@ -305,10 +300,15 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
                     if debug:print("Encountered 'Off' without an ongoing touch. Skipping.")
 
             return transition_matrix
-
+        zones = [
+                '1L', '2L', '3L', '4L', '5L', '6L', '7L', '8L', '9L', '10L', '11L',
+                '13L', '16L', '17L', '13LB', '17LB',
+                '1R', '2R', '3R', '4R', '5R', '6R', '7R', '8R', '9R', '10R', '11R',
+                '13R', '16R', '17R', '13RB', '17RB','BOX1','BOX2','BOX3','BOX4','BOX5','BOX6','LINE','OUTSIDE','NN', 
+            ]
         # Example usage:
         # Assuming you have already loaded the data into `data_dict` using the previous function
-        transition_df = create_touch_transition_matrix(data_dict)
+        transition_df = create_touch_transition_matrix(data_dict,zones=zones)
 
         # Display the transition matrix
         #print(transition_df)
@@ -333,8 +333,10 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
         fig = px.imshow(
             transition_df,
             labels=dict(x="End Zone", y="Start Zone", color="Number of Touches"),
-            x=transition_df.columns,
-            y=transition_df.index,
+            #x=transition_df.columns,
+            #y=transition_df.index,
+            x=zones,
+            y=zones,
             color_continuous_scale='Blues',
             aspect="auto"  # or "equal"
         )
@@ -344,12 +346,20 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
             hovertemplate='Start Zone: %{y}<br>End Zone: %{x}<br>Number of Touches: %{z}<extra></extra>'
         )
 
-        # Update the layout for better visuals
         fig.update_layout(
             title=f"Touch Transition Heatmap {limbs[i]}",
             xaxis_title="End Zone",
             yaxis_title="Start Zone",
-            coloraxis_colorbar=dict(title="Number of Touches")
+            coloraxis_colorbar=dict(title="Number of Touches"),
+            height=1000,  # Increase height for better readability
+            margin=dict(l=50, r=50, t=50, b=150)  # Adjust margins
+        )
+
+        fig.update_yaxes(
+            tickmode="array",
+            tickvals=list(range(len(zones))),  # Ensure all labels are shown
+            ticktext=zones,  # Show all zone names
+            automargin=True  # Allow automatic spacing
         )
 
         fig.write_html(output_folder + f"/heatmap_{limbs[i]}.html")
@@ -357,19 +367,19 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
 
 
     
-    def plot_touch_visualization_all_4(data_dicts, image_paths):
+    def plot_touch_visualization_all_4(data_dicts, image_paths, output_folder):
         # Create subplots with 4 columns
         fig = make_subplots(rows=1, cols=4, subplot_titles=("Left Hand", "Right Hand", "Left Leg", "Right Leg"),
                             horizontal_spacing=0.02)  # Adjust spacing as needed
+
+        # Load the first image to get its dimensions (assuming all images are the same size)
+        img = Image.open(image_paths[0])
+        img_width, img_height = img.size
 
         # Iterate over each dictionary and image path to create individual plots
         for i in range(4):
             data_dict = data_dicts[i]
             image_path = image_paths[i]
-
-            # Load the image to get its dimensions
-            img = Image.open(image_path)
-            img_width, img_height = img.size
 
             # Encode the image in base64
             with open(image_path, "rb") as image_file:
@@ -437,19 +447,19 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
                         ongoing_touch = False
                         texts = []  # Clear texts after ending a touch
 
-            # Add the background image to each subplot
+            # Add the background image **CENTERED** for each subplot
             fig.add_layout_image(
                 dict(
                     source=f'data:image/png;base64,{encoded_image}',
                     xref="x",
                     yref="y",
-                    x=0,
-                    y=img_height,  # The y position is set to the height of the image for top-left origin
-                    xanchor="left",
-                    yanchor="bottom",  # This ensures that the y-axis starts from the top
-                    sizex=img_width,  # Use image width for correct scaling
-                    sizey=img_height,  # Use image height for correct scaling
-                    sizing="stretch",
+                    x=img_width / 2,  # Center horizontally
+                    y=img_height / 2,  # Center vertically
+                    xanchor="center",
+                    yanchor="middle",
+                    sizex=img_width,  # Keep original width
+                    sizey=img_height,  # Keep original height
+                    sizing="contain",
                     opacity=1,
                     layer="below"
                 ),
@@ -457,24 +467,35 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
                 col=i+1
             )
 
-            # Update layout for the specific subplot
-            fig.update_xaxes(visible=False, range=[0, img_width], row=1, col=i+1)
-            fig.update_yaxes(visible=False, range=[0, img_height], row=1, col=i+1, scaleanchor="x", scaleratio=1)
+            # Update layout for the specific subplot with **fixed axes**
+            fig.update_xaxes(
+                visible=False,
+                range=[0, img_width],  # Set fixed width based on image size
+                row=1, col=i+1
+            )
+            fig.update_yaxes(
+                visible=False,
+                range=[0, img_height],  # Set fixed height based on image size
+                scaleanchor="x",  # Keep aspect ratio locked
+                scaleratio=1,
+                row=1, col=i+1
+            )
 
         # Set overall layout properties
         fig.update_layout(
-            height=img_height + 100,  # Adjust the height slightly if needed
+            autosize=False,
+            height=img_height + 150,  # Adjust the height slightly if needed
             width=img_width * 4,  # Adjust width to accommodate four subplots side by side
             showlegend=False,
-            margin=dict(l=0, r=0, t=50, b=40),  # Increase bottom margin and reduce top margin to move plots higher
+            margin=dict(l=0, r=0, t=50, b=50),  # Increase bottom margin and reduce top margin
         )
 
-        # Invert the y-axis to match image coordinate system (top-left origin)
+        # **Invert the y-axis** to match image coordinate system (top-left origin)
         fig.update_yaxes(autorange="reversed")
 
-        # Show the plot
+        # Save and display the plot
         fig.write_html(output_folder + "/touch_trajectory.html")
-        #fig.show()
+        # fig.show()
 
 
 
@@ -656,7 +677,7 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
 
     
 
-    plot_touch_visualization_all_4(data_dicts, image_paths)
+    plot_touch_visualization_all_4(data_dicts, image_paths,output_folder=output_folder)
 
     
 
@@ -782,36 +803,40 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{name}</title>
+        <style>
+            body {{
+                text-align: center;
+                font-family: Arial, sans-serif;
+            }}
+            iframe {{
+                width: 90%;  /* Set width to 90% of the screen */
+                border: none;
+                display: block;
+                margin: 0 auto;  /* Center the iframes */
+            }}
+            h2 {{
+                text-align: center;
+            }}
+        </style>
     </head>
     <body>
         <h1>{name}</h1>
     """
 
-    for i, graph in enumerate(graphs, start=1):
-        height = 800 if i == 1 else 400  # Double the height for the first graph
+    for graph in graphs:
+        height = "1200px" if "touch_trajectory" in graph else "800px"  # Larger for trajectory visualization
         html_content += f"""
-        
-        <h2>{graphs[i-1]}</h2>
-        <iframe src="{graph}" width="100%" height="{height}"></iframe>
+        <h2>{graph}</h2>
+        <iframe src="{graph}" style="height: {height};"></iframe>
         """
 
     html_content += """
     </body>
     </html>
     """
-    
 
-    # Define the folder where you want to save the master HTML file
-    output_folder = output_folder  # Replace with your desired folder path
-
-    # Ensure the folder exists
-    os.makedirs(output_folder, exist_ok=True)
-
-    # Define the file name
-
+    # Save the updated master HTML file
     file_path = os.path.join(output_folder, f"master_{name}.html")
-
-    # Save the combined HTML file into the specified folder
     with open(file_path, "w") as f:
         f.write(html_content)
 

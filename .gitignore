@@ -17,15 +17,17 @@ flagged/
 # Include the Videos folder and its contents
 !Videos/
 !Videos/cat3_mp4.mp4
-
+Videos/videoplayback.mp4
 # Include the Labeled_data folder and its contents
 !Labeled_data/
 !Labeled_data/cat3_mp4/
+Labeled_data/videoplayback/
+
 
 # Ignore config and environment files
 
 *.env
-
+*.exe
 # Ignore log files
 *.log
 
