@@ -1,3 +1,4 @@
 LabelingApplication4_1_new_template.exe filter=lfs diff=lfs merge=lfs -text
 LabelingApplication4_1.exe filter=lfs diff=lfs merge=lfs -text
+LabelingApplication5_3.exe filter=lfs diff=lfs merge=lfs -text
 *.exe filter=lfs diff=lfs merge=lfs -text
