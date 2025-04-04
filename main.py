@@ -1,4 +1,3 @@
-
 import cv2
 import os
 import csv
@@ -22,15 +21,13 @@ with open('config.json', 'r') as file:
 
 #new tasks---------------------------------------------------------------------------------------
 #TODOO
-#test if export works
-#update readme
-#create new .exe
-#push to github
+# Change looking to Limb Specific Parameter
 
 #code review (after Json agrees)
 
 
 #Minor things---------------------
+# change colot of limb parameter buttons when not selected
 #in export zone [] and """" problem
 #bigger entry for notes?
 #typo in loading parameter names
@@ -45,33 +42,6 @@ with open('config.json', 'r') as file:
 #when 
 
 #DONE---------------------------
-#arrow problem
-#note entry problem
-#turn of clothes button
-#displa time in export
-#display time on top
-#d to delete dost
-#when buffer loads it should automatilcy show user not stay in red
-#2 more squers BOX5, BOX6
-#loading (fix or remove button)
-#bug parent export
-#notes opening in the gui
-#newtamplate boxes
-#4h video problem
-#click on the line 
-#color scheme
-#buffer
-#new parameter like looking (small title)
-#-add to export
-#-add param names to export
-#-add custom name to config
-#remove export and put it into save
-#reliability
-#play button jumping timeline
-
-
-
-
 
 class ClothApp:
     
@@ -136,16 +106,7 @@ class Video:
         self.dataRL_path_to_csv = None
         self.dataLL = {}
         self.dataLL_path_to_csv = None
-        self.datalooking_path_to_csv = None
-        self.datalooking = {}
-        self.datalookingRH = {}
-        self.datalookingLH = {}
-        self.datalookingRL = {}
-        self.datalookingLL = {}
-        self.datalookingRH_path_to_csv = None
-        self.datalookingLH_path_to_csv = None
-        self.datalookingRL_path_to_csv = None
-        self.datalookingLL_path_to_csv = None
+        
         self.is_touchRH = False
         self.is_touchLH = False
         self.is_touchRL = False
@@ -158,7 +119,7 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 5.3
+        self.program_version = 5.4
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
@@ -421,9 +382,9 @@ class LabelingApp(tk.Tk):
             self.video.parameter3_name = parameter3
             
 
-            self.par1_btn.config(text=f"{parameter1}")
-            self.par2_btn.config(text=f"{parameter2}")
-            self.par3_btn.config(text=f"{parameter3}")
+            self.par1_btn.config(text=f"{parameter1}",bg='lightgrey')
+            self.par2_btn.config(text=f"{parameter2}",bg='lightgrey')
+            self.par3_btn.config(text=f"{parameter3}",bg='lightgrey')
 
                 # Load limb-specific parameters
             self.video.limb_parameter1_name = config.get('limb_parameter1', 'Limb Parameter 1')
@@ -431,9 +392,9 @@ class LabelingApp(tk.Tk):
             self.video.limb_parameter3_name = config.get('limb_parameter3', 'Limb Parameter 3')
 
             
-            self.limb_par1_btn.config(text=f"{self.video.limb_parameter1_name}")
-            self.limb_par2_btn.config(text=f"{self.video.limb_parameter2_name}")
-            self.limb_par3_btn.config(text=f"{self.video.limb_parameter3_name}")
+            self.limb_par1_btn.config(text=f"{self.video.limb_parameter1_name}",bg='lightgrey')
+            self.limb_par2_btn.config(text=f"{self.video.limb_parameter2_name}",bg='lightgrey')
+            self.limb_par3_btn.config(text=f"{self.video.limb_parameter3_name}",bg='lightgrey')
 
     def load_config(self):
         with open('config.json', 'r') as file:
@@ -613,7 +574,7 @@ class LabelingApp(tk.Tk):
         # Nejprve odstranit všechny předchozí body z plátna
         self.diagram_canvas.delete("all")  # Odstraní vše z plátna, můžete chtít odstranit jen specifické body
         self.on_radio_click()
-        self.color_looking()
+        #self.color_looking()
         dot_size = 5
         #self.draw_eyes()
         if self.diagram_size == "large":
@@ -660,7 +621,7 @@ class LabelingApp(tk.Tk):
         while True:
             self.diagram_canvas.delete("all")  # Odstraní vše z plátna, můžete chtít odstranit jen specifické body
             self.on_radio_click()
-            self.color_looking()
+            #self.color_looking()
             dot_size = 5
             #self.draw_eyes()
             if self.diagram_size == "large":
@@ -698,23 +659,6 @@ class LabelingApp(tk.Tk):
 
             # Periodicky volat tuto funkci
             time.sleep(0.5)
-    
-    def draw_eyes(self):
-        #print("drawing eyes")
-        x1 = 152/2
-        y1 = 129/2
-        x2 = 215/2
-        y2 = 129/2
-        dot_size = 5  # Velikost bodu můžete upravit podle potřeby
-    # Vytvořit "dot" jako malý kruh (oval) na souřadnicích x, y
-        if self.option_var_2.get() == 'L':
-            color = self.color_during
-        elif self.option_var_2.get() == 'NL':
-            color = 'black'
-        elif self.option_var_2.get() == 'DNK':
-            color = 'grey'
-        self.diagram_canvas.create_oval(x1 - dot_size, y1 - dot_size, x1 + dot_size, y1 + dot_size, fill=color)
-        self.diagram_canvas.create_oval(x2 - dot_size, y2 - dot_size, x2 + dot_size, y2 + dot_size, fill=color)
     
     def find_image_with_white_pixel(self, x, y):
         # List to hold the names of the images where the pixel is white
@@ -840,18 +784,7 @@ class LabelingApp(tk.Tk):
                 elif state == "OFF":
                     result = "red"
 
-        # Check looking data for the current limb.
-        looking_attr = f"datalooking{current_limb}"
-        if hasattr(self.video, looking_attr):
-            looking_data = getattr(self.video, looking_attr)
-            if frame in looking_data:
-                look_state = looking_data[frame].get("Look")
-                # For example, if "L" means looking (active) and "NL" means not looking (inactive).
-                if look_state == "L":
-                    return "green"
-                elif look_state == "NL":
-                    result = "red"
-
+        
         return result
 
     def draw_timeline(self):
@@ -919,6 +852,7 @@ class LabelingApp(tk.Tk):
                     self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
                 elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
                     self.video.touch_to_next_zone.append(color == self.color_during)
+    
     def update_frame_counter(self):
         if self.video:
             current_frame_text = f"{self.video.current_frame} / {self.video.total_frames}"
@@ -1052,36 +986,6 @@ class LabelingApp(tk.Tk):
         #if self.option_var_2.get() == "L" or self.option_var_2.get() == "NL":
             #self.save_looking()
         
-    def color_looking(self):
-        if self.video is not None:
-            # Reset button colors
-            self.do_not_know_btn.config(bg='lightgray')
-            self.not_looking_btn.config(bg='lightgray')
-            self.looking_btn.config(bg='lightgray')
-
-            # Get the dictionary based on self.option_var_1.get()
-            option_var = self.option_var_1.get()  # This gets "RH", "LH", "RL", or "LL"
-            attribute_name = f"datalooking{option_var}"  # Create the attribute name
-
-            # Check if the attribute exists in self.video
-            if hasattr(self.video, attribute_name):
-                data_dict = getattr(self.video, attribute_name)
-
-                # Now, use this dictionary for timeline coloring
-                if self.video.current_frame in data_dict:
-                    details = data_dict.get(self.video.current_frame, {})
-                    
-                    look = details.get('Look', '')
-                    if look == "DNK":
-                        self.do_not_know_btn.config(bg='lightgreen')
-                    elif look == "L":
-                        self.looking_btn.config(bg='lightgreen')
-                    elif look == "NL":
-                        self.not_looking_btn.config(bg='lightgreen')
-
-
-            self.update_button_colors()
-
     def update_button_colors(self):
         """Periodically update button colors based on the current state in the dictionaries."""
 
@@ -1116,6 +1020,8 @@ class LabelingApp(tk.Tk):
                 parameter_buttons[param_num].config(bg='lightgreen')  # Button is ON
             elif current_state == "OFF":
                 parameter_buttons[param_num].config(bg='#E57373')  # Button is OFF
+            else:
+                parameter_buttons[param_num].config(bg='lightgrey')
 
         # Optionally, you can schedule this function to be called periodically
         # Example: self.root.after(1000, self.update_button_colors)
@@ -1157,80 +1063,13 @@ class LabelingApp(tk.Tk):
             parameter_buttons[parameter].config(bg='#E57373')  # Change button color to red
         elif current_state == "OFF":
             new_state = None
-            parameter_buttons[parameter].config(bg='grey')  # Change button color to grey
+            parameter_buttons[parameter].config(bg='lightgrey')  # Change button color to grey
 
         # Update the dictionary with the new state
         current_dict[key] = new_state
 
         # For debugging or tracking, you can print the updated dictionary
         print("Dictionary",parameter,current_dict)
-    
-    def looking_dic_insert(self,parameter):
-        
-        if parameter == 1:
-            looking_data = "DNK"
-        if parameter == 2:
-            looking_data ="L"
-        if parameter == 3:
-            looking_data ="NL"
-        # Current frame as the key
-        if self.video is not None:
-            
-            self.video.datalooking[self.video.current_frame] = {
-                'xy': [],
-                'Onset': '',
-                'Bodypart': '',
-                'Look': looking_data,
-                'Zone':''
-            }
-        
-        #new version of looking-------------
-        if self.video is not None:
-            # Construct the attribute name dynamically based on self.option_var_1.get()
-            option_var = self.option_var_1.get()  # This gets "RH", "LH", "RL", or "LL"
-            attribute_name = f"datalooking{option_var}"  # Create the attribute name
-
-            # Check if the attribute exists in self.video
-            if hasattr(self.video, attribute_name):
-                data_dict = getattr(self.video, attribute_name)
-
-                # Insert the data into the correct dictionary
-                data_dict[self.video.current_frame] = {
-                    'xy': [],
-                    'Onset': '',
-                    'Bodypart': '',
-                    'Look': looking_data,
-                    'Zone': ''
-                }
-            else:
-                print(f"Attribute {attribute_name} does not exist in self.video.")
-            
-    def get_looking_data_for_frame(self, frame_number):
-        """
-        Retrieves the looking data for a specific frame from a text file.
-        
-        :param frame_number: The frame number to retrieve data for.
-        :param file_path: Path to the text file containing the data.
-        :return: The looking data for the specified frame or None if not found.
-        """
-        file_path = self.notes_file_path
-        if file_path != None:
-                
-            try:
-                with open(file_path, 'r') as file:
-                    for line in file:
-                        if line.startswith(f"Frame {frame_number}:"):
-                            # Extract the looking data after the frame identifier
-                            return line.strip().split("Frame {frame_number}:")
-            except FileNotFoundError:
-                print("ERROR: File not found")
-                return None
-            except Exception as e:
-                print(f"ERROR: An error occurred: {e}")
-                return None
-
-            # If no matching frame is found
-            return None
     
     def init_controls(self):
         # Initialize control buttons here, using grid layout
@@ -1350,11 +1189,6 @@ class LabelingApp(tk.Tk):
                         .merge(rh_df, on="Frame", how="outer") \
                         .merge(rl_df, on="Frame", how="outer")
         
-        # Load and merge looking data
-        for limb in ['LH', 'LL', 'RH', 'RL']:
-            looking_df = pd.read_csv(getattr(self.video, f'datalooking{limb}_path_to_csv'))
-            looking_df.columns = [f"{limb}_{col}" if col != "Frame" else "Frame" for col in looking_df.columns]
-            merged_df = merged_df.merge(looking_df, on="Frame", how="outer")
         
         for i in range(1, 4):
             param_path = getattr(self.video, f'dataparameter_{i}_path_to_csv')
@@ -1595,27 +1429,24 @@ class LabelingApp(tk.Tk):
         
         
         
-        #self.option_var_2 = tk.StringVar()
-        #self.option_var_2.set("DNK")  # Výchozí možnost
         
-        #rb_looking = tk.Radiobutton(self.diagram_frame, text=f"Do Not Know", variable=self.option_var_2, value="DNK")
-        #rb_looking.pack(anchor="n")
-        #rb_looking = tk.Radiobutton(self.diagram_frame, text=f"Looking", variable=self.option_var_2, value="L")
-        #rb_looking.pack(anchor="n")
-        #rb_looking = tk.Radiobutton(self.diagram_frame, text=f"Not Looking", variable=self.option_var_2, value="NL")
-        #rb_looking.pack(anchor="n")
-        label_after_separator1 = tk.Label(self.diagram_frame, text="Looking", font=("Arial", 10, "bold"),bg='lightgrey')
-        label_after_separator1.pack(anchor="n", pady=(5, 2))
-        self.do_not_know_btn = tk.Button(self.diagram_frame, text="Do Not Know",command=lambda: self.looking_dic_insert(1), width=button_width, height=button_height)
-        self.do_not_know_btn.pack(anchor="n")
-        self.looking_btn = tk.Button(self.diagram_frame, text="Looking", command=lambda: self.looking_dic_insert(2), width=button_width, height=button_height)
-        self.looking_btn.pack(anchor="n")
-        self.not_looking_btn = tk.Button(self.diagram_frame, text="Not Looking", command=lambda: self.looking_dic_insert(3), width=button_width, height=button_height)
-        self.not_looking_btn.pack(anchor="n")
-        # Oddělovací prvek pro vizuální rozdělení dvou skupin
         separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
         separator.pack(fill="x", padx=5, pady=5)
         #parametr
+        label_after_separator2 = tk.Label(self.diagram_frame, text="Parameters (Limb-Specific)", font=("Arial", 10, "bold"),bg='lightgrey')
+        label_after_separator2.pack(anchor="n", pady=(5, 2))
+        # New buttons for limb-specific parameters
+        self.limb_par1_btn = tk.Button(self.diagram_frame, text="Limb Parameter 1",
+                                    command=lambda: self.toggle_limb_parameter(1), width=button_width, height=button_height)
+        self.limb_par1_btn.pack(anchor="n")
+
+        self.limb_par2_btn = tk.Button(self.diagram_frame, text="Limb Parameter 2",
+                                    command=lambda: self.toggle_limb_parameter(2), width=button_width, height=button_height)
+        self.limb_par2_btn.pack(anchor="n")
+
+        self.limb_par3_btn = tk.Button(self.diagram_frame, text="Limb Parameter 3",
+                                    command=lambda: self.toggle_limb_parameter(3), width=button_width, height=button_height)
+        self.limb_par3_btn.pack(anchor="n")
         label_after_separator3 = tk.Label(self.diagram_frame, text="Parameters", font=("Arial", 10, "bold"),bg='lightgrey')
         label_after_separator3.pack(anchor="n", pady=(5, 2))
         self.par1_btn = tk.Button(self.diagram_frame, text="Parametr 1",
@@ -1631,20 +1462,7 @@ class LabelingApp(tk.Tk):
         self.par3_btn.pack(anchor="n")
         separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
         separator.pack(fill="x", padx=5, pady=5)
-        label_after_separator2 = tk.Label(self.diagram_frame, text="Parameters (Limb-Specific)", font=("Arial", 10, "bold"),bg='lightgrey')
-        label_after_separator2.pack(anchor="n", pady=(5, 2))
-        # New buttons for limb-specific parameters
-        self.limb_par1_btn = tk.Button(self.diagram_frame, text="Limb Parameter 1",
-                                    command=lambda: self.toggle_limb_parameter(1), width=button_width, height=button_height)
-        self.limb_par1_btn.pack(anchor="n")
-
-        self.limb_par2_btn = tk.Button(self.diagram_frame, text="Limb Parameter 2",
-                                    command=lambda: self.toggle_limb_parameter(2), width=button_width, height=button_height)
-        self.limb_par2_btn.pack(anchor="n")
-
-        self.limb_par3_btn = tk.Button(self.diagram_frame, text="Limb Parameter 3",
-                                    command=lambda: self.toggle_limb_parameter(3), width=button_width, height=button_height)
-        self.limb_par3_btn.pack(anchor="n")
+        
         # Oddělovací prvek pro vizuální rozdělení dvou skupin
         
 
@@ -1663,6 +1481,7 @@ class LabelingApp(tk.Tk):
         #self.dot_thread = Thread(target=self.periodic_print_dot_thread)
         #self.dot_thread.daemon = True
         #self.dot_thread.start()
+    
     def select_frame(self):
         frame = self.note_entry.get()
         #print("goto frame:", frame)
@@ -1690,6 +1509,7 @@ class LabelingApp(tk.Tk):
         else:
             print("Error selecting frame: The frame number cannot be selected when a video is not loaded!")
         self.note_entry.delete(0, 'end')
+    
     def toggle_limb_parameter(self, param_number):
         """Toggle between ON, OFF, and None for the currently selected limb's parameter."""
         # Get the currently selected limb
@@ -1854,6 +1674,7 @@ class LabelingApp(tk.Tk):
 
         print(f"INFO: Note saved for frame {current_frame}: {note_text}")
         keyboard.press_and_release('tab')
+    
     def ask_labeling_mode(self):
         """Popup with buttons for selecting labeling mode."""
         mode_window = tk.Toplevel(self)
@@ -1941,7 +1762,7 @@ class LabelingApp(tk.Tk):
         self.video.frames_dir = frames_dir
 
         # Create or load CSV files for each type of data
-        data_types = ['RH', 'LH', 'RL', 'LL','looking','lookingRH','lookingLH','lookingRL','lookingLL']
+        data_types = ['RH', 'LH', 'RL', 'LL']
         for type in data_types:
             suffix = type
             csv_path = os.path.join(data_dir, f"{video_name}{suffix}.csv")
@@ -2131,82 +1952,6 @@ class LabelingApp(tk.Tk):
                 }
         return data
     
-    def save_looking_new(self):
-        
-        csv_path = self.video.datalooking_path_to_csv
-        #print("csvRH,",self.video.dataRH_path_to_csv)
-        
-        if not csv_path:
-            print("ERROR: CSV path is None.")
-            return  # Optionally, handle the error more robustly here
-
-        with open(csv_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones', 'Touch'])
-
-            for frame in range(self.video.total_frames + 1):
-                if frame in self.video.datalooking:
-                    
-                    details = self.video.datalooking.get(frame, {})
-                    look = details.get("Look", '')
-                    xs = ''
-                    ys = ''
-                    x_str = ''
-                    y_str = ''
-                    onset = ''
-                    bodypart = ''
-                    
-                    zones = ''
-                
-                    if xs or ys or onset or bodypart or look:
-                        writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones])
-                    else:
-                        writer.writerow([frame])  # Write frame number if no data is available.
-                #zone_results = [self.find_image_with_white_pixel(x, y) for x, y in zip(xs, ys)]
-                #zones = ', '.join([result[0] for result in zone_results if result])
-        #new saving
-        csv_path = self.video.datalooking_path_to_csv
-    
-        if not csv_path:
-            print("ERROR: CSV path is None.")
-            return
-
-        # Define the suffixes you want to save
-        suffixes = ["RH", "LH", "RL", "LL"]
-
-        for suffix in suffixes:
-            # Create the dynamic attribute name
-            attribute_name = f"datalooking{suffix}"
-            
-            # Check if the attribute exists in self.video
-            if hasattr(self.video, attribute_name):
-                data_dict = getattr(self.video, attribute_name)
-                
-                # Define the specific CSV path for each suffix
-                csv_path_suffix = csv_path.replace('.csv', f'{suffix}.csv')
-                
-                # Open the CSV file for writing
-                with open(csv_path_suffix, mode='w', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones', 'Touch'])
-
-                    for frame in range(self.video.total_frames + 1):
-                        if frame in data_dict:
-                            details = data_dict.get(frame, {})
-                            look = details.get("Look", '')
-                            xs = details.get("xy", [])
-                            x_str = xs[0] if len(xs) > 0 else ''
-                            y_str = xs[1] if len(xs) > 1 else ''
-                            onset = details.get("Onset", '')
-                            bodypart = details.get("Bodypart", '')
-                            zones = details.get("Zone", '')
-                            
-                            writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones])
-                        else:
-                            writer.writerow([frame])
-
-        print("INFO: Saving new looking completed successfully.")
-    
     def save_data(self):
         print("INFO: Saving...")
         def save_dataset(csv_path, data, touch_data=None):
@@ -2247,7 +1992,7 @@ class LabelingApp(tk.Tk):
         save_dataset(self.video.dataLH_path_to_csv, self.video.dataLH)
         save_dataset(self.video.dataRL_path_to_csv, self.video.dataRL)
         save_dataset(self.video.dataLL_path_to_csv, self.video.dataLL, touch_data=True)  # Example of specifying touch data
-        self.save_looking_new()
+        
         for i in range(3):
             self.save_parameter_to_csv(i+1)
         print("INFO: Saved")
