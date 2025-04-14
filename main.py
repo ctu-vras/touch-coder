@@ -32,7 +32,8 @@ with open('config.json', 'r') as file:
 #bigger entry for notes?
 #typo in loading parameter names
 #loading button fix
-
+#update readme with looking btn change
+#delete looking from export
 #guide na zacatku
 #deleting confidential data
 #indication of saving
@@ -119,7 +120,7 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 5.4
+        self.program_version = 5.5
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
@@ -443,7 +444,9 @@ class LabelingApp(tk.Tk):
 
             if closest_index is not None:
                 del details['xy'][closest_index]  # Remove the coordinate
-
+                print(f"DEBUG: Deleting zone: {details['Zone'][closest_index]}")
+                del details['Zone'][closest_index]
+                
                 if not details['xy']:  
                     del limb_data[current_frame]  # Remove frame entry if empty
 
@@ -913,6 +916,7 @@ class LabelingApp(tk.Tk):
         self.update_note_entry()
         self.update_frame_counter()
         self.update_limb_parameter_buttons()
+        self.update_button_colors()
         #self.draw_timeline()
         #self.draw_timeline2()
     

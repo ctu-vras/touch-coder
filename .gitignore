@@ -19,10 +19,10 @@ flagged/
 !Videos/cat3_mp4.mp4
 Videos/videoplayback.mp4
 # Include the Labeled_data folder and its contents
-!Labeled_data/
-!Labeled_data/cat3_mp4/
-Labeled_data/videoplayback/
+Labeled_data/cat3_mp4_reliability/**
+Labeled_data/videoplayback/**
 
+!Labeled_data/cat3_mp4/
 
 # Ignore config and environment files
 
