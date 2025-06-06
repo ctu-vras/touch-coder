@@ -21,6 +21,11 @@ with open('config.json', 'r') as file:
 
 #new tasks---------------------------------------------------------------------------------------
 #TODOO
+
+#TODO summer 2025
+#frame rate in the export file
+#switch L fo R and R to L in the code
+#miliseconds next to frame rate
 # Change looking to Limb Specific Parameter
 
 #code review (after Json agrees)
@@ -120,7 +125,7 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 5.5
+        self.program_version = 5.6
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
@@ -1171,7 +1176,6 @@ class LabelingApp(tk.Tk):
         return list(zones)  # Return the list of unique zones
      
     def export(self):
-        
         #self.save_data()
         """
         Merges limb data, looking data, general parameters, limb parameters, and notes into a single export file.
@@ -1193,7 +1197,7 @@ class LabelingApp(tk.Tk):
                         .merge(rh_df, on="Frame", how="outer") \
                         .merge(rl_df, on="Frame", how="outer")
         
-        
+        # Merge general parameter CSVs (Parameter_1, Parameter_2, Parameter_3)
         for i in range(1, 4):
             param_path = getattr(self.video, f'dataparameter_{i}_path_to_csv')
 
@@ -1223,11 +1227,11 @@ class LabelingApp(tk.Tk):
         # Rename columns by removing _x from the names
         merged_df.columns = [col.replace('_x', '') for col in merged_df.columns]
 
-
+        # Remove any *_Touch columns
         merged_df = merged_df.drop([col for col in merged_df.columns if col.endswith('_Touch')], axis=1)
 
+        # Merge notes
         notes_path = self.video.dataNotes_path_to_csv
-
         if os.path.exists(notes_path):  # Check if the file exists before reading
             notes_df = pd.read_csv(notes_path)
             merged_df = merged_df.merge(notes_df, on='Frame', how='outer')
@@ -1236,7 +1240,7 @@ class LabelingApp(tk.Tk):
             if 'Note' not in merged_df.columns:
                 merged_df['Note'] = None  # Ensure column exists
 
-        # Load limb parameters
+        # Load limb parameters (if they exist)
         limb_param_path = os.path.join(os.path.dirname(self.video.dataRH_path_to_csv), f"{self.video_name}_limb_parameters.csv")
         if os.path.exists(limb_param_path):
             limb_params_df = pd.read_csv(limb_param_path)
@@ -1258,33 +1262,50 @@ class LabelingApp(tk.Tk):
         # Ensure unique rows per frame
         merged_df = merged_df.drop_duplicates(subset=['Frame'])
 
-        # Reorder columns to match the expected structure
+        # Reorder columns to match the expected structure (Frame + limb parameters, then any others)
         existing_columns = [col for col in expected_columns if col in merged_df.columns]
         remaining_columns = [col for col in merged_df.columns if col not in existing_columns]
         merged_df = merged_df[existing_columns + remaining_columns]
 
-        # Move 'Note' column to the end
+        # ── NEW: Compute Time in milliseconds for each Frame ──
+        # (This will add a “Time_ms” column, with values = (Frame / frame_rate) * 1000.)
+        merged_df['Time_ms'] = (merged_df['Frame'] / self.frame_rate) * 1000
 
-                # Identify parameter columns for all limbs
+        # Identify parameter columns for all limbs (again, now that merged_df is up to date)
         limb_params = [f"{limb}_Parameter_{i}" for limb in ['LH', 'LL', 'RH', 'RL'] for i in range(1, 4)]
 
-        # Identify columns that should remain in the original order
-        other_columns = [col for col in merged_df.columns if col not in limb_params and col != 'Note']
+        # Identify columns that should remain in the original order (everything except limb_params, 'Note', and 'Time_ms')
+        other_columns = [
+            col
+            for col in merged_df.columns
+            if col not in limb_params and col not in ('Note', 'Time_ms')
+        ]
 
-        # Reorder columns: Keep original order → Move limb parameters to end → Move Note to last
-        final_column_order = other_columns + limb_params + (['Note'] if 'Note' in merged_df.columns else [])
-
-        # Apply the new column order
+        # Reorder columns so that:
+        #   1) all "other_columns" stay first,
+        #   2) then all limb_params,
+        #   3) then 'Note',
+        #   4) finally 'Time_ms' (explicitly marked as milliseconds).
+        final_column_order = (
+            other_columns
+            + limb_params
+            + (['Note'] if 'Note' in merged_df.columns else [])
+            + (['Time_ms'] if 'Time_ms' in merged_df.columns else [])
+        )
         merged_df = merged_df[final_column_order]
-        # Define output directory
-        export_folder = os.path.join(os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv)), "export")
-        os.makedirs(export_folder, exist_ok=True)
-        output_csv = os.path.join(export_folder, f"{self.video_name}_export.csv")
 
-        # Save merged data to CSV
+        # Define output directory
+        export_folder = os.path.join(
+            os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv)),
+            "export"
+        )
+        os.makedirs(export_folder, exist_ok=True)
+        output_csv = os.path.join(export_folder, f"{self.video_name}_export_flipped.csv")
+
+        # Save merged data to CSV (data rows only)
         merged_df.to_csv(output_csv, index=False)
 
-        # Add metadata
+        # Prepend metadata to the same file
         with open(output_csv, 'r') as file:
             data = file.read()
         with open(output_csv, 'w') as file:
@@ -1292,7 +1313,10 @@ class LabelingApp(tk.Tk):
             file.write(f"Video Name: {self.video_name}\n")
             file.write(f"Labeling Mode: {self.labeling_mode}\n")
             file.write(f"Frame Rate: {self.frame_rate}\n")
-            clothes_list = self.extract_zones_from_file(self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt'))
+            clothes_list = self.extract_zones_from_file(
+                self.video.clothes_file_path
+                or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
+            )
             file.write(f"Zones Covered With Clothes: {clothes_list}\n")
             file.write(f"Limb Parameter 1: {self.video.limb_parameter1_name}\n")
             file.write(f"Limb Parameter 2: {self.video.limb_parameter2_name}\n")
@@ -1304,6 +1328,74 @@ class LabelingApp(tk.Tk):
             file.write(data)
 
         print(f"INFO: Combined export saved to {output_csv}")
+        # ── 1) helper utilities ────────────────────────────────────────────────────────
+        def _swap_lr_in_string(val: str) -> str:
+            """
+            Flip any literal L/R tokens inside *cell values*.
+
+            The three chained .replace() calls guarantee that the placeholder
+            character (§) never leaks into the final text.
+            """
+            if not isinstance(val, str):
+                return val
+            return (
+                val
+                .replace('L', '§')   # step 1: hide all L’s
+                .replace('R', 'L')   # step 2: turn the original R’s into L’s
+                .replace('§', 'R')   # step 3: un-hide the new R’s
+            )
+
+        def _swap_lr_columns(df: pd.DataFrame) -> pd.DataFrame:
+            """
+            Return a copy where every LH⇄RH and LL⇄RL column pair is swapped.
+            Works for X/Y, Look, Parameter_*, etc. (anything with those prefixes).
+            """
+            out = df.copy()
+            for left_prefix, right_prefix in (('LH_', 'RH_'), ('LL_', 'RL_')):
+                left_cols  = [c for c in out.columns if c.startswith(left_prefix)]
+                right_cols = [c for c in out.columns if c.startswith(right_prefix)]
+                # Align pairs by sorted order so LH_X swaps with RH_X, LH_Look with RH_Look, …
+                for l, r in zip(sorted(left_cols), sorted(right_cols)):
+                    out[l], out[r] = out[r].copy(), out[l].copy()
+            return out
+
+        # ── 2) build the flipped dataframe ────────────────────────────────────────────
+        flipped_df = _swap_lr_columns(merged_df)
+
+        # flip any individual cell strings that still contain “L” / “R” tokens
+        flipped_df = flipped_df.applymap(_swap_lr_in_string)
+
+        # ── 3) write the flipped file, with identical metadata header ────────────────
+        output_csv_flipped = os.path.join(
+            export_folder, f"{self.video_name}_export.csv"
+        )
+
+        # write data first …
+        flipped_df.to_csv(output_csv_flipped, index=False)
+
+        # … then prepend the same metadata lines you already wrote once
+        with open(output_csv_flipped, 'r') as f:
+            data = f.read()
+        with open(output_csv_flipped, 'w') as f:
+            f.write(f"Program Version: {self.video.program_version}\n")
+            f.write(f"Video Name: {self.video_name}\n")
+            f.write(f"Labeling Mode: {self.labeling_mode}\n")
+            f.write(f"Frame Rate: {self.frame_rate}\n")
+            clothes_list = self.extract_zones_from_file(
+                self.video.clothes_file_path
+                or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
+            )
+            f.write(f"Zones Covered With Clothes: {clothes_list}\n")
+            f.write(f"Limb Parameter 1: {self.video.limb_parameter1_name}\n")
+            f.write(f"Limb Parameter 2: {self.video.limb_parameter2_name}\n")
+            f.write(f"Limb Parameter 3: {self.video.limb_parameter3_name}\n")
+            f.write(f"Parameter 1: {self.video.parameter1_name}\n")
+            f.write(f"Parameter 2: {self.video.parameter2_name}\n")
+            f.write(f"Parameter 3: {self.video.parameter3_name}\n")
+            f.write("\n")                 # blank separator
+            f.write(data)
+
+        print(f"INFO: Flipped export saved to {output_csv_flipped}")
 
     def analysis(self):
         if self.video:
@@ -1415,18 +1507,20 @@ class LabelingApp(tk.Tk):
         button_height = 1  # Set a fixed height
         
         self.option_var_1 = tk.StringVar()
-        self.option_var_1.set("RH")  # Výchozí možnost
+        self.option_var_1.set("LH")  # Výchozí možnost
         
         label_after_separator1 = tk.Label(self.diagram_frame, text="Limb Selector", font=("Arial", 10, "bold"),bg='lightgrey')
         label_after_separator1.pack(anchor="n", pady=(5, 2))
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Hand", variable=self.option_var_1, value="RH",bg='lightgrey')
+
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Hand", variable=self.option_var_1, value="LH",bg='lightgrey')
         rb.pack(anchor="n")
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Hand", variable=self.option_var_1, value="LH",bg='lightgrey')
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Hand", variable=self.option_var_1, value="RH",bg='lightgrey')
         rb.pack(anchor="n")
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Leg", variable=self.option_var_1, value="RL",bg='lightgrey')
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Right Leg", variable=self.option_var_1, value="LL",bg='lightgrey')
         rb.pack(anchor="n")
-        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Leg", variable=self.option_var_1, value="LL",bg='lightgrey')
+        rb = tk.Radiobutton(self.diagram_frame, text=f"Left Leg", variable=self.option_var_1, value="RL",bg='lightgrey')
         rb.pack(anchor="n")
+        
         # Oddělovací prvek pro vizuální rozdělení dvou skupin
         separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
         separator.pack(fill="x", padx=5, pady=5)
@@ -1434,11 +1528,13 @@ class LabelingApp(tk.Tk):
         
         
         
-        separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
-        separator.pack(fill="x", padx=5, pady=5)
+        
         #parametr
-        label_after_separator2 = tk.Label(self.diagram_frame, text="Parameters (Limb-Specific)", font=("Arial", 10, "bold"),bg='lightgrey')
-        label_after_separator2.pack(anchor="n", pady=(5, 2))
+        label_after_separator2 = tk.Label(self.diagram_frame, text="Parameters", font=("Arial", 10, "bold"), bg='lightgrey')
+        label_after_separator2.pack(anchor="n", pady=(5, 0))  # bottom padding = 0
+
+        label_after_separator21 = tk.Label(self.diagram_frame, text="(Limb-Specific)", font=("Arial", 8), bg='lightgrey')
+        label_after_separator21.pack(anchor="n", pady=(0, 5))  # top padding = 0
         # New buttons for limb-specific parameters
         self.limb_par1_btn = tk.Button(self.diagram_frame, text="Limb Parameter 1",
                                     command=lambda: self.toggle_limb_parameter(1), width=button_width, height=button_height)
@@ -1451,6 +1547,9 @@ class LabelingApp(tk.Tk):
         self.limb_par3_btn = tk.Button(self.diagram_frame, text="Limb Parameter 3",
                                     command=lambda: self.toggle_limb_parameter(3), width=button_width, height=button_height)
         self.limb_par3_btn.pack(anchor="n")
+
+        separator = tk.Frame(self.diagram_frame, height=2, bd=1, relief="sunken")
+        separator.pack(fill="x", padx=5, pady=5)
         label_after_separator3 = tk.Label(self.diagram_frame, text="Parameters", font=("Arial", 10, "bold"),bg='lightgrey')
         label_after_separator3.pack(anchor="n", pady=(5, 2))
         self.par1_btn = tk.Button(self.diagram_frame, text="Parametr 1",
