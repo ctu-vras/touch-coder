@@ -1,0 +1,48 @@
+{
+  "end_frame": 2798,
+  "limb": "RF",
+  "start_frame": 2781,
+  "frames": [
+    2781,
+    2782,
+    2783,
+    2784,
+    2785,
+    2786,
+    2787,
+    2788,
+    2789,
+    2790,
+    2791,
+    2792,
+    2793,
+    2794,
+    2795,
+    2796,
+    2797,
+    2798
+  ],
+  "zone_transitions": [
+    {
+      "frame": 2781,
+      "zones": [
+        "3L"
+      ],
+      "type": "on"
+    },
+    {
+      "frame": 2798,
+      "zones": [
+        "3L"
+      ],
+      "type": "off"
+    }
+  ],
+  "touch_type": "t",
+  "row": {
+    "location_RF": "3L",
+    "touch_type_RF": "t",
+    "touch_type_RF_onset": 92720,
+    "touch_type_RF_offset": 93280
+  }
+}

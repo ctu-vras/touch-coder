@@ -13,7 +13,7 @@ from threading import Thread
 from PIL import Image, ImageTk
 import keyboard
 import analysis
-
+from sort_frames import process_touch_data_strict_transitions
 with open('config.json', 'r') as file:
             config = json.load(file)
             NEW_TEMPLATE = config.get('new_template', False)  # Default to 'medium' if not specified
@@ -125,7 +125,7 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 5.6
+        self.program_version = 5.7
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
@@ -1121,23 +1121,23 @@ class LabelingApp(tk.Tk):
         stop_btn = tk.Button(self.control_frame, text="Stop", command=self.stop_video)
         stop_btn.grid(row=0, column=11, padx=5, pady=5)
 
-
-
+        sort_btn = tk.Button(self.control_frame, text="Sort Frames", command=self.sort_frames)
+        sort_btn.grid(row=0, column=12, padx=5, pady=5)
 
 
 
         self.framerate_label = tk.Label(self.control_frame, text=f"Frame Rate: -----",bg='lightgrey')
-        self.framerate_label.grid(row=0, column=12, padx=5, pady=5)
+        self.framerate_label.grid(row=0, column=13, padx=5, pady=5)
 
         self.min_touch_lenght_label = tk.Label(self.control_frame, text=f"Minimal Touch Length: -----",bg='lightgrey')
-        self.min_touch_lenght_label.grid(row=0, column=13, padx=5, pady=5)
+        self.min_touch_lenght_label.grid(row=0, column=14, padx=5, pady=5)
 
         self.loading_label = tk.Label(self.control_frame, text="Buffer Loaded",bg='lightgrey')
-        self.loading_label.grid(row=1, column=12, padx=5, pady=5)
+        self.loading_label.grid(row=1, column=13, padx=5, pady=5)
         
         # Now place the labels in a new row
         self.name_label = tk.Label(self.control_frame, text="Video Name: -----",bg='lightgrey')
-        self.name_label.grid(row=1, column=13, columnspan=3, padx=5, pady=5, sticky="w")
+        self.name_label.grid(row=1, column=14, columnspan=3, padx=5, pady=5, sticky="w")
 
         # Now place the labels in a new row
         self.mode_label = tk.Label(self.control_frame, text="Mode: -----",bg='lightgrey')
@@ -1430,6 +1430,39 @@ class LabelingApp(tk.Tk):
         
         self.play = False
     
+    def sort_frames(self):
+        """
+        1.  Ensure the newest CSV export is on disk
+        2.  Build the three paths expected by
+            process_touch_data_strict_transitions(csv_path, images_dir, output_dir)
+        3.  Run the routine and tell the user where the result is
+        """
+        # 1) make sure everything is up‑to‑date
+        self.save_data()          # calls export() internally
+
+        # 2) derive the paths from existing members -------------------------
+        #    base_dir …../Labeled_data/<video_name>
+        base_dir   = os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv))
+
+        #    CSV exported by export() → …../export/<video_name>_export.csv
+        csv_path   = os.path.join(base_dir, "export", f"{self.video_name}_export.csv")
+
+        #    original frames live in …../frames
+        images_dir = self.video.frames_dir                        # already initialised
+
+        #    we want …../sorted_frames   (create on demand)
+        output_dir = os.path.join(base_dir, "sorted_frames")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 3) run the sorter
+        try:
+            process_touch_data_strict_transitions(csv_path, images_dir, output_dir)
+            print(f"INFO: Sorted frames written to {output_dir}")
+            #messagebox.showinfo("Sort Frames", f"Frames successfully sorted to:\n{output_dir}")
+        except Exception as e:
+            print(f"ERROR in sort_frames: {e}")
+            #messagebox.showerror("Sort Frames", f"Frame sorting failed:\n{e}")
+
     def background_update_play(self):
         if self.video is not None:
             while True:

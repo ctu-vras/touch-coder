@@ -22,7 +22,7 @@ Videos/videoplayback.mp4
 Labeled_data/cat3_mp4_reliability/**
 Labeled_data/videoplayback/**
 
-!Labeled_data/cat3_mp4/
+Labeled_data/cat3_mp4/data/**
 
 # Ignore config and environment files
 
