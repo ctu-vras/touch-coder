@@ -1,10 +1,10 @@
-# Self-contact Coding Application version 5.5
+# Self-Contact Coding Application TinyTouch Version 6.0
 
 ## Introduction
 
 This application is designed for behavioral researchers to code self-contact (self-touch) in videos.
 
-![Showcase](readme_images/showcase.png)
+![Showcase](assets/readme_images/showcase.png)
 
 ## How to Use
 
