@@ -8,7 +8,7 @@ MS_PER_FRAME = 1000.0 / FRAME_RATE
 
 def process_touch_data_strict_transitions(csv_path: str, images_dir: str, output_dir: str) -> None:
     print(f"SORT: Loading CSV: {csv_path}")
-    df = pd.read_csv(csv_path, skiprows=11)
+    df = pd.read_csv(csv_path, skiprows=6)
     os.makedirs(output_dir, exist_ok=True)
 
     limbs = ['LH', 'LL', 'RH', 'RL']

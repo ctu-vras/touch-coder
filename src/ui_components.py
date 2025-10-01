@@ -29,7 +29,7 @@ def build_ui(app):
     callback methods that are referenced here.
     """
     # === Root window basics ===
-    app.title('Labeling Application')
+    app.title('TinyTouch')
     app.geometry('1200x1000')
     app.protocol("WM_DELETE_WINDOW", app.on_close)
 
@@ -81,6 +81,7 @@ def build_ui(app):
 
     app.timeline_canvas = tk.Canvas(app.timeline_frame, bg='grey', height=50)
     app.timeline_canvas.pack(fill=tk.X, expand=True, pady=(10, 0))
+    app.timeline_canvas.bind("<Button-1>", app.on_timeline_click)
     app.bind_all("<Button-1>", app.global_click, add="+")
 
     # === Controls (top bar) ===

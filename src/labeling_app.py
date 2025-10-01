@@ -11,7 +11,7 @@ from threading import Thread
 from PIL import Image, ImageTk
 import pandas as pd
 import keyboard
-
+from data_utils import bundle_summary_str  # import the helper
 import analysis
 from sort_frames import process_touch_data_strict_transitions
 
@@ -56,17 +56,98 @@ class LabelingApp(tk.Tk):
 
         # Diagram init
         self.init_diagram()
+    # --- Param helpers ---
+    def _limb_param_key_for_index(self, idx: int) -> str:
+        return f"Par{idx}"
 
+
+    def _ensure_limb_params(self, rec: dict) -> dict:
+        if not isinstance(rec.get("LimbParams"), dict):
+            rec["LimbParams"] = {}
+        return rec["LimbParams"]
+    def _param_next_state(self, current):
+        # Cycle: None -> "ON" -> "OFF" -> "ON" ...
+        if current is None or current == "":
+            return "ON"
+        if current == "ON":
+            return "OFF"
+        if current == "OFF":
+            return None
+        return None  # current == "ON" or anything else
+
+    def _param_key_for_index(self, idx: int) -> str:
+        return f"Par{idx}"
+        
+    def on_note_changed(self, text: str):
+        idx = self.frame_index
+        b = self._ensure_bundle(idx)
+        if b.get("Note") != text:
+            b["Note"] = text
+            self.mark_bundle_changed(idx)
+    def _ensure_bundle(self, idx: int):
+        b = self.video.frames.get(idx)
+        if not isinstance(b, dict):
+            # create an empty bundle (match your empty_bundle() structure)
+            b = {
+                "Note": None,
+                "Params": {},
+                "LH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "RH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "LL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "RL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                # no "Changed" by default
+            }
+            self.video.frames[idx] = b
+        return b
+
+    def _ensure_params(self, b: dict):
+        if "Params" not in b or not isinstance(b["Params"], dict):
+            b["Params"] = {}
+        return b["Params"]
     # -------------------------
     # Callbacks & logic below are the same as before (moved unchanged)
     # -------------------------
+    # in labeling_app.py, add helpers on the LabelingApp class
+    def mark_bundle_changed(self, index=None):
+        if self.video is None:
+            return
+        idx = self.video.current_frame
+        
+        b = self.video.frames.get(idx)
+        if isinstance(b, dict):
+            b["Changed"] = True
+            # optional: keep your terminal print
+            if hasattr(self, "notify_bundle_changed"):
+                self.notify_bundle_changed(idx)
 
+    def notify_bundle_changed(self, index=None):
+        if self.video is None:
+            return
+        idx = self.video.current_frame
+        try:
+            b = self.video.frames[idx]
+            print("\n=== FrameBundle UPDATED ===")
+            print(bundle_summary_str(b, frame_index=idx))
+        except Exception as e:
+            print(f"[notify_bundle_changed] could not print bundle at {idx}: {e}")
+    
+    def _get_bundle(self, frame):
+        from data_utils import empty_bundle
+        return self.video.frames.setdefault(frame, empty_bundle())
+
+    def set_param_on_frame(self, frame, name, state):  # state: "ON"/"OFF"/None
+        b = self._get_bundle(frame)
+        params = b.get("Params", {}) or {}
+        params[name] = state
+        b["Params"] = params
+    
     # --- Small helpers / global clicks ---
     def global_click(self, event):
         if getattr(self, "note_entry", None) and self.focus_get() == self.note_entry and event.widget != self.note_entry:
             self.focus_set()
 
     def navigate_left(self, event): self.next_frame(-1)
+    
     def navigate_right(self, event): self.next_frame(1)
 
     def disable_arrow_keys(self, event=None):
@@ -108,7 +189,8 @@ class LabelingApp(tk.Tk):
         scale = 1 if self.diagram_size == "large" else 0.5
         current_frame = self.video.current_frame
 
-        if current_frame in limb_data:
+        rec: FrameRecord | None = limb_data.get(current_frame)
+        if rec:
             rec: FrameRecord = limb_data[current_frame]
             xs = rec.get('X', []); ys = rec.get('Y', []); zones = rec.get('Zones', [])
             closest_distance = float('inf'); closest_index = None
@@ -123,6 +205,9 @@ class LabelingApp(tk.Tk):
                     del limb_data[current_frame]
                 else:
                     rec['changed'] = True
+
+        
+        self.mark_bundle_changed()
 
     # --- Diagram init & routine render ---
     def init_diagram(self):
@@ -176,7 +261,11 @@ class LabelingApp(tk.Tk):
         target_data = getattr(self.video, target_attr, {})
         setattr(self.video, f"is_touch{option}", True)
 
-        if current_frame not in target_data:
+       # --- DEBUG before change
+        print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={list(zone_results)}")
+
+        existing = target_data.get(current_frame)  # <-- USE .get() on LimbView
+        if not isinstance(existing, dict) or (not existing.get('X') and not existing.get('Y')):
             rec: FrameRecord = {
                 "X": [int(x_pos)],
                 "Y": [int(y_pos)],
@@ -185,34 +274,93 @@ class LabelingApp(tk.Tk):
                 "Look": "No",
                 "Zones": list(zone_results),
                 "Touch": None,
-                "changed": True,
             }
             target_data[current_frame] = rec
         else:
-            rec: FrameRecord = target_data[current_frame]
+            rec: FrameRecord = existing
             rec.setdefault('X', []).append(int(x_pos))
             rec.setdefault('Y', []).append(int(y_pos))
-            if not isinstance(rec.get('Zones', []), list):
-                rec['Zones'] = list(zone_results)
+            zones = rec.get('Zones', [])
+            if not isinstance(zones, list):
+                zones = list(zone_results)
             else:
-                rec['Zones'].extend(zone_results)
+                zones.extend(zone_results)
+            rec['Zones'] = zones
             rec['Bodypart'] = option
             rec['Onset'] = onset
             rec['Look'] = "No"
-            rec['changed'] = True
+            
 
-    def find_last_green(self, data):
-        keys = sorted(data.keys(), reverse=True)
+        # --- DEBUG after
+        self.mark_bundle_changed()
+        rec = target_data.get(current_frame, {})
+        print(f"CLICK:  after  frame={current_frame:>5} limb={option} onset={rec.get('Onset')} "
+            f"points={len(rec.get('X', []))} zones={rec.get('Zones', [])}")
+    
+    def preview_before_save(self, changed_only: bool = True):
+        """
+        Print a compact preview of what would be saved right now.
+        Shows base/data/export dirs and per-frame summaries.
+        """
+        if not self.video:
+            print("PREVIEW: No video loaded."); return
+
+
+        base_dir = os.path.dirname(self.video.frames_dir)  # -> Labeled_data/<video>
+        data_dir   = os.path.join(base_dir, "data")
+        export_dir = os.path.join(base_dir, "export")
+        unified_path = os.path.join(data_dir, f"{self.video_name}_unified.csv")
+        export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
+
+        print("\n===== PREVIEW: Save destinations =====")
+        print(f"Base:   {base_dir}")
+        print(f"Data:   {data_dir}")
+        print(f"Export: {export_dir}")
+        print(f"Unified CSV (will write changed-only): {unified_path}")
+        print(f"Export  CSV (will write all frames):   {export_path}")
+
+        from data_utils import preview_lines_for_save
+        lines = preview_lines_for_save(self.video.frames, self.video.total_frames, changed_only=changed_only)
+
+        if not lines:
+            print("PREVIEW: No changed frames to save.")
+        else:
+            print("===== PREVIEW: Frames to be saved =====")
+            for line in lines:
+                print(line)
+            print("===== PREVIEW: End =====\n")
+    
+    def find_last_green(self, _unused_data=None):
+        """
+        Set self.video.last_green to the last 'On' points for the selected limb
+        at or before the current frame; clear when an 'Off' is encountered first.
+        """
+        if not (self.video and isinstance(self.video.frames, dict)):
+            self.video.last_green = [(None, None)]
+            return
+
+        limb = self.option_var_1.get()  # "LH"/"RH"/"LL"/"RL"
         start = self.video.current_frame
-        for key in keys:
-            if key <= start:
-                if data[key].get('Onset') == 'Off':
-                    self.video.last_green = [(None, None)]
-                    return
-                elif data[key].get('Onset') == 'On':
-                    xs = data[key].get('X', []); ys = data[key].get('Y', [])
-                    self.video.last_green = list(zip(xs, ys)) if xs and ys else [(None, None)]
-                    return
+
+        # Iterate frames in reverse up to current frame
+        for f in sorted(self.video.frames.keys(), reverse=True):
+            if f > start:
+                continue
+            b = self.video.frames.get(f, {}) or {}
+            rec = b.get(limb, {}) if isinstance(b, dict) else {}
+
+            onset = rec.get("Onset")
+            if onset == "Off":
+                # an explicit Off cancels the ghost
+                self.video.last_green = [(None, None)]
+                return
+            if onset == "On":
+                xs = rec.get("X", []) or []
+                ys = rec.get("Y", []) or []
+                self.video.last_green = list(zip(xs, ys)) if xs and ys else [(None, None)]
+                return
+
+        # nothing found
         self.video.last_green = [(None, None)]
 
     def on_radio_click(self):
@@ -272,22 +420,12 @@ class LabelingApp(tk.Tk):
             self.display_first_frame()
 
     def parameter_color_at_frame(self, frame):
-        current_limb = self.option_var_1.get()
-        result = None
-        for d in [self.video.parameter_button1_state_dict,
-                  self.video.parameter_button2_state_dict,
-                  self.video.parameter_button3_state_dict]:
-            if frame in d:
-                state = d[frame]
-                if state == "ON": return "green"
-                elif state == "OFF": result = "red"
-        for i in range(1, 4):
-            limb_param = getattr(self.video, f"limb_parameter{i}")
-            if (current_limb, frame) in limb_param:
-                state = limb_param.get((current_limb, frame))
-                if state == "ON": return "green"
-                elif state == "OFF": result = "red"
-        return result
+        b = self._get_bundle(frame)
+        params = (b.get("Params") or {})
+        # If any param ON => green; else if any OFF => red; else None
+        if any(v == "ON" for v in params.values()): return "green"
+        if any(v == "OFF" for v in params.values()): return "red"
+        return None
 
     def draw_timeline(self):
         self.timeline_canvas.delete("all")
@@ -326,6 +464,17 @@ class LabelingApp(tk.Tk):
             if param_color is not None:
                 mid_x = (left + right) / 2
                 self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
+
+            # NEW: per-limb ticks for Param1..3 on this frame
+            colors = self.limb_parameter_colors_at_frame(frame_offset)
+            mid_x = (left + right) / 2
+            offsets = (-2, 0, 2)
+            for col, dx in zip(colors, offsets):
+                if col:
+                    self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
+
+
+
             if frame_offset == self.video.current_frame:
                 self.timeline_canvas.create_rectangle(left, top, right, bottom, fill='dodgerblue', outline='black')
             if frame == self.video.number_frames_in_zone - 1:
@@ -333,22 +482,93 @@ class LabelingApp(tk.Tk):
                     self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
                 elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
                     self.video.touch_to_next_zone.append(color == self.color_during)
+        # new:
+        colors = self.limb_parameter_colors_at_frame(frame_offset)
+        mid_x = (left + right) / 2
+        offsets = (-2, 0, 2)  # horizontal pixel offsets for Param1..3
+        for col, dx in zip(colors, offsets):
+            if col:
+                self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
 
     def draw_timeline2(self):
         self.timeline2_canvas.delete("all")
-        if self.video and self.video.total_frames > 0:
-            canvas_width = self.timeline2_canvas.winfo_width()
-            canvas_height = self.timeline2_canvas.winfo_height()
-            selected_limb_key = f'data{self.option_var_1.get()}'
-            limb_data = getattr(self.video, selected_limb_key, {})
-            for frame, details in limb_data.items():
-                if 'Onset' in details and details['Onset'] == 'On':
-                    touch_pos = (frame / self.video.total_frames) * canvas_width
-                    self.timeline2_canvas.create_line(touch_pos, 0, touch_pos, canvas_height, fill='green', width=1)
-            current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
-            margin = 2
-            current_pos = min(max(current_pos, margin), canvas_width - margin)
-            self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
+        if not (self.video and self.video.total_frames > 0):
+            return
+
+        canvas_width  = self.timeline2_canvas.winfo_width()
+        canvas_height = self.timeline2_canvas.winfo_height()
+        limb = self.option_var_1.get()
+
+        # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
+        on_lines   = []      # x positions of On (green)
+        off_lines  = []      # x positions of Off (red)
+        intervals  = []      # [(x_on, x_off), ...]
+        param_lines = []     # [(x, color)] from parameter_color_at_frame
+        limb_param_lines = []  # [(x+dx, color)] from limb_parameter_colors_at_frame
+        active_on_x = None
+
+        # deterministic left->right scan
+        for frame in sorted(self.video.frames.keys()):
+            bundle = self.video.frames[frame]
+            details = bundle.get(limb, {})
+
+            x = (frame / self.video.total_frames) * canvas_width
+
+            # --- Onset/Offset collection for intervals + edge markers ---
+            onset_val = details.get('Onset')
+            if onset_val == 'On':
+                on_lines.append(x)
+                if active_on_x is None:
+                    active_on_x = x
+            elif onset_val == 'Off':
+                off_lines.append(x)
+                if active_on_x is not None:
+                    x1, x2 = (active_on_x, x) if active_on_x <= x else (x, active_on_x)
+                    if abs(x2 - x1) >= 1:
+                        intervals.append((x1, x2))
+                    active_on_x = None
+
+            # --- Parameter markers (global) ---
+            col = self.parameter_color_at_frame(frame)
+            if col is not None:
+                param_lines.append((x, col))
+
+            # --- Per-limb parameter ticks (up to 3), with small +/-2px offsets ---
+            # Mirrors your timeline #1 behavior
+            if hasattr(self, "limb_parameter_colors_at_frame"):
+                colors = self.limb_parameter_colors_at_frame(frame)
+                for dx, c in zip((-2, 0, 2), colors):
+                    if c:
+                        limb_param_lines.append((x + dx, c))
+
+        # Optional: show ongoing touch if no Off yet (choose one):
+        # if active_on_x is not None:
+        #     current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
+        #     intervals.append((active_on_x, current_pos))  # or (active_on_x, canvas_width)
+
+        # --- Draw order: 1) fills, 2) param lines, 3) onset/offset edges, 4) playhead ---
+        # 1) Yellow fills (so lines stay visible)
+        for x1, x2 in intervals:
+            self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
+
+        # 2) Parameter lines (global + per-limb)
+        for x, c in param_lines:
+            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+
+        for x, c in limb_param_lines:
+            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+
+        # 3) On/Off edge markers on top, so they’re never hidden
+        for x in on_lines:
+            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
+        for x in off_lines:
+            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
+
+        # 4) Current frame indicator (topmost)
+        current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
+        margin = 2
+        current_pos = min(max(current_pos, margin), canvas_width - margin)
+        self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
 
     def update_frame_counter(self):
         if self.video:
@@ -481,69 +701,120 @@ class LabelingApp(tk.Tk):
 
     # --- Parameter toggles & coloring ---
     def update_button_colors(self):
-        parameter_dicts = {
-            1: self.video.parameter_button1_state_dict,
-            2: self.video.parameter_button2_state_dict,
-            3: self.video.parameter_button3_state_dict,
-        }
-        parameter_buttons = {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn}
-        key = self.video.current_frame
-        for param_num, param_dict in parameter_dicts.items():
-            current_state = param_dict.get(key, None)
-            if current_state is None: parameter_buttons[param_num].config(bg='lightgrey')
-            elif current_state == "ON": parameter_buttons[param_num].config(bg='lightgreen')
-            elif current_state == "OFF": parameter_buttons[param_num].config(bg='#E57373')  # noqa: F821
-            else: parameter_buttons[param_num].config(bg='lightgrey')
+        if self.video is None:
+            return
+        idx = self.video.current_frame
+        b = self.video.frames.get(idx, {})
+        params = (b.get("Params") or {})
 
-    def parameter_dic_insert(self, parameter):
-        parameter_dicts = {
-            1: self.video.parameter_button1_state_dict,
-            2: self.video.parameter_button2_state_dict,
-            3: self.video.parameter_button3_state_dict,
-        }
-        parameter_buttons = {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn}
-        key = self.video.current_frame
-        current_dict = parameter_dicts.get(parameter)
-        current_state = current_dict.get(key, None)
-        if current_state is None:
-            new_state = "ON"; parameter_buttons[parameter].config(bg='lightgreen')
-        elif current_state == "ON":
-            new_state = "OFF"; parameter_buttons[parameter].config(bg='#E57373')
+        for i, btn in ((1, self.par1_btn), (2, self.par2_btn), (3, self.par3_btn)):
+            key = self._param_key_for_index(i)
+            state = params.get(key)
+            if state == "ON":
+                btn.config(bg="lightgreen")
+            elif state == "OFF":
+                btn.config(bg="#E57373")
+            else:
+                btn.config(bg="lightgrey")
+
+    def parameter_dic_insert(self, parameter_index: int):
+        """Toggle Param_i (1..3) for the CURRENT frame directly on the bundle."""
+        if self.video is None:
+            return
+        idx = self.video.current_frame
+        b = self._ensure_bundle(idx)
+        params = self._ensure_params(b)
+
+        key = self._param_key_for_index(parameter_index)
+        prev = params.get(key)
+        new_state = self._param_next_state(prev)
+        params[key] = new_state
+        b["Params"] = params
+
+        # color the right button immediately
+        button = {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn}[parameter_index]
+        if new_state == "ON":
+            button.config(bg="lightgreen")
+        elif new_state == "OFF":
+            button.config(bg="#E57373")
         else:
-            new_state = None; parameter_buttons[parameter].config(bg='lightgrey')
-        current_dict[key] = new_state
-        print("Dictionary", parameter, current_dict)
+            button.config(bg="lightgrey")
 
-    def toggle_limb_parameter(self, param_number):
+        # mark frame dirty, print, and refresh timeline
+        self.mark_bundle_changed(idx)
+        self.draw_timeline()
+
+    def toggle_limb_parameter(self, param_number: int):
         limb = self.option_var_1.get()
-        param_dicts = {1: self.video.limb_parameter1, 2: self.video.limb_parameter2, 3: self.video.limb_parameter3}
-        param_buttons = {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn}
-        param_dict = param_dicts[param_number]
         frame = self.video.current_frame
-        current_state = param_dict.get((limb, frame), None)
-        if current_state is None:
-            new_state = "ON"; param_buttons[param_number].config(bg='lightgreen')
-        elif current_state == "ON":
-            new_state = "OFF"; param_buttons[param_number].config(bg='#E57373')
+
+        # ensure bundle & this limb's record exist
+        b = self._ensure_bundle(frame)
+        rec = b.get(limb) or {"X": [], "Y": [], "Onset": "", "Bodypart": limb, "Look": "", "Zones": [], "Touch": None}
+        b[limb] = rec
+
+        limb_params = self._ensure_limb_params(rec)
+        key = self._limb_param_key_for_index(param_number)
+        prev = limb_params.get(key)
+        # None -> ON -> OFF -> None
+        if prev is None or prev == "":
+            new_state = "ON"
+        elif prev == "ON":
+            new_state = "OFF"
+        elif prev == "OFF":
+            new_state = "None"
         else:
-            new_state = None; param_buttons[param_number].config(bg='lightgray')
-        param_dict[(limb, frame)] = new_state
-        print(f"INFO: {limb} - Parameter {param_number} at Frame {frame} set to {new_state}")
+            new_state = None
+        limb_params[key] = new_state
+
+        # reflect on button color
+        btn = {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn}[param_number]
+        if new_state == "ON":
+            btn.config(bg="lightgreen")
+        elif new_state == "OFF":
+            btn.config(bg="#E57373")
+        else:
+            btn.config(bg="lightgray")
+
+        # mark & redraw (so timeline updates)
+        self.mark_bundle_changed(frame)
+        self.draw_timeline()
 
     def update_limb_parameter_buttons(self):
-        limb = self.option_var_1.get()
         if not self.video: return
+        limb = self.option_var_1.get()
         frame = self.video.current_frame
-        param_dicts = {1: self.video.limb_parameter1, 2: self.video.limb_parameter2, 3: self.video.limb_parameter3}
-        param_buttons = {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn}
-        for param_num in range(1, 4):
-            current_state = param_dicts[param_num].get((limb, frame), None)
-            if current_state == "ON":
-                param_buttons[param_num].config(bg='lightgreen')
-            elif current_state == "OFF":
-                param_buttons[param_num].config(bg='#E57373')
+        b = self.video.frames.get(frame, {})
+        rec = b.get(limb, {}) if isinstance(b, dict) else {}
+        limb_params = rec.get("LimbParams", {}) if isinstance(rec, dict) else {}
+
+        for i, btn in ((1, self.limb_par1_btn), (2, self.limb_par2_btn), (3, self.limb_par3_btn)):
+            key = self._limb_param_key_for_index(i)
+            state = limb_params.get(key)
+            if state == "ON":
+                btn.config(bg="lightgreen")
+            elif state == "OFF":
+                btn.config(bg="#E57373")
             else:
-                param_buttons[param_num].config(bg='lightgray')
+                btn.config(bg="lightgray")
+    def limb_parameter_colors_at_frame(self, frame):
+        """Return Param1..3 colors for the SELECTED limb at a given frame."""
+        limb = self.option_var_1.get()
+        b = self.video.frames.get(frame, {})
+        rec = b.get(limb, {}) if isinstance(b, dict) else {}
+        limb_params = rec.get("LimbParams", {}) if isinstance(rec, dict) else {}
+
+        colors = []
+        for i in (1, 2, 3):
+            key = self._limb_param_key_for_index(i)
+            val = limb_params.get(key)
+            if val == "ON":
+                colors.append("green")
+            elif val == "OFF":
+                colors.append("#E57373")
+            else:
+                colors.append(None)
+        return colors
 
     # --- Notes & selection ---
     def select_frame(self):
@@ -567,63 +838,115 @@ class LabelingApp(tk.Tk):
     def save_note(self):
         print("INFO: Saving note...")
         self.enable_arrow_keys()
-        current_frame = self.video.current_frame
-        note_text = self.note_entry.get()
-        if note_text.strip():
-            self.video.notes[current_frame] = note_text
-        elif current_frame in self.video.notes:
-            del self.video.notes[current_frame]
-        notes_path = self.video.dataNotes_path_to_csv
-        if not notes_path:
-            print("ERROR: Notes CSV path is not set."); return
-        with open(notes_path, mode='w', newline='') as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(['Frame', 'Note'])
-            for frame, note in sorted(self.video.notes.items()):
-                writer.writerow([frame, note])
-        print(f"INFO: Note saved for frame {current_frame}: {note_text}")
-        keyboard.press_and_release('tab')
+
+        idx = self.video.current_frame
+        note_text = (self.note_entry.get() or "").strip()
+
+        # ensure bundle exists, then update Note
+        b = self.video.frames.get(idx)
+        if not isinstance(b, dict):
+            # If you have data_utils.empty_bundle(), prefer importing and using that here.
+            b = {"Note": None, "Params": {}, "LH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "RH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "LL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "RL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []}}
+            self.video.frames[idx] = b
+
+        prev = (b.get("Note") or "").strip()
+        new_val = note_text if note_text else None
+
+        if prev != (new_val or ""):
+            b["Note"] = new_val
+            # mark bundle dirty + print (uses your existing helpers)
+            if hasattr(self, "mark_bundle_changed"):
+                self.mark_bundle_changed(idx)
+            elif isinstance(b, dict):
+                b["Changed"] = True
+            if hasattr(self, "notify_bundle_changed"):
+                self.notify_bundle_changed(idx)
+
+        
+        print(f"INFO: Note saved for frame {idx}: {note_text}")
+        try:
+            import keyboard
+            keyboard.press_and_release('tab')
+        except Exception:
+            pass
+
 
     def update_note_entry(self):
-        current_frame = self.video.current_frame
-        note_text = self.video.notes.get(current_frame, "")
+        if self.video is None:
+            return
+        idx = self.video.current_frame
+        note_text = ""
+
+        b = self.video.frames.get(idx)
+        if isinstance(b, dict):
+            note_text = (b.get("Note") or "")  # bundle-first
+
+        # Fallback (only if you still have legacy self.video.notes around)
+        if not note_text and hasattr(self.video, "notes"):
+            note_text = self.video.notes.get(idx, "") or ""
+
         self.note_entry.delete(0, tk.END)
         self.note_entry.insert(0, note_text)
 
     # --- Save / Export ---
     def save_data(self):
-        print("INFO: Saving...")
-        save_dataset(self.video.dataRH_path_to_csv, self.video.total_frames, self.video.dataRH)
-        save_dataset(self.video.dataLH_path_to_csv, self.video.total_frames, self.video.dataLH)
-        save_dataset(self.video.dataRL_path_to_csv, self.video.total_frames, self.video.dataRL)
-        save_dataset(self.video.dataLL_path_to_csv, self.video.total_frames, self.video.dataLL, with_touch=True)
+        self.preview_before_save(changed_only=True)
+        print("INFO: Saving (unified & export)...")
+        
 
-        save_parameter_to_csv(self.video.dataparameter_1_path_to_csv, self.video.parameter_button1_state_dict)
-        save_parameter_to_csv(self.video.dataparameter_2_path_to_csv, self.video.parameter_button2_state_dict)
-        save_parameter_to_csv(self.video.dataparameter_3_path_to_csv, self.video.parameter_button3_state_dict)
+        base_dir = os.path.dirname(self.video.frames_dir)  # -> Labeled_data/<video>
+        data_dir   = os.path.join(base_dir, "data")
+        export_dir = os.path.join(base_dir, "export")
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(export_dir, exist_ok=True)
+        print(f"DEBUG: Base dir:   {base_dir}")
+        print(f"DEBUG: Data dir:   {data_dir}")
+        print(f"DEBUG: Export dir: {export_dir}")
+        print(f"DEBUG: Frames dir: {self.video.frames_dir}")
+        unified_path = os.path.join(data_dir, f"{self.video_name}_unified.csv")
+        print(f"DEBUG: Writing unified dataset → {unified_path}")
 
-        data_folder = os.path.dirname(self.video.dataRH_path_to_csv)
-        limb_params_path = os.path.join(data_folder, f"{self.video_name}_limb_parameters.csv")
-        save_limb_parameters(limb_params_path, {
-            "Parameter_1": self.video.limb_parameter1,
-            "Parameter_2": self.video.limb_parameter2,
-            "Parameter_3": self.video.limb_parameter3
-        })
+        from data_utils import save_unified_dataset, export_from_unified, extract_zones_from_file
+        save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
 
-        # Export (merged + flipped)
-        base_dir = os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv))
-        export_folder = os.path.join(base_dir, "export")
-        clothes_list = extract_zones_from_file(self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt'))
-        merge_and_flip_export(
-            self.video.dataLH_path_to_csv, self.video.dataLL_path_to_csv,
-            self.video.dataRH_path_to_csv, self.video.dataRL_path_to_csv,
-            [self.video.dataparameter_1_path_to_csv, self.video.dataparameter_2_path_to_csv, self.video.dataparameter_3_path_to_csv],
-            self.video.dataNotes_path_to_csv,
-            limb_params_path,
-            self.video_name, self.frame_rate, self.video.program_version, self.labeling_mode,
-            clothes_list, export_folder
+        clothes_list = extract_zones_from_file(
+            self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
         )
-        print("INFO: Saved & exported.")
+        export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
+        print(f"DEBUG: Writing export dataset → {export_path}")
+
+        # labeling_app.py (inside save_data, before export_from_unified call)
+        param_labels = {
+            "Parameter_1": (self.par1_btn.cget("text") or "Par1"),
+            "Parameter_2": (self.par2_btn.cget("text") or "Par2"),
+            "Parameter_3": (self.par3_btn.cget("text") or "Par3"),
+        }
+        limb_param_labels = {
+            "XX_Parameter_1": (self.limb_par1_btn.cget("text") or "LimbPar1"),
+            "XX_Parameter_2": (self.limb_par2_btn.cget("text") or "LimbPar2"),
+            "XX_Parameter_3": (self.limb_par3_btn.cget("text") or "LimbPar3"),
+        }
+
+        export_from_unified(
+            self.video.frames,
+            export_path,
+            self.video.program_version,
+            self.video_name,
+            self.labeling_mode,
+            self.frame_rate,
+            clothes_list,
+            total_frames=self.video.total_frames,
+            param_labels=param_labels,
+            limb_param_labels=limb_param_labels,
+        )
+        print("INFO: Save completed successfully.")
+        for f, b in self.video.frames.items():
+            if isinstance(b, dict) and b.get("Changed"):
+                b["Changed"] = False
+        print("DEBUG: Cleared bundle 'Changed' flags after save.")
 
     # --- Analysis / Sort / Playback buttons ---
     def analysis(self):
@@ -709,27 +1032,71 @@ class LabelingApp(tk.Tk):
         for d in (data_dir, frames_dir, plots_dir, export_dir): os.makedirs(d, exist_ok=True)
         self.video.frames_dir = frames_dir
 
-        # Prepare limb CSVs
+        # --- Unified-first load ---
+        unified_path = os.path.join(data_dir, f"{video_name}_unified.csv")
+        export_path  = os.path.join(export_dir, f"{video_name}_export.csv")
+
+        from data_utils import (
+            load_unified_dataset, empty_bundle,
+            import_unified_from_export, save_unified_dataset
+        )
+
+        # Load unified (robust: handles 0-byte / header-only files)
+        self.video.frames = load_unified_dataset(unified_path) or {}
+
+        # Rebind LimbViews to the current dict (CRITICAL)
+        self.video.dataRH._frames = self.video.frames
+        self.video.dataLH._frames = self.video.frames
+        self.video.dataRL._frames = self.video.frames
+        self.video.dataLL._frames = self.video.frames
+
+        # Fallback: if unified is empty but export exists, recover once from export
+        if not self.video.frames and os.path.exists(export_path):
+            print("INFO: Unified empty; importing from export for recovery…")
+            self.video.frames = import_unified_from_export(export_path) or {}
+
+            # Rebind again to the recovered dict
+            self.video.dataRH._frames = self.video.frames
+            self.video.dataLH._frames = self.video.frames
+            self.video.dataRL._frames = self.video.frames
+            self.video.dataLL._frames = self.video.frames
+
+            # Persist immediately so next launch is fast & does not depend on export
+            os.makedirs(data_dir, exist_ok=True)
+            save_unified_dataset(unified_path, self.video.total_frames, self.video.frames, changed_only=False)
+            print(f"INFO: Recovery wrote unified → {unified_path}")
+
+        
+
+
+        # Always set these paths (other features derive folders from them)
         for suffix in ['RH', 'LH', 'RL', 'LL']:
             csv_path = os.path.join(data_dir, f"{video_name}{suffix}.csv")
             setattr(self.video, f"data{suffix}_path_to_csv", csv_path)
-            if os.path.exists(csv_path):
-                print(f"INFO: CSV {suffix} already exists; loading.")
-                setattr(self.video, f"data{suffix}", csv_to_dict(csv_path))
+
+        # If unified did not exist BUT legacy limb CSVs do, migrate them once into self.video.frames
+        if not self.video.frames:
+            print("INFO: No unified file found; attempting legacy CSV migration...")
+            any_legacy = False
+            for suffix in ['RH', 'LH', 'RL', 'LL']:
+                csv_path = getattr(self.video, f"data{suffix}_path_to_csv")
+                if os.path.exists(csv_path):
+                    any_legacy = True
+                    d = csv_to_dict(csv_path)
+                    for fr, rec in d.items():
+                        b = self.video.frames.setdefault(fr, empty_bundle())
+                        b[suffix] = rec
+            if any_legacy:
+                print("INFO: Legacy limb CSVs merged into unified in-memory store.")
             else:
-                with open(csv_path, 'w', newline='') as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones', 'Touch'])
+                print("INFO: Starting with an empty unified store.")
 
         # Parameter CSVs
         for name in ['parameter_1', 'parameter_2', 'parameter_3']:
             csv_path = os.path.join(data_dir, f"{video_name}{name}.csv")
             setattr(self.video, f"data{name}_path_to_csv", csv_path)
 
-        # Load parameter states
-        self.video.parameter_button1_state_dict = load_parameter_from_csv(self.video.dataparameter_1_path_to_csv)
-        self.video.parameter_button2_state_dict = load_parameter_from_csv(self.video.dataparameter_2_path_to_csv)
-        self.video.parameter_button3_state_dict = load_parameter_from_csv(self.video.dataparameter_3_path_to_csv)
+        
 
         # Names for parameters (update button text)
         load_parameter_names_into(
@@ -783,6 +1150,9 @@ class LabelingApp(tk.Tk):
                     self.cloth_btn.config(bg="lightgreen")
 
         self.load_video_btn.config(state=tk.DISABLED, bg="gray", fg='lightgray')
+        for b in self.video.frames.values():
+            if isinstance(b, dict):
+                b["Changed"] = False
         print("INFO: Welcome back! I wish you happy labeling session! :)")
 
     # --- Clothes side window ---

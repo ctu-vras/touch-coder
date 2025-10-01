@@ -1,5 +1,33 @@
 import cv2
+# --- top of video_model.py ---
+from typing import Dict
+from data_utils import empty_bundle, FrameBundle
+from collections import UserDict
 
+class LimbView(UserDict):
+    def __init__(self, frames: Dict[int, FrameBundle], limb: str):
+        super().__init__()
+        self._frames = frames
+        self._limb = limb
+
+    def __getitem__(self, frame: int):
+        b = self._frames.setdefault(frame, empty_bundle())
+        return b[self._limb]
+
+    def __setitem__(self, frame: int, rec):
+        b = self._frames.setdefault(frame, empty_bundle())
+        b[self._limb] = rec
+
+    def get(self, frame, default=None):
+        b = self._frames.get(frame)
+        return (b[self._limb] if b and self._limb in b else default)
+
+    def setdefault(self, frame, rec):
+        if frame not in self._frames:
+            self._frames[frame] = empty_bundle()
+        if not self._frames[frame][self._limb]:
+            self._frames[frame][self._limb] = rec
+        return self._frames[frame][self._limb]
 
 class Video:
     def __init__(self, video_path):
@@ -14,14 +42,12 @@ class Video:
         self.data = {}
         self.data_path_to_csv = None
         self.dots = []
-        self.dataRH = {}
-        self.dataRH_path_to_csv = None
-        self.dataLH = {}
-        self.dataLH_path_to_csv = None
-        self.dataRL = {}
-        self.dataRL_path_to_csv = None
-        self.dataLL = {}
-        self.dataLL_path_to_csv = None
+        self.frames: Dict[int, FrameBundle] = {}
+        # Expose limb views so existing code (dataRH/LH/RL/LL) keeps working:
+        self.dataRH = LimbView(self.frames, "RH")
+        self.dataLH = LimbView(self.frames, "LH")
+        self.dataRL = LimbView(self.frames, "RL")
+        self.dataLL = LimbView(self.frames, "LL")
 
         self.is_touchRH = False
         self.is_touchLH = False
@@ -35,7 +61,7 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 6.0
+        self.program_version = 6.1
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None

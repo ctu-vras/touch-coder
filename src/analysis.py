@@ -34,31 +34,22 @@ def do_analysis(folder_path,output_folder,name,debug,frame_rate):
 
         return data_dict, total_frames
 
-    def load_all_4(folder_path,name):
-        # Initialize a dictionary to store the data from each file
+    def load_all_4(folder_path, name):
+        # Read from export file instead of 4 limb CSVs
+        export_dir = os.path.dirname(folder_path.rstrip(os.sep))  # up from .../data to .../
+        export_path = os.path.join(export_dir, "export", f"{name}_export.csv")
+        df = pd.read_csv(export_path, skiprows=6)  # skip meta lines
+        # Build per-limb dicts so the rest of analysis stays unchanged
         data_dicts = []
-        total_frames_dict = {}
-
-        # Define the expected suffixes for each file
-        suffixes = limbs
-
-        # Iterate through each suffix and load the corresponding file
-        i= 0
-        for suffix in suffixes:
-            
-            # Construct the file name by finding the file with the appropriate suffix in the folder
-            file_name = next((f for f in os.listdir(folder_path) if f.endswith(f'{name+suffix}.csv')), None)
-
-            if file_name:
-                file_path = os.path.join(folder_path, file_name)
-                # Load and clean the data
-                data_dict, total_frames = load_and_clean_data(file_path)
-                # Store the data and frame count in the dictionary
-                data_dicts.append(data_dict) 
-                
-            else:
-                if debug:print(f"No file found for suffix: {suffix}")
-            i = i + 1
+        for limb in ['LH', 'RH', 'LL', 'RL']:
+            part = df[['Frame',
+                    f'{limb}_X', f'{limb}_Y', f'{limb}_Onset',
+                    f'{limb}_Bodypart', f'{limb}_Look', f'{limb}_Zones']].copy()
+            part.columns = ['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones']
+            # mimic the old loader: drop rows where X & Y are both empty
+            part = part[~(part['X'].isna() & part['Y'].isna())]
+            data_dicts.append(part.to_dict(orient='records'))
+        total_frames = int(df['Frame'].max()) if len(df) else 0
         return data_dicts, total_frames
 
     def count_touches(data_dict):
