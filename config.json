@@ -1,7 +1,6 @@
-{
-  "diagram_size": "small",
+{ "diagram_scale": 2,
   "new_template": false,
-  "minimal_touch_lenght": 280,
+  "minimal_touch_length": 280,
   "parameter1": "P1",
   "parameter2": "P2",
   "parameter3": "P3",

@@ -38,7 +38,6 @@ class LabelingApp(tk.Tk):
         # Core state (was previously in __init__)
         self.video = None
         self.video_name = None
-        self.diagram_size = None
         self.minimal_touch_lenght = None
         self.NEW_TEMPLATE = False
 
@@ -46,9 +45,9 @@ class LabelingApp(tk.Tk):
         build_ui(self)
 
         # Load config flags that affect UI sizing & behavior
-        self.NEW_TEMPLATE, self.diagram_size, self.minimal_touch_lenght = load_config_flags()
+        self.NEW_TEMPLATE, self.minimal_touch_lenght = load_config_flags()
         print("INFO: Loaded new template:", self.NEW_TEMPLATE)
-        print("INFO: Loaded diagram size:", self.diagram_size)
+        print("INFO: Loaded minimal touch length:", self.minimal_touch_lenght)
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
@@ -143,7 +142,11 @@ class LabelingApp(tk.Tk):
     
     # --- Small helpers / global clicks ---
     def global_click(self, event):
-        if getattr(self, "note_entry", None) and self.focus_get() == self.note_entry and event.widget != self.note_entry:
+        try:
+            focus = self.focus_get()
+        except Exception:
+            focus = None
+        if getattr(self, "note_entry", None) and focus == self.note_entry and event.widget != self.note_entry:
             self.focus_set()
 
     def navigate_left(self, event): self.next_frame(-1)
@@ -186,7 +189,7 @@ class LabelingApp(tk.Tk):
 
         limb_key = f'data{self.option_var_1.get()}'
         limb_data = getattr(self.video, limb_key, {})
-        scale = 1 if self.diagram_size == "large" else 0.5
+        scale = getattr(self, "diagram_scale", 1.0)
         current_frame = self.video.current_frame
 
         rec: FrameRecord | None = limb_data.get(current_frame)
@@ -217,8 +220,8 @@ class LabelingApp(tk.Tk):
     def periodic_print_dot(self):
         self.diagram_canvas.delete("all")
         self.on_radio_click()  # keeps same behavior for image & palette
-        dot_size = 5
-        scale = 1 if self.diagram_size == "large" else 0.5
+        dot_size = 10
+        scale = getattr(self, "diagram_scale", 1.0)
         if self.video and hasattr(self.video, 'data'):
             if self.option_var_1.get() == "RH":
                 data = self.video.dataRH
@@ -250,9 +253,9 @@ class LabelingApp(tk.Tk):
 
     def on_diagram_click(self, event, right):
         onset = "On" if right else "Off"
-        x_pos, y_pos = event.x, event.y
-        scale = 1 if self.diagram_size == "large" else 2
-        x_pos *= scale; y_pos *= scale
+        display_scale = getattr(self, "diagram_scale", 1.0)
+        x_pos = event.x * (1.0 / display_scale)
+        y_pos = event.y * (1.0 / display_scale)
         zone_results = self.find_image_with_white_pixel(x_pos, y_pos)
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
@@ -374,7 +377,7 @@ class LabelingApp(tk.Tk):
             image_path = "icons/LL_new_template.png" if self.NEW_TEMPLATE else "icons/LL.png"
 
         img = Image.open(image_path)
-        scale = 1 if self.diagram_size == "large" else 0.5
+        scale = getattr(self, "diagram_scale", 1.0)
         img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
         self.photo = ImageTk.PhotoImage(img)
         self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
@@ -497,24 +500,24 @@ class LabelingApp(tk.Tk):
 
         canvas_width  = self.timeline2_canvas.winfo_width()
         canvas_height = self.timeline2_canvas.winfo_height()
-        limb = self.option_var_1.get()
+        limb = self.option_var_1.get()  # currently selected limb ("LH","RH","LL","RL")
 
         # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
         on_lines   = []      # x positions of On (green)
         off_lines  = []      # x positions of Off (red)
         intervals  = []      # [(x_on, x_off), ...]
-        param_lines = []     # [(x, color)] from parameter_color_at_frame
+        param_lines = []     # [(x, color)] from GLOBAL parameter_color_at_frame
         limb_param_lines = []  # [(x+dx, color)] from limb_parameter_colors_at_frame
         active_on_x = None
 
-        # deterministic left->right scan
+        # Deterministic left->right scan across frames that exist in memory
         for frame in sorted(self.video.frames.keys()):
-            bundle = self.video.frames[frame]
-            details = bundle.get(limb, {})
+            bundle = self.video.frames.get(frame, {})
+            details = bundle.get(limb, {}) if isinstance(bundle, dict) else {}
 
             x = (frame / self.video.total_frames) * canvas_width
 
-            # --- Onset/Offset collection for intervals + edge markers ---
+            # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
             onset_val = details.get('Onset')
             if onset_val == 'On':
                 on_lines.append(x)
@@ -528,48 +531,43 @@ class LabelingApp(tk.Tk):
                         intervals.append((x1, x2))
                     active_on_x = None
 
-            # --- Parameter markers (global) ---
+            # --- GLOBAL Parameter markers (non-limb) — always visible ---
             col = self.parameter_color_at_frame(frame)
             if col is not None:
                 param_lines.append((x, col))
 
-            # --- Per-limb parameter ticks (up to 3), with small +/-2px offsets ---
-            # Mirrors your timeline #1 behavior
-            if hasattr(self, "limb_parameter_colors_at_frame"):
-                colors = self.limb_parameter_colors_at_frame(frame)
+            # --- Limb-specific parameter ticks (only when a limb is selected) ---
+            #      small +/-2px offsets so the three limb-params can be distinguished
+            if limb in ("LH", "RH", "LL", "RL") and hasattr(self, "limb_parameter_colors_at_frame"):
+                colors = self.limb_parameter_colors_at_frame(frame)  # returns up to 3 colors or None
                 for dx, c in zip((-2, 0, 2), colors):
                     if c:
                         limb_param_lines.append((x + dx, c))
 
-        # Optional: show ongoing touch if no Off yet (choose one):
-        # if active_on_x is not None:
-        #     current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
-        #     intervals.append((active_on_x, current_pos))  # or (active_on_x, canvas_width)
-
-        # --- Draw order: 1) fills, 2) param lines, 3) onset/offset edges, 4) playhead ---
-        # 1) Yellow fills (so lines stay visible)
+        # --- Draw order: 1) fills, 2) global & limb param lines, 3) On/Off edges, 4) playhead ---
+        # 1) Yellow fills
         for x1, x2 in intervals:
             self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
 
-        # 2) Parameter lines (global + per-limb)
+        # 2) Global parameter lines
         for x, c in param_lines:
             self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
 
+        #    Limb-specific parameter ticks for the selected limb
         for x, c in limb_param_lines:
             self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
 
-        # 3) On/Off edge markers on top, so they’re never hidden
+        # 3) On/Off edge markers
         for x in on_lines:
             self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
         for x in off_lines:
             self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
 
-        # 4) Current frame indicator (topmost)
+        # 4) Current frame indicator
         current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
         margin = 2
         current_pos = min(max(current_pos, margin), canvas_width - margin)
         self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
-
     def update_frame_counter(self):
         if self.video:
             current_frame_text = f"{self.video.current_frame} / {self.video.total_frames}"
@@ -984,7 +982,7 @@ class LabelingApp(tk.Tk):
     def ask_labeling_mode(self):
         mode_window = tk.Toplevel(self)
         mode_window.title("Select Labeling Mode")
-        mode_window.geometry("300x150")
+        mode_window.geometry("480x220")
         mode_window.grab_set()
         label = tk.Label(mode_window, text="Choose the labeling mode:", font=("Arial", 12))
         label.pack(pady=10)
@@ -1010,7 +1008,10 @@ class LabelingApp(tk.Tk):
 
         video_path = filedialog.askopenfilename(
             title="Select Video File",
-            filetypes=(("Video files", "*.mp4;*.mov;*.avi;*.mkv;*.flv;*.wmv"), ("All files", "*.*"))
+            filetypes=(
+                ("Video files", "*.mp4 *.MP4 *.mov *.MOV *.avi *.AVI *.mkv *.MKV *.flv *.FLV *.wmv *.WMV"),
+                ("All files", "*.*"),
+            ),
         )
         if not video_path: return
 

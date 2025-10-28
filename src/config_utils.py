@@ -11,9 +11,8 @@ def load_config_flags():
     with open('config.json', 'r') as file:
         config = json.load(file)
         NEW_TEMPLATE = config.get('new_template', False)
-        diagram_size = config.get('diagram_size', 'small')
-        minimal_touch_lenght = config.get('minimal_touch_lenght', '280')
-        return NEW_TEMPLATE, diagram_size, minimal_touch_lenght
+        minimal_touch_length = config.get('minimal_touch_length', '280')
+        return NEW_TEMPLATE, minimal_touch_length
 
 
 def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):

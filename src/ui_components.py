@@ -8,18 +8,17 @@ implements the callback methods (e.g., load_video, on_timeline_click, etc.).
 import json
 import tkinter as tk
 from PIL import Image, ImageTk
-
+import sys
 
 def _load_diagram_scale():
-    """Match original: read diagram_size from config.json and compute scale."""
+    """Read a numeric diagram_scale from config.json; default to 1.0 if missing."""
     try:
+        import json
         with open("config.json", "r") as f:
             cfg = json.load(f)
-        diagram_size = cfg.get("diagram_size", "small")
+        return float(cfg.get("diagram_scale", 1.0))
     except Exception:
-        diagram_size = "small"
-    scale = 1 if diagram_size == "large" else 0.5
-    return diagram_size, scale
+        return 1.0
 
 
 def build_ui(app):
@@ -56,7 +55,8 @@ def build_ui(app):
     app.last_mouse_y = 0
 
     # Also store diagram_size to mirror original (controller later overwrites with config_utils)
-    app.diagram_size, scale = _load_diagram_scale()
+    scale = _load_diagram_scale()
+    app.diagram_scale = scale
 
     # === Containers ===
     app.video_frame = tk.Frame(app, bg='gray')
@@ -82,7 +82,10 @@ def build_ui(app):
     app.timeline_canvas = tk.Canvas(app.timeline_frame, bg='grey', height=50)
     app.timeline_canvas.pack(fill=tk.X, expand=True, pady=(10, 0))
     app.timeline_canvas.bind("<Button-1>", app.on_timeline_click)
-    app.bind_all("<Button-1>", app.global_click, add="+")
+    if sys.platform.startswith("linux"):
+        app.bind("<Button-1>", app.global_click, add="+")   # safer on Linux
+    else:
+        app.bind_all("<Button-1>", app.global_click, add="+")  # keep Windows behavio
 
     # === Controls (top bar) ===
     _build_controls(app)
@@ -108,7 +111,7 @@ def _build_controls(app):
     save_btn = tk.Button(app.control_frame, text="Save", command=app.save_data)
     save_btn.grid(row=0, column=2, padx=5, pady=5)
 
-    analysis_btn = tk.Button(app.control_frame, text="Analysis", command=app.analysis)
+    analysis_btn = tk.Button(app.control_frame, text="Analysis", command=app.analysis, state='disabled')
     analysis_btn.grid(row=0, column=3, padx=5, pady=5)
 
     back_10_frame_btn = tk.Button(app.control_frame, text="<<", command=lambda: app.next_frame(-7))
@@ -231,19 +234,24 @@ def _build_diagram_panel(app, scale):
     separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
     separator.pack(fill="x", padx=5, pady=5)
 
-    # Note entry & helpers (kept on root to mirror original placement)
-    app.note_entry = tk.Entry(app, width=40)
-    app.note_entry.grid(row=2, column=1, padx=5, pady=(5, 60))
-    app.note_entry.bind("<FocusIn>", app.disable_arrow_keys)
-    app.note_entry.bind("<FocusOut>", app.enable_arrow_keys)
-
-    app.save_note_button = tk.Button(app, text="Save Note", command=app.save_note)
-    app.save_note_button.grid(row=2, column=1, padx=(185, 5), pady=5)
-
-    app.select_frame_button = tk.Button(app, text="Select Frame", command=app.select_frame)
-    app.select_frame_button.grid(row=2, column=1, padx=(35, 5), pady=5)
-
     
+
+   
+
+    app.select_frame_button = tk.Button(
+        app.diagram_frame, text="Select Frame", command=app.select_frame, width=15, height=1
+    )
+    app.select_frame_button.pack(side="bottom",padx=5, pady=5)
+     # Buttons
+    app.save_note_button = tk.Button(
+        app.diagram_frame, text="Save Note", command=app.save_note, width=15, height=1
+    )
+    app.save_note_button.pack(side="bottom",padx=5, pady=5)
+
+    # Note entry & helpers (kept on root to mirror original placement)
+    app.note_entry = tk.Entry(app.diagram_frame, width=40)
+    app.note_entry.pack(side="bottom", fill="x", padx=5, pady=5)
+
 
 
 def _bind_navigation(app):
@@ -252,4 +260,11 @@ def _bind_navigation(app):
     app.bind("<Right>", app.navigate_right)
     app.bind("<Shift-Left>", lambda event: app.next_frame(-7))
     app.bind("<Shift-Right>", lambda event: app.next_frame(7))
-    app.bind("<MouseWheel>", app.on_mouse_wheel)
+
+    # Wheel bindings: Windows/Mac vs Linux
+    if sys.platform.startswith("linux"):
+        # Wheel events on X11/Wayland commonly report as Button-4/5
+        app.bind_all("<Button-4>", app.on_mouse_wheel)
+        app.bind_all("<Button-5>", app.on_mouse_wheel)
+    else:
+        app.bind_all("<MouseWheel>", app.on_mouse_wheel)
