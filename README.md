@@ -6,17 +6,47 @@ This application is designed for behavioral researchers to code self-contact (se
 
 ![Showcase](assets/readme_images/showcase.png)
 
-## How to Use
+## Installation & Usage Guide
 
-### Step 1: Download and Extract the ZIP File
+### Windows Installation
+
+#### Step 1: Download and Extract
 
 1. **Download** the ZIP file containing the application. (In the repository click on **Releases** (on the right side) and then download **touch-coderx_x.zip**)
 2. **Extract** the contents of the ZIP file into a folder on your computer.
 
-### Step 2: Run the Application
+#### Step 2: Run the Application
 
 1. Open the extracted folder.
 2. Double-click on `LabelingApplicationx_x.exe` to launch the application.
+
+---
+### Linux Installation
+
+#### Step 1: Clone the Repository
+
+1. Open a terminal and run:
+```bash
+git clone -b master-linux --single-branch https://github.com/ctu-vras/touch-coder.git
+
+cd touch-coder
+```
+#### Step 2: Create and Activate a Virtual Environment
+```bash
+sudo apt install python3 python3-venv python3-pip python3-tk
+python3 -m venv TinyTouch_env
+source TinyTouch_env/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+#### Step 2: Run the Application
+
+Navigate to the `src` directory and start the application (make sure your python virtual enviorment is activated):
+
+```bash
+cd src
+python3 main.py
+```
 
 ## Application Workflow
 

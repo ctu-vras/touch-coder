@@ -44,3 +44,7 @@ Thumbs.db
 venv/
 .env/
 TinyTouch_env/
+
+# Ignore generated sorted frames
+Labeled_data/*/sorted_frames/
+Labeled_data/*/sorted_frames/**
