@@ -35,7 +35,7 @@ from data_utils import (
 import tkinter as tk
 from tkinter import ttk
 
-def custom_confirm_close(root):
+def custom_confirm_close(root,saved: bool):
     win = tk.Toplevel(root)
     win.title("Close Application")
     win.geometry("600x300")
@@ -44,7 +44,7 @@ def custom_confirm_close(root):
 
     msg = tk.Label(
         win,
-        text="Do you want to close the application?\n\nProgress was saved.",
+        text="Do you want to close the application?\n\nProgress was saved." if saved else "Do you want to close the application?\n\n",
         font=("Segoe UI", 11),
         justify="center",
         wraplength=350
@@ -1278,8 +1278,11 @@ class LabelingApp(tk.Tk):
     
 
     def on_close(self):
-        self.save_data()
-        custom_confirm_close(self)
+        saved = False
+        if self.video is not None:
+            self.save_data()
+            saved = True
+        custom_confirm_close(self, saved)
 
     # --- Frame stepping ---
     def next_frame(self, number_of_frames, play=False):

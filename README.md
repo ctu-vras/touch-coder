@@ -32,19 +32,12 @@ git clone -b master-linux --single-branch https://github.com/ctu-vras/touch-code
 cd touch-coder
 ```
 #### Step 2: Install Python 3.12
-Ubuntu 24.04+
+
 ```bash
 sudo apt update
 sudo apt install -y python3.12 python3.12-venv python3.12-tk python3-pip
 ```
-Ubuntu 22.04
-```bash
-sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository ppa:deadsnakes/ppa -y
-sudo apt update
-sudo apt install -y python3.12 python3.12-venv python3.12-tk python3-pip
-```
+
 #### Step 3: Create and Activate a Virtual Environment
 ```bash
 python3.12 -m venv TinyTouch_env
@@ -54,11 +47,8 @@ pip install -r requirements.txt
 ```
 #### Step 4: Run the Application
 
-Navigate to the `src` directory and start the application (make sure your python virtual enviorment is activated):
-
 ```bash
-cd src
-python3 main.py
+python3 src/main.py
 ```
 
 ## Application Workflow
