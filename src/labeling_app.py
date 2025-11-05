@@ -4,6 +4,8 @@ import csv
 import json
 import time
 import shutil
+from tkinter import ttk
+from turtle import right
 import cv2
 import tkinter as tk
 from tkinter import messagebox, filedialog
@@ -30,7 +32,34 @@ from data_utils import (
     save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file,
     FrameRecord
 )
+import tkinter as tk
+from tkinter import ttk
 
+def custom_confirm_close(root):
+    win = tk.Toplevel(root)
+    win.title("Close Application")
+    win.geometry("600x300")
+    win.resizable(True, True)
+    win.grab_set()  # makes it modal
+
+    msg = tk.Label(
+        win,
+        text="Do you want to close the application?\n\nProgress will be saved.",
+        font=("Segoe UI", 11),
+        justify="center",
+        wraplength=350
+    )
+    msg.pack(expand=True, fill="both", padx=20, pady=20)
+
+    btn_frame = tk.Frame(win)
+    btn_frame.pack(pady=10)
+
+    def on_yes():
+        win.destroy()
+        root.destroy()
+
+    ttk.Button(btn_frame, text="OK", command=on_yes).pack(side="left", padx=10)
+    ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side="left", padx=10)
 class LabelingApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -51,7 +80,7 @@ class LabelingApp(tk.Tk):
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
-        self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
+        #self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
 
         # Diagram init
         self.init_diagram()
@@ -64,6 +93,7 @@ class LabelingApp(tk.Tk):
         if not isinstance(rec.get("LimbParams"), dict):
             rec["LimbParams"] = {}
         return rec["LimbParams"]
+    
     def _param_next_state(self, current):
         # Cycle: None -> "ON" -> "OFF" -> "ON" ...
         if current is None or current == "":
@@ -83,6 +113,7 @@ class LabelingApp(tk.Tk):
         if b.get("Note") != text:
             b["Note"] = text
             self.mark_bundle_changed(idx)
+    
     def _ensure_bundle(self, idx: int):
         b = self.video.frames.get(idx)
         if not isinstance(b, dict):
@@ -182,35 +213,74 @@ class LabelingApp(tk.Tk):
             self.next_frame(1)
 
     def on_middle_click(self, event=None):
+        # mouse position in display coords; convert to data coords using diagram_scale
         if event is None or isinstance(event, tk.Event):
-            x_pos, y_pos = self.last_mouse_x, self.last_mouse_y
+            x_disp, y_disp = self.last_mouse_x, self.last_mouse_y
         else:
-            x_pos, y_pos = event.x, event.y
+            x_disp, y_disp = event.x, event.y
 
-        limb_key = f'data{self.option_var_1.get()}'
-        limb_data = getattr(self.video, limb_key, {})
         scale = getattr(self, "diagram_scale", 1.0)
+        x_pos = x_disp * (1.0 / scale)
+        y_pos = y_disp * (1.0 / scale)
+
         current_frame = self.video.current_frame
+        option = self.option_var_1.get()
 
-        rec: FrameRecord | None = limb_data.get(current_frame)
-        if rec:
-            rec: FrameRecord = limb_data[current_frame]
-            xs = rec.get('X', []); ys = rec.get('Y', []); zones = rec.get('Zones', [])
-            closest_distance = float('inf'); closest_index = None
-            for index, (x, y) in enumerate(zip(xs, ys)):
-                d = ((x*scale - x_pos)**2 + (y*scale - y_pos)**2)**0.5
-                if d <= 20 and d < closest_distance:
-                    closest_distance = d; closest_index = index
-            if closest_index is not None:
-                del xs[closest_index]; del ys[closest_index]
-                if closest_index < len(zones): del zones[closest_index]
-                if not xs:  # no points left -> drop record
-                    del limb_data[current_frame]
-                else:
-                    rec['changed'] = True
+        target_attr = f"data{option}" if hasattr(self.video, f"data{option}") else "data"
+        target_data = getattr(self.video, target_attr, {})
 
-        
-        self.mark_bundle_changed()
+        rec = target_data.get(current_frame)
+        if not isinstance(rec, dict):
+            return  # nothing to delete
+
+        xs = rec.get('X', [])
+        ys = rec.get('Y', [])
+        zones = rec.get('Zones', [])
+
+        # normalize Zones to list-of-lists (to align with X/Y)
+        if zones and isinstance(zones[0], (int, str)):
+            zones = [[z] for z in zones]
+            rec['Zones'] = zones
+
+        if not xs or not ys:
+            return
+
+        # find closest point (euclidean in data coords)
+        closest_idx = None
+        closest_d2 = float('inf')
+        for i, (x, y) in enumerate(zip(xs, ys)):
+            d2 = (x - x_pos) * (x - x_pos) + (y - y_pos) * (y - y_pos)
+            if d2 < closest_d2:
+                closest_d2 = d2
+                closest_idx = i
+
+        # threshold in data coords (≈20 px in display); translates to 20/scale
+        if closest_idx is not None and closest_d2 <= (20.0 / scale) ** 2:
+            # delete this point and its zones bucket (if present)
+            del xs[closest_idx]
+            del ys[closest_idx]
+            if isinstance(zones, list) and closest_idx < len(zones):
+                del zones[closest_idx]
+
+            if not xs:  # no points left -> clear the record to prevent export leakage
+                target_data[current_frame] = {
+                    "X": [],
+                    "Y": [],
+                    "Onset": "",          # important: clear onset
+                    "Bodypart": option,   # keep limb name for consistency if needed
+                    "Look": "No",
+                    "Zones": [],
+                    "Touch": None,
+                }
+            else:
+                rec['X'] = xs
+                rec['Y'] = ys
+                rec['Zones'] = zones
+                rec['Look'] = "No"  # or keep existing
+                # keep Onset as-is for remaining points; you can also coerce if you prefer:
+                # rec['Onset'] = "ON" if any remaining were added with ON else ""
+
+            self.mark_bundle_changed()
 
     # --- Diagram init & routine render ---
     def init_diagram(self):
@@ -235,9 +305,9 @@ class LabelingApp(tk.Tk):
             frame_data: FrameRecord | dict = data.get(self.video.current_frame, {})
             xs = frame_data.get('X', []) if frame_data else []
             ys = frame_data.get('Y', []) if frame_data else []
-            onset = frame_data.get('Onset', "Off") if frame_data else "Off"
+            onset = frame_data.get('Onset', "OFF") if frame_data else "OFF"
             for x, y in zip(xs, ys):
-                color = 'green' if onset == "On" else 'red'
+                color = 'green' if onset == "ON" else 'red'
                 self.diagram_canvas.create_oval(x*scale - dot_size, y*scale - dot_size,
                                                 x*scale + dot_size, y*scale + dot_size, fill=color)
             # after drawing the filled dots from the current frame:
@@ -252,11 +322,12 @@ class LabelingApp(tk.Tk):
         self.after(300, self.periodic_print_dot)
 
     def on_diagram_click(self, event, right):
-        onset = "On" if right else "Off"
+        onset = "ON" if right else "OFF"
         display_scale = getattr(self, "diagram_scale", 1.0)
         x_pos = event.x * (1.0 / display_scale)
         y_pos = event.y * (1.0 / display_scale)
-        zone_results = self.find_image_with_white_pixel(x_pos, y_pos)
+        zone_results = list(self.find_image_with_white_pixel(x_pos, y_pos))  # list for stability
+
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
 
@@ -264,41 +335,45 @@ class LabelingApp(tk.Tk):
         target_data = getattr(self.video, target_attr, {})
         setattr(self.video, f"is_touch{option}", True)
 
-       # --- DEBUG before change
-        print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={list(zone_results)}")
+        print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={zone_results}")
 
-        existing = target_data.get(current_frame)  # <-- USE .get() on LimbView
+        existing = target_data.get(current_frame)
         if not isinstance(existing, dict) or (not existing.get('X') and not existing.get('Y')):
-            rec: FrameRecord = {
+            rec = {
                 "X": [int(x_pos)],
                 "Y": [int(y_pos)],
                 "Onset": onset,
                 "Bodypart": option,
                 "Look": "No",
-                "Zones": list(zone_results),
+                # IMPORTANT: store zones per point (list-of-lists)
+                "Zones": [zone_results],   # <- one entry per point
                 "Touch": None,
             }
             target_data[current_frame] = rec
         else:
-            rec: FrameRecord = existing
+            rec = existing
             rec.setdefault('X', []).append(int(x_pos))
             rec.setdefault('Y', []).append(int(y_pos))
+
+            # normalize Zones to list-of-lists if older shape is present
             zones = rec.get('Zones', [])
-            if not isinstance(zones, list):
-                zones = list(zone_results)
-            else:
-                zones.extend(zone_results)
+            if zones and zones and isinstance(zones[0], (int, str)):
+                # legacy shape -> convert to list-of-lists pairing length with X
+                zones = [[z] for z in zones]
             rec['Zones'] = zones
+            zones.append(zone_results)  # one zones bucket per point
+
             rec['Bodypart'] = option
             rec['Onset'] = onset
             rec['Look'] = "No"
-            
 
-        # --- DEBUG after
         self.mark_bundle_changed()
+
         rec = target_data.get(current_frame, {})
-        print(f"CLICK:  after  frame={current_frame:>5} limb={option} onset={rec.get('Onset')} "
-            f"points={len(rec.get('X', []))} zones={rec.get('Zones', [])}")
+        print(
+            f"CLICK:  after  frame={current_frame:>5} limb={option} onset={rec.get('Onset')} "
+            f"points={len(rec.get('X', []))} zones_len={len(rec.get('Zones', []))}"
+        )
     
     def preview_before_save(self, changed_only: bool = True):
         """
@@ -335,8 +410,8 @@ class LabelingApp(tk.Tk):
     
     def find_last_green(self, _unused_data=None):
         """
-        Set self.video.last_green to the last 'On' points for the selected limb
-        at or before the current frame; clear when an 'Off' is encountered first.
+        Set self.video.last_green to the last 'ON' points for the selected limb
+        at or before the current frame; clear when an 'OFF' is encountered first.
         """
         if not (self.video and isinstance(self.video.frames, dict)):
             self.video.last_green = [(None, None)]
@@ -353,11 +428,11 @@ class LabelingApp(tk.Tk):
             rec = b.get(limb, {}) if isinstance(b, dict) else {}
 
             onset = rec.get("Onset")
-            if onset == "Off":
+            if onset == "OFF":
                 # an explicit Off cancels the ghost
                 self.video.last_green = [(None, None)]
                 return
-            if onset == "On":
+            if onset == "ON":
                 xs = rec.get("X", []) or []
                 ys = rec.get("Y", []) or []
                 self.video.last_green = list(zip(xs, ys)) if xs and ys else [(None, None)]
@@ -451,7 +526,7 @@ class LabelingApp(tk.Tk):
             if not xs:
                 return self.color_during if self.is_touch_timeline else 'lightgrey'
             if len(xs) >= 1 and xs[0] is not None:
-                if details.get('Onset') == 'On':
+                if details.get('Onset') == 'ON':
                     self.is_touch_timeline = True; return 'lightgreen'
                 else:
                     self.is_touch_timeline = False; return '#E57373'
@@ -519,11 +594,11 @@ class LabelingApp(tk.Tk):
 
             # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
             onset_val = details.get('Onset')
-            if onset_val == 'On':
+            if onset_val == 'ON':
                 on_lines.append(x)
                 if active_on_x is None:
                     active_on_x = x
-            elif onset_val == 'Off':
+            elif onset_val == 'OFF':
                 off_lines.append(x)
                 if active_on_x is not None:
                     x1, x2 = (active_on_x, x) if active_on_x <= x else (x, active_on_x)
@@ -568,6 +643,7 @@ class LabelingApp(tk.Tk):
         margin = 2
         current_pos = min(max(current_pos, margin), canvas_width - margin)
         self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
+    
     def update_frame_counter(self):
         if self.video:
             current_frame_text = f"{self.video.current_frame} / {self.video.total_frames}"
@@ -795,6 +871,7 @@ class LabelingApp(tk.Tk):
                 btn.config(bg="#E57373")
             else:
                 btn.config(bg="lightgray")
+    
     def limb_parameter_colors_at_frame(self, frame):
         """Return Param1..3 colors for the SELECTED limb at a given frame."""
         limb = self.option_var_1.get()
@@ -870,7 +947,6 @@ class LabelingApp(tk.Tk):
             keyboard.press_and_release('tab')
         except Exception:
             pass
-
 
     def update_note_entry(self):
         if self.video is None:
@@ -1185,15 +1261,10 @@ class LabelingApp(tk.Tk):
                 f.write(f"Dot ID {dot_id}: X={x}, Y={y}, Zones={zones_str}\n")
         print("INFO: Clothes saved")
 
-    # --- Closing ---
+    
+
     def on_close(self):
-        if messagebox.askokcancel("Close Aplication", "Do you want to close the aplication?"):
-            if self.video:
-                print("INFO: Closing...")
-                self.save_data()
-                print("INFO: Get some rest, you deserve it!")
-                print("INFO: See you soon!")
-            self.destroy()
+        custom_confirm_close(self)
 
     # --- Frame stepping ---
     def next_frame(self, number_of_frames, play=False):

@@ -18,7 +18,7 @@ import os
 class FrameRecord(TypedDict):
     X: List[int]                 # 0+ points in X
     Y: List[int]                 # 0+ points in Y (aligned with X)
-    Onset: str                   # "On" | "Off" | ""
+    Onset: str                   # "ON" | "OFF" | ""
     Bodypart: str                # "LH"|"RH"|"LL"|"RL"|"" (for the owning limb CSV this is redundant, but present)
     Look: str                    # "Yes"|"No"|""
     Zones: List[str]             # always list, may be []
@@ -508,7 +508,7 @@ def save_dataset(csv_path, total_frames, data, with_touch: bool = False):
             zones = json.dumps(rec.get('Zones', []) or [])
             touch_val = ''
             if with_touch and onset:
-                touch_val = 1 if onset == "On" else 0
+                touch_val = 1 if onset == "ON" else 0
             elif rec.get('Touch') is not None:
                 touch_val = rec['Touch']
             writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones, touch_val])

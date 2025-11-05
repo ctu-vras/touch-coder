@@ -61,7 +61,7 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = 6.1
+        self.program_version = "6.2 (Linux)"
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
