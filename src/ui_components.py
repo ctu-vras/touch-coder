@@ -161,7 +161,7 @@ def _build_controls(app):
 def _build_diagram_panel(app, scale):
     # radio group for limb selector
     app.option_var_1 = tk.StringVar()
-    app.option_var_1.set("LH")
+    app.option_var_1.set("RH")
     # === Diagram canvas EXACTLY like original ===
     # original used icons/diagram0.png, scaled size, and packed inside diagram_frame
     base_w, base_h = 450, 696
@@ -189,13 +189,13 @@ def _build_diagram_panel(app, scale):
     label_after_separator1.pack(anchor="n", pady=(5, 2))
 
     # NOTE: The original text/values asymmetry is preserved intentionally.
-    rb = tk.Radiobutton(app.diagram_frame, text="Right Hand", variable=app.option_var_1, value="LH", bg='lightgrey')
+    rb = tk.Radiobutton(app.diagram_frame, text="Right Hand", variable=app.option_var_1, value="RH", bg='lightgrey')
     rb.pack(anchor="n")
-    rb = tk.Radiobutton(app.diagram_frame, text="Left Hand", variable=app.option_var_1, value="RH", bg='lightgrey')
+    rb = tk.Radiobutton(app.diagram_frame, text="Left Hand", variable=app.option_var_1, value="LH", bg='lightgrey')
     rb.pack(anchor="n")
-    rb = tk.Radiobutton(app.diagram_frame, text="Right Leg", variable=app.option_var_1, value="LL", bg='lightgrey')
+    rb = tk.Radiobutton(app.diagram_frame, text="Right Leg", variable=app.option_var_1, value="RL", bg='lightgrey')
     rb.pack(anchor="n")
-    rb = tk.Radiobutton(app.diagram_frame, text="Left Leg", variable=app.option_var_1, value="RL", bg='lightgrey')
+    rb = tk.Radiobutton(app.diagram_frame, text="Left Leg", variable=app.option_var_1, value="LL", bg='lightgrey')
     rb.pack(anchor="n")
 
     separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")

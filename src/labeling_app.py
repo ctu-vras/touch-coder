@@ -44,7 +44,7 @@ def custom_confirm_close(root):
 
     msg = tk.Label(
         win,
-        text="Do you want to close the application?\n\nProgress will be saved.",
+        text="Do you want to close the application?\n\nProgress was saved.",
         font=("Segoe UI", 11),
         justify="center",
         wraplength=350
@@ -55,6 +55,7 @@ def custom_confirm_close(root):
     btn_frame.pack(pady=10)
 
     def on_yes():
+        
         win.destroy()
         root.destroy()
 
@@ -1003,6 +1004,19 @@ class LabelingApp(tk.Tk):
             "XX_Parameter_2": (self.limb_par2_btn.cget("text") or "LimbPar2"),
             "XX_Parameter_3": (self.limb_par3_btn.cget("text") or "LimbPar3"),
         }
+        # NEW: write JSON sidecar with metadata (instead of stuffing CSV header)
+        from data_utils import write_export_metadata
+        meta_path = os.path.join(export_dir, f"{self.video_name}_metadata.json")
+        write_export_metadata(
+            meta_path=meta_path,
+            program_version=self.video.program_version,
+            video_name=self.video_name,
+            labeling_mode=self.labeling_mode,
+            frame_rate=self.frame_rate,
+            clothes_list=clothes_list,
+            param_labels=param_labels,
+            limb_param_labels=limb_param_labels,
+        )
 
         export_from_unified(
             self.video.frames,
@@ -1264,6 +1278,7 @@ class LabelingApp(tk.Tk):
     
 
     def on_close(self):
+        self.save_data()
         custom_confirm_close(self)
 
     # --- Frame stepping ---

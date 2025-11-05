@@ -35,6 +35,31 @@ class FrameBundle(TypedDict):
     Params: Dict[str, Optional[str]]
     Changed: NotRequired[bool]   # per-frame (global) params
 
+def write_export_metadata(meta_path: str,
+                          program_version,
+                          video_name,
+                          labeling_mode,
+                          frame_rate,
+                          clothes_list,
+                          param_labels: dict | None = None,
+                          limb_param_labels: dict | None = None) -> None:
+    """
+    Writes a JSON sidecar with all non-tabular export metadata that used to be
+    stuffed into the first 5 lines of *_export.csv.
+    """
+    meta = {
+        "Program Version": program_version,
+        "Video Name": video_name,
+        "Labeling Mode": labeling_mode,
+        "Frame Rate": frame_rate,
+        "Zones Covered With Clothes": clothes_list,
+        "Param Labels": param_labels or {},
+        "Limb Param Labels": limb_param_labels or {},
+    }
+    os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+
 def _prepend_header(
     path,
     program_version,
@@ -251,7 +276,13 @@ def import_unified_from_export(export_csv_path: str) -> Dict[int, FrameBundle]:
     if not (export_csv_path and os.path.exists(export_csv_path)):
         return frames
     try:
-        df = pd.read_csv(export_csv_path, skiprows=6)
+        skip = 0
+        with open(export_csv_path, "r", encoding="utf-8", errors="ignore") as fh:
+            first = (fh.readline() or "").strip()
+            if first.startswith("Program Version:"):
+                # legacy export with 5 meta lines + 1 blank line
+                skip = 6
+        df = pd.read_csv(export_csv_path, skiprows=skip)
     except Exception as e:
         print(f"ERROR: import_unified_from_export read failed: {e}")
         return frames
@@ -391,6 +422,7 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     df.to_csv(out_csv, index=False)
 
     # Keep 5-line header; append label mappings to the last line
+    '''
     _prepend_header(
         out_csv,
         program_version,
@@ -400,7 +432,8 @@ def export_from_unified(frames: Dict[int, FrameBundle],
         clothes_list,
         param_labels=param_labels,
         limb_param_labels=limb_param_labels,
-    )
+    )'''
+    # CSV remains clean (no preamble). Metadata is written separately by caller.
     print(f"DEBUG: Export → {out_csv} (rows={len(rows)})")
 
 def preview_lines_for_save(frames: Dict[int, FrameBundle],
