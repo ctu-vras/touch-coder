@@ -5,17 +5,17 @@ It takes a controller object (your LabelingApp instance) that already
 implements the callback methods (e.g., load_video, on_timeline_click, etc.).
 """
 
-import json
 import tkinter as tk
 from PIL import Image, ImageTk
 import sys
 
+from config_utils import load_config
+from resource_utils import resource_path
+
 def _load_diagram_scale():
     """Read a numeric diagram_scale from config.json; default to 1.0 if missing."""
     try:
-        import json
-        with open("config.json", "r") as f:
-            cfg = json.load(f)
+        cfg = load_config()
         return float(cfg.get("diagram_scale", 1.0))
     except Exception:
         return 1.0
@@ -23,9 +23,7 @@ def _load_diagram_scale():
 def _load_dot_size():
     """Read a numeric dot_size from config.json; default to 10 if missing."""
     try:
-        import json
-        with open("config.json", "r") as f:
-            cfg = json.load(f)
+        cfg = load_config()
         return float(cfg.get("dot_size", 10))
     except Exception:
         return 10.0
@@ -208,7 +206,7 @@ def _build_diagram_panel(app, scale):
     app.diagram_canvas.pack(padx=10, pady=10, side="top", anchor="n")
 
     try:
-        img = Image.open("icons/diagram0.png")
+        img = Image.open(resource_path("icons/diagram0.png"))
         img = img.resize((w, h), Image.LANCZOS)
         app.photo = ImageTk.PhotoImage(img)
         app.diagram_canvas.create_image(0, 0, anchor="nw", image=app.photo)

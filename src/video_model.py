@@ -1,5 +1,6 @@
 import cv2
 # --- top of video_model.py ---
+import sys
 from typing import Dict
 from data_utils import empty_bundle, FrameBundle
 from collections import UserDict
@@ -61,7 +62,13 @@ class Video:
         self.parameter_button2_state_dict = {}
         self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        self.program_version = "6.3 (Linux)"
+        
+
+        if sys.platform.startswith("win"):
+            self.program_version = "7.0 (Windows)"
+        elif sys.platform.startswith("linux"):
+            self.program_version = "7.0 (Linux)"
+        
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None

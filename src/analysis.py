@@ -12,6 +12,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from config_utils import load_config
+from resource_utils import resource_path
 
 LIMBS = ["LH", "RH", "LL", "RL"]
 
@@ -505,8 +507,7 @@ def _create_touch_duration_histogram(touch_durations_list, frame_rate, limbs, ou
 
 def _read_new_template_flag():
     try:
-        with open("config.json", "r") as f:
-            cfg = json.load(f)
+        cfg = load_config()
         return bool(cfg.get("new_template", False))
     except Exception:
         return False
@@ -519,7 +520,7 @@ def _zone_sort_key(zone: str):
 
 
 def _get_zone_list(new_template: bool):
-    zones_dir = "icons/zones3_new_template" if new_template else "icons/zones3"
+    zones_dir = resource_path("icons/zones3_new_template" if new_template else "icons/zones3")
     zones = []
     try:
         for filename in os.listdir(zones_dir):
@@ -597,17 +598,17 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate):
 
     if new_template:
         image_paths = [
-            "icons/LH_new_template.png",
-            "icons/RH_new_template.png",
-            "icons/LL_new_template.png",
-            "icons/RL_new_template.png",
+            resource_path("icons/LH_new_template.png"),
+            resource_path("icons/RH_new_template.png"),
+            resource_path("icons/LL_new_template.png"),
+            resource_path("icons/RL_new_template.png"),
         ]
     else:
         image_paths = [
-            "icons/LH.png",
-            "icons/RH.png",
-            "icons/LL.png",
-            "icons/RL.png",
+            resource_path("icons/LH.png"),
+            resource_path("icons/RH.png"),
+            resource_path("icons/LL.png"),
+            resource_path("icons/RL.png"),
         ]
     _plot_touch_visualization_all_4(limb_rows, image_paths, output_folder)
 

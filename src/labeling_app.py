@@ -4,6 +4,7 @@ import csv
 import json
 import time
 import shutil
+import re
 from tkinter import ttk
 from turtle import right
 import cv2
@@ -18,7 +19,7 @@ import analysis
 from sort_frames import process_touch_data_strict_transitions
 
 # Split-out modules
-from cloth_app import ClothApp
+from cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
 from video_model import Video
 from ui_components import build_ui
 from data_utils import (
@@ -42,6 +43,7 @@ from data_utils import (
 from perf_utils import PerfLogger
 import tkinter as tk
 from tkinter import ttk
+from resource_utils import resource_path
 
 def custom_confirm_close(root,saved: bool):
     win = tk.Toplevel(root)
@@ -79,6 +81,7 @@ class LabelingApp(tk.Tk):
         self.video_name = None
         self.minimal_touch_lenght = None
         self.NEW_TEMPLATE = False
+        self.clothes_diagram_scale = DEFAULT_CLOTH_DIAGRAM_SCALE
 
         # Build UI (creates frames, widgets, binds events; sets many attributes)
         build_ui(self)
@@ -475,13 +478,13 @@ class LabelingApp(tk.Tk):
 
     def on_radio_click(self):
         if self.option_var_1.get() == "RH":
-            image_path = "icons/RH_new_template.png" if self.NEW_TEMPLATE else "icons/RH.png"
+            image_path = resource_path("icons/RH_new_template.png" if self.NEW_TEMPLATE else "icons/RH.png")
         elif self.option_var_1.get() == "LH":
-            image_path = "icons/LH_new_template.png" if self.NEW_TEMPLATE else "icons/LH.png"
+            image_path = resource_path("icons/LH_new_template.png" if self.NEW_TEMPLATE else "icons/LH.png")
         elif self.option_var_1.get() == "RL":
-            image_path = "icons/RL_new_template.png" if self.NEW_TEMPLATE else "icons/RL.png"
+            image_path = resource_path("icons/RL_new_template.png" if self.NEW_TEMPLATE else "icons/RL.png")
         else:  # LL
-            image_path = "icons/LL_new_template.png" if self.NEW_TEMPLATE else "icons/LL.png"
+            image_path = resource_path("icons/LL_new_template.png" if self.NEW_TEMPLATE else "icons/LL.png")
 
         img = Image.open(image_path)
         scale = getattr(self, "diagram_scale", 1.0)
@@ -497,7 +500,7 @@ class LabelingApp(tk.Tk):
         import cv2, os
         with self.perf.time("find_image_with_white_pixel"):
             x = int(x); y = int(y)
-            directory = "icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3"
+            directory = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
             for filename in os.listdir(directory):
                 fp = os.path.join(directory, filename)
                 if os.path.isfile(fp) and fp.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -1364,10 +1367,51 @@ class LabelingApp(tk.Tk):
         if self.video is None:
             print("ERROR: First select video")
         else:
-            ClothApp(self, self.update_data_clothes)
+            file_path = self.video.clothes_file_path
+            if not file_path and self.video_name:
+                data_dir = os.path.join("Labeled_data", self.video_name, "data")
+                file_path = os.path.join(data_dir, f"{self.video_name}_clothes.txt")
+            scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
+            initial_points = self._load_clothes_points_from_file(file_path, scale)
+            ClothApp(
+                self,
+                self.update_data_clothes,
+                initial_points=initial_points,
+                diagram_scale=scale,
+            )
 
-    def update_data_clothes(self, dots):
+    def _load_clothes_points_from_file(self, file_path, display_scale):
+        if not file_path or not os.path.exists(file_path):
+            return []
+        file_scale = None
+        points = []
+        with open(file_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.lower().startswith("diagramscale:"):
+                    try:
+                        file_scale = float(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        file_scale = None
+                    continue
+                if "X=" in line and "Y=" in line:
+                    match = re.search(r"X=([-\d.]+),\s*Y=([-\d.]+)", line)
+                    if match:
+                        x = float(match.group(1))
+                        y = float(match.group(2))
+                        points.append((x, y))
+        if file_scale is None:
+            file_scale = 0.5
+        if file_scale <= 0:
+            file_scale = display_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
+        display_scale = display_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
+        scale_ratio = display_scale / file_scale
+        return [(x * scale_ratio, y * scale_ratio) for x, y in points]
+
+    def update_data_clothes(self, dots, diagram_scale=None):
         self.data_clothes = dots
+        if diagram_scale:
+            self.clothes_diagram_scale = float(diagram_scale)
         print("Data clothes updated:", self.data_clothes)
         self.save_clothes_to_text()
         self.cloth_btn.config(bg="lightgreen")
@@ -1380,10 +1424,14 @@ class LabelingApp(tk.Tk):
         os.makedirs(data_folder, exist_ok=True)
         text_file_path = os.path.join(data_folder, f"{self.video_name}_clothes.txt")
         self.video.clothes_file_path = text_file_path
+        scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
         with open(text_file_path, mode='w') as f:
             f.write("Coordinates and Zones for Clothing Items:\n")
+            f.write(f"DiagramScale: {scale}\n")
             for dot_id, (x, y) in self.data_clothes.items():
-                zones = self.find_image_with_white_pixel(2*x, 2*y)
+                if scale == 0:
+                    scale = DEFAULT_CLOTH_DIAGRAM_SCALE
+                zones = self.find_image_with_white_pixel(x / scale, y / scale)
                 zones_str = ','.join(zones)
                 f.write(f"Dot ID {dot_id}: X={x}, Y={y}, Zones={zones_str}\n")
         print("INFO: Clothes saved")

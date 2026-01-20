@@ -51,6 +51,22 @@ pip install -r requirements.txt
 python3 src/main.py
 ```
 
+---
+### Linux App (single file, PyInstaller)
+
+This produces a single executable you can double-click. Build on Linux only.
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+python -m PyInstaller TinyTouch.spec
+```
+
+The output binary is in `dist/TinyTouch`. On first launch, `config.json` is copied next to the
+executable so you can edit it without unpacking anything.
+
 ## Application Workflow
 
 1. **Prepare Video and Frames:**

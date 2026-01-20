@@ -4,24 +4,51 @@ Config loading helpers used by the controller and UI.
 """
 
 import json
+import os
+import shutil
 from PIL import Image, ImageTk
+
+from resource_utils import get_app_dir, resource_path
+
+
+def get_config_path() -> str:
+    return os.path.join(get_app_dir(), "config.json")
+
+
+def _ensure_config_file() -> str:
+    config_path = get_config_path()
+    if os.path.exists(config_path):
+        return config_path
+
+    bundled_config = resource_path("config.json")
+    if os.path.exists(bundled_config):
+        try:
+            shutil.copyfile(bundled_config, config_path)
+            return config_path
+        except Exception:
+            return bundled_config
+
+    return config_path
 
 
 def load_config():
     try:
-        with open('config.json', 'r') as file:
+        config_path = _ensure_config_file()
+        with open(config_path, 'r') as file:
             return json.load(file)
     except Exception:
         return {}
 
 
 def save_config(config: dict) -> None:
-    with open('config.json', 'w') as file:
+    config_path = _ensure_config_file()
+    with open(config_path, 'w') as file:
         json.dump(config, file, indent=2, sort_keys=False)
 
 
 def load_config_flags():
-    with open('config.json', 'r') as file:
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
         config = json.load(file)
         NEW_TEMPLATE = config.get('new_template', False)
         minimal_touch_length = config.get('minimal_touch_length', '280')
@@ -29,7 +56,8 @@ def load_config_flags():
 
 
 def load_perf_config():
-    with open('config.json', 'r') as file:
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
         config = json.load(file)
         enabled = bool(config.get('perf_enabled', False))
         log_every_s = float(config.get('perf_log_every_s', 2.0))
@@ -38,7 +66,8 @@ def load_perf_config():
 
 
 def load_display_limits():
-    with open('config.json', 'r') as file:
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
         config = json.load(file)
         max_w = config.get('max_display_width', 0)
         max_h = config.get('max_display_height', 0)
@@ -61,7 +90,8 @@ def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
     par_buttons: dict {1: button, 2: button, 3: button}
     limb_par_buttons: dict {1: button, 2: button, 3: button}
     """
-    with open('config.json', 'r') as file:
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
         config = json.load(file)
         p1 = config.get('parameter1', 'Parameter 1')
         p2 = config.get('parameter2', 'Parameter 2')

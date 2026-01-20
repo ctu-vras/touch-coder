@@ -3,7 +3,11 @@
   "Video Name": "cat3",
   "Labeling Mode": "Normal",
   "Frame Rate": 25.0,
-  "Zones Covered With Clothes": null,
+  "Zones Covered With Clothes": [
+    "L",
+    "K",
+    "J"
+  ],
   "Param Labels": {
     "Parameter_1": "P1",
     "Parameter_2": "P2",

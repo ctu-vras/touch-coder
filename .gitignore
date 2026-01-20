@@ -41,6 +41,7 @@ Labeled_data/cat3_mp4/data/**
 Thumbs.db
 
 # Ignore virtual environments
+.venv/
 venv/
 .env/
 TinyTouch_env/
