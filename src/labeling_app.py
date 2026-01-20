@@ -26,12 +26,20 @@ from data_utils import (
     save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file
 )
 from frame_utils import check_items_count, create_frames
-from config_utils import load_config_flags, load_parameter_names_into
+from config_utils import (
+    load_config,
+    save_config,
+    load_config_flags,
+    load_parameter_names_into,
+    load_perf_config,
+    load_display_limits,
+)
 from data_utils import (
     csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
     save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file,
     FrameRecord
 )
+from perf_utils import PerfLogger
 import tkinter as tk
 from tkinter import ttk
 
@@ -79,6 +87,15 @@ class LabelingApp(tk.Tk):
         self.NEW_TEMPLATE, self.minimal_touch_lenght = load_config_flags()
         print("INFO: Loaded new template:", self.NEW_TEMPLATE)
         print("INFO: Loaded minimal touch length:", self.minimal_touch_lenght)
+        perf_enabled, perf_log_every_s, perf_log_top_n = load_perf_config()
+        self.perf = PerfLogger(
+            enabled=perf_enabled,
+            log_every_s=perf_log_every_s,
+            top_n=perf_log_top_n,
+        )
+        print("INFO: Perf logging enabled:", perf_enabled)
+        self.max_display_width, self.max_display_height = load_display_limits()
+        print("INFO: Max display size:", self.max_display_width, "x", self.max_display_height)
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
@@ -465,17 +482,18 @@ class LabelingApp(tk.Tk):
     # --- Diagram helpers used outside ---
     def find_image_with_white_pixel(self, x, y):
         import cv2, os
-        x = int(x); y = int(y)
-        directory = "icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3"
-        for filename in os.listdir(directory):
-            fp = os.path.join(directory, filename)
-            if os.path.isfile(fp) and fp.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
-                if image is None:
-                    continue
-                if image[y, x] == 0:
-                    return [filename.rsplit('.', 1)[0]]
-        return ['NN']
+        with self.perf.time("find_image_with_white_pixel"):
+            x = int(x); y = int(y)
+            directory = "icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3"
+            for filename in os.listdir(directory):
+                fp = os.path.join(directory, filename)
+                if os.path.isfile(fp) and fp.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    image = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
+                    if image is None:
+                        continue
+                    if image[y, x] == 0:
+                        return [filename.rsplit('.', 1)[0]]
+            return ['NN']
 
     # --- Timelines ---
     def on_timeline_click(self, event):
@@ -508,143 +526,143 @@ class LabelingApp(tk.Tk):
         return None
 
     def draw_timeline(self):
-        self.timeline_canvas.delete("all")
-        if not (self.video and self.video.total_frames > 0):
-            return
-        canvas_width = self.timeline_canvas.winfo_width()
-        sector_width = canvas_width / self.video.number_frames_in_zone
-        offset = self.video.number_frames_in_zone * self.video.current_frame_zone
-        data_source = {
-            'RH': self.video.dataRH, 'LH': self.video.dataLH, 'RL': self.video.dataRL, 'LL': self.video.dataLL
-        }
-        data = data_source.get(self.option_var_1.get(), self.video.data)
-        top = 0; bottom = 100
-        self.is_touch_timeline = False if self.video.current_frame_zone == 0 else self.video.touch_to_next_zone[self.video.current_frame_zone]
+        with self.perf.time("draw_timeline"):
+            self.timeline_canvas.delete("all")
+            if not (self.video and self.video.total_frames > 0):
+                return
+            canvas_width = self.timeline_canvas.winfo_width()
+            sector_width = canvas_width / self.video.number_frames_in_zone
+            offset = self.video.number_frames_in_zone * self.video.current_frame_zone
+            data_source = {
+                'RH': self.video.dataRH, 'LH': self.video.dataLH, 'RL': self.video.dataRL, 'LL': self.video.dataLL
+            }
+            data = data_source.get(self.option_var_1.get(), self.video.data)
+            top = 0; bottom = 100
+            self.is_touch_timeline = False if self.video.current_frame_zone == 0 else self.video.touch_to_next_zone[self.video.current_frame_zone]
 
-        def get_color(frame_idx, data):
-            if frame_idx > self.video.total_frames: return 'black'
-            details = data.get(frame_idx, {})
-            xs = details.get('X', [])
-            if not xs:
+            def get_color(frame_idx, data):
+                if frame_idx > self.video.total_frames: return 'black'
+                details = data.get(frame_idx, {})
+                xs = details.get('X', [])
+                if not xs:
+                    return self.color_during if self.is_touch_timeline else 'lightgrey'
+                if len(xs) >= 1 and xs[0] is not None:
+                    if details.get('Onset') == 'ON':
+                        self.is_touch_timeline = True; return 'lightgreen'
+                    else:
+                        self.is_touch_timeline = False; return '#E57373'
                 return self.color_during if self.is_touch_timeline else 'lightgrey'
-            if len(xs) >= 1 and xs[0] is not None:
-                if details.get('Onset') == 'ON':
-                    self.is_touch_timeline = True; return 'lightgreen'
-                else:
-                    self.is_touch_timeline = False; return '#E57373'
-            return self.color_during if self.is_touch_timeline else 'lightgrey'
 
-        for frame in range(self.video.number_frames_in_zone):
-            left = frame * sector_width
-            right = left + sector_width
-            frame_offset = frame + offset
-            color = get_color(frame_offset, data)
-            self.timeline_canvas.create_rectangle(left, top, right, bottom, fill=color, outline='black')
-            param_color = self.parameter_color_at_frame(frame_offset)
-            if param_color is not None:
+            for frame in range(self.video.number_frames_in_zone):
+                left = frame * sector_width
+                right = left + sector_width
+                frame_offset = frame + offset
+                color = get_color(frame_offset, data)
+                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill=color, outline='black')
+                param_color = self.parameter_color_at_frame(frame_offset)
+                if param_color is not None:
+                    mid_x = (left + right) / 2
+                    self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
+
+                # NEW: per-limb ticks for Param1..3 on this frame
+                colors = self.limb_parameter_colors_at_frame(frame_offset)
                 mid_x = (left + right) / 2
-                self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
+                offsets = (-2, 0, 2)
+                for col, dx in zip(colors, offsets):
+                    if col:
+                        self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
 
-            # NEW: per-limb ticks for Param1..3 on this frame
+                if frame_offset == self.video.current_frame:
+                    self.timeline_canvas.create_rectangle(left, top, right, bottom, fill='dodgerblue', outline='black')
+                if frame == self.video.number_frames_in_zone - 1:
+                    if self.video.current_frame_zone + 1 < len(self.video.touch_to_next_zone):
+                        self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
+                    elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
+                        self.video.touch_to_next_zone.append(color == self.color_during)
+            # new:
             colors = self.limb_parameter_colors_at_frame(frame_offset)
             mid_x = (left + right) / 2
-            offsets = (-2, 0, 2)
+            offsets = (-2, 0, 2)  # horizontal pixel offsets for Param1..3
             for col, dx in zip(colors, offsets):
                 if col:
                     self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
 
-
-
-            if frame_offset == self.video.current_frame:
-                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill='dodgerblue', outline='black')
-            if frame == self.video.number_frames_in_zone - 1:
-                if self.video.current_frame_zone + 1 < len(self.video.touch_to_next_zone):
-                    self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
-                elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
-                    self.video.touch_to_next_zone.append(color == self.color_during)
-        # new:
-        colors = self.limb_parameter_colors_at_frame(frame_offset)
-        mid_x = (left + right) / 2
-        offsets = (-2, 0, 2)  # horizontal pixel offsets for Param1..3
-        for col, dx in zip(colors, offsets):
-            if col:
-                self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
-
     def draw_timeline2(self):
-        self.timeline2_canvas.delete("all")
-        if not (self.video and self.video.total_frames > 0):
-            return
+        with self.perf.time("draw_timeline2"):
+            self.timeline2_canvas.delete("all")
+            if not (self.video and self.video.total_frames > 0):
+                return
 
-        canvas_width  = self.timeline2_canvas.winfo_width()
-        canvas_height = self.timeline2_canvas.winfo_height()
-        limb = self.option_var_1.get()  # currently selected limb ("LH","RH","LL","RL")
+            canvas_width  = self.timeline2_canvas.winfo_width()
+            canvas_height = self.timeline2_canvas.winfo_height()
+            limb = self.option_var_1.get()  # currently selected limb ("LH","RH","LL","RL")
 
-        # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
-        on_lines   = []      # x positions of On (green)
-        off_lines  = []      # x positions of Off (red)
-        intervals  = []      # [(x_on, x_off), ...]
-        param_lines = []     # [(x, color)] from GLOBAL parameter_color_at_frame
-        limb_param_lines = []  # [(x+dx, color)] from limb_parameter_colors_at_frame
-        active_on_x = None
+            # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
+            on_lines   = []      # x positions of On (green)
+            off_lines  = []      # x positions of Off (red)
+            intervals  = []      # [(x_on, x_off), ...]
+            param_lines = []     # [(x, color)] from GLOBAL parameter_color_at_frame
+            limb_param_lines = []  # [(x+dx, color)] from limb_parameter_colors_at_frame
+            active_on_x = None
 
-        # Deterministic left->right scan across frames that exist in memory
-        for frame in sorted(self.video.frames.keys()):
-            bundle = self.video.frames.get(frame, {})
-            details = bundle.get(limb, {}) if isinstance(bundle, dict) else {}
+            # Deterministic left->right scan across frames that exist in memory
+            for frame in sorted(self.video.frames.keys()):
+                bundle = self.video.frames.get(frame, {})
+                details = bundle.get(limb, {}) if isinstance(bundle, dict) else {}
 
-            x = (frame / self.video.total_frames) * canvas_width
+                x = (frame / self.video.total_frames) * canvas_width
 
-            # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
-            onset_val = details.get('Onset')
-            if onset_val == 'ON':
-                on_lines.append(x)
-                if active_on_x is None:
-                    active_on_x = x
-            elif onset_val == 'OFF':
-                off_lines.append(x)
-                if active_on_x is not None:
-                    x1, x2 = (active_on_x, x) if active_on_x <= x else (x, active_on_x)
-                    if abs(x2 - x1) >= 1:
-                        intervals.append((x1, x2))
-                    active_on_x = None
+                # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
+                onset_val = details.get('Onset')
+                if onset_val == 'ON':
+                    on_lines.append(x)
+                    if active_on_x is None:
+                        active_on_x = x
+                elif onset_val == 'OFF':
+                    off_lines.append(x)
+                    if active_on_x is not None:
+                        x1, x2 = (active_on_x, x) if active_on_x <= x else (x, active_on_x)
+                        if abs(x2 - x1) >= 1:
+                            intervals.append((x1, x2))
+                        active_on_x = None
 
-            # --- GLOBAL Parameter markers (non-limb) — always visible ---
-            col = self.parameter_color_at_frame(frame)
-            if col is not None:
-                param_lines.append((x, col))
+                # --- GLOBAL Parameter markers (non-limb) — always visible ---
+                col = self.parameter_color_at_frame(frame)
+                if col is not None:
+                    param_lines.append((x, col))
 
-            # --- Limb-specific parameter ticks (only when a limb is selected) ---
-            #      small +/-2px offsets so the three limb-params can be distinguished
-            if limb in ("LH", "RH", "LL", "RL") and hasattr(self, "limb_parameter_colors_at_frame"):
-                colors = self.limb_parameter_colors_at_frame(frame)  # returns up to 3 colors or None
-                for dx, c in zip((-2, 0, 2), colors):
-                    if c:
-                        limb_param_lines.append((x + dx, c))
+                # --- Limb-specific parameter ticks (only when a limb is selected) ---
+                #      small +/-2px offsets so the three limb-params can be distinguished
+                if limb in ("LH", "RH", "LL", "RL") and hasattr(self, "limb_parameter_colors_at_frame"):
+                    colors = self.limb_parameter_colors_at_frame(frame)  # returns up to 3 colors or None
+                    for dx, c in zip((-2, 0, 2), colors):
+                        if c:
+                            limb_param_lines.append((x + dx, c))
 
-        # --- Draw order: 1) fills, 2) global & limb param lines, 3) On/Off edges, 4) playhead ---
-        # 1) Yellow fills
-        for x1, x2 in intervals:
-            self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
+            # --- Draw order: 1) fills, 2) global & limb param lines, 3) On/Off edges, 4) playhead ---
+            # 1) Yellow fills
+            for x1, x2 in intervals:
+                self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
 
-        # 2) Global parameter lines
-        for x, c in param_lines:
-            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+            # 2) Global parameter lines
+            for x, c in param_lines:
+                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
 
-        #    Limb-specific parameter ticks for the selected limb
-        for x, c in limb_param_lines:
-            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+            #    Limb-specific parameter ticks for the selected limb
+            for x, c in limb_param_lines:
+                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
 
-        # 3) On/Off edge markers
-        for x in on_lines:
-            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
-        for x in off_lines:
-            self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
+            # 3) On/Off edge markers
+            for x in on_lines:
+                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
+            for x in off_lines:
+                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
 
-        # 4) Current frame indicator
-        current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
-        margin = 2
-        current_pos = min(max(current_pos, margin), canvas_width - margin)
-        self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
+            # 4) Current frame indicator
+            current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
+            margin = 2
+            current_pos = min(max(current_pos, margin), canvas_width - margin)
+            self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
     
     def update_frame_counter(self):
         if self.video:
@@ -676,44 +694,45 @@ class LabelingApp(tk.Tk):
         while True:
             time.sleep(0.01)
             if self.video is not None:
-                frame_number = self.video.current_frame
-                if frame_number < 0 or frame_number > self.video.total_frames:
-                    return
-                start_frame = max(0, frame_number - 30)
-                end_frame = min(self.video.total_frames, frame_number + 50)
+                with self.perf.time("background_update"):
+                    frame_number = self.video.current_frame
+                    if frame_number < 0 or frame_number > self.video.total_frames:
+                        return
+                    start_frame = max(0, frame_number - 30)
+                    end_frame = min(self.video.total_frames, frame_number + 50)
 
-                buffer_loaded = True
-                current_frame_loaded = frame_number in self.img_buffer
+                    buffer_loaded = True
+                    current_frame_loaded = frame_number in self.img_buffer
 
-                if not current_frame_loaded:
-                    buffer_loaded = False
-                    self.load_frame(frame_number)
-                    was_missing = True
-
-                for i in range(frame_number, end_frame + 1):
-                    if i not in self.img_buffer:
+                    if not current_frame_loaded:
                         buffer_loaded = False
-                        self.load_frame(i)
+                        self.load_frame(frame_number)
+                        was_missing = True
 
-                for i in range(frame_number, start_frame - 1, -1):
-                    if i not in self.img_buffer:
-                        buffer_loaded = False
-                        self.load_frame(i)
+                    for i in range(frame_number, end_frame + 1):
+                        if i not in self.img_buffer:
+                            buffer_loaded = False
+                            self.load_frame(i)
 
-                buffer_range = 200
-                min_keep = max(0, frame_number - buffer_range)
-                max_keep = min(self.video.total_frames, frame_number + buffer_range)
-                frames_to_remove = [k for k in self.img_buffer if k < min_keep or k > max_keep]
-                for k in frames_to_remove: del self.img_buffer[k]
+                    for i in range(frame_number, start_frame - 1, -1):
+                        if i not in self.img_buffer:
+                            buffer_loaded = False
+                            self.load_frame(i)
 
-                if current_frame_loaded:
-                    self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
-                else:
-                    self.loading_label.config(text="Buffer Loading", bg='#E57373')
+                    buffer_range = 200
+                    min_keep = max(0, frame_number - buffer_range)
+                    max_keep = min(self.video.total_frames, frame_number + buffer_range)
+                    frames_to_remove = [k for k in self.img_buffer if k < min_keep or k > max_keep]
+                    for k in frames_to_remove: del self.img_buffer[k]
 
-                if was_missing and current_frame_loaded:
-                    self.after(0, self.display_first_frame)
-                was_missing = not current_frame_loaded
+                    if current_frame_loaded:
+                        self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
+                    else:
+                        self.loading_label.config(text="Buffer Loading", bg='#E57373')
+
+                    if was_missing and current_frame_loaded:
+                        self.after(0, self.display_first_frame)
+                    was_missing = not current_frame_loaded
 
     def background_update_play(self):
         import time
@@ -730,50 +749,62 @@ class LabelingApp(tk.Tk):
         from PIL import Image
         import os
         try:
-            frame_path = os.path.join(self.video.frames_dir, f"frame{frame_number}.jpg")
-            img = Image.open(frame_path)
-            img = self.resize_frame(img)
-            photo_img = ImageTk.PhotoImage(img)
-            self.img_buffer[frame_number] = photo_img
+            with self.perf.time("load_frame_total"):
+                frame_path = os.path.join(self.video.frames_dir, f"frame{frame_number}.jpg")
+                with self.perf.time("load_frame_open"):
+                    img = Image.open(frame_path)
+                with self.perf.time("load_frame_resize"):
+                    img = self.resize_frame(img)
+                with self.perf.time("load_frame_photo"):
+                    photo_img = ImageTk.PhotoImage(img)
+                self.img_buffer[frame_number] = photo_img
         except Exception as e:
             print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
 
     def resize_frame(self, img):
-        display_width = self.video_frame.winfo_width()
-        display_height = self.video_frame.winfo_height()
-        original_width, original_height = img.size
-        aspect_ratio = original_width / original_height
-        if display_width / display_height > aspect_ratio:
-            new_width = int(display_height * aspect_ratio); new_height = display_height
-        else:
-            new_width = display_width; new_height = int(display_width / aspect_ratio)
-        self.old_width = new_width; self.old_height = new_height
-        return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        with self.perf.time("resize_frame"):
+            display_width = self.video_frame.winfo_width()
+            display_height = self.video_frame.winfo_height()
+            if self.max_display_width:
+                display_width = min(display_width, self.max_display_width)
+            if self.max_display_height:
+                display_height = min(display_height, self.max_display_height)
+            if display_width <= 0 or display_height <= 0:
+                return img
+            original_width, original_height = img.size
+            aspect_ratio = original_width / original_height
+            if display_width / display_height > aspect_ratio:
+                new_width = int(display_height * aspect_ratio); new_height = display_height
+            else:
+                new_width = display_width; new_height = int(display_width / aspect_ratio)
+            self.old_width = new_width; self.old_height = new_height
+            return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
     def display_first_frame(self, frame_number=None):
-        if frame_number is None:
-            frame_number = self.video.current_frame
-        else:
-            self.video.current_frame = frame_number
-        if frame_number < 0 or frame_number > self.video.total_frames:
-            print("ERROR: Frame number out of bounds."); return
-        if frame_number in self.img_buffer:
-            photo_img = self.img_buffer[frame_number]
-            if hasattr(self, 'frame_label') and self.frame_label:
-                self.frame_label.configure(image=photo_img)
+        with self.perf.time("display_first_frame"):
+            if frame_number is None:
+                frame_number = self.video.current_frame
             else:
-                self.frame_label = tk.Label(self.video_frame, image=photo_img)
-                self.frame_label.pack(expand=True)
-            self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
-            self.image = photo_img
-        else:
-            print("INFO: Frame not in buffer.")
-            self.loading_label.config(text="Buffer Loading", bg='#E57373')
+                self.video.current_frame = frame_number
+            if frame_number < 0 or frame_number > self.video.total_frames:
+                print("ERROR: Frame number out of bounds."); return
+            if frame_number in self.img_buffer:
+                photo_img = self.img_buffer[frame_number]
+                if hasattr(self, 'frame_label') and self.frame_label:
+                    self.frame_label.configure(image=photo_img)
+                else:
+                    self.frame_label = tk.Label(self.video_frame, image=photo_img)
+                    self.frame_label.pack(expand=True)
+                self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
+                self.image = photo_img
+            else:
+                print("INFO: Frame not in buffer.")
+                self.loading_label.config(text="Buffer Loading", bg='#E57373')
 
-        self.update_note_entry()
-        self.update_frame_counter()
-        self.update_limb_parameter_buttons()
-        self.update_button_colors()
+            self.update_note_entry()
+            self.update_frame_counter()
+            self.update_limb_parameter_buttons()
+            self.update_button_colors()
 
     # --- Parameter toggles & coloring ---
     def update_button_colors(self):
@@ -1284,6 +1315,146 @@ class LabelingApp(tk.Tk):
             self.save_data()
             saved = True
         custom_confirm_close(self, saved)
+
+    # --- Settings ---
+    def open_settings(self):
+        if getattr(self, "_settings_win", None) and self._settings_win.winfo_exists():
+            self._settings_win.lift()
+            return
+
+        cfg = load_config()
+        win = tk.Toplevel(self)
+        win.title("Settings")
+        win.resizable(False, False)
+        self._settings_win = win
+
+        def _v(key, default):
+            return cfg.get(key, default)
+
+        vars_map = {
+            "perf_enabled": tk.BooleanVar(value=bool(_v("perf_enabled", False))),
+            "perf_log_every_s": tk.StringVar(value=str(_v("perf_log_every_s", 2.0))),
+            "perf_log_top_n": tk.StringVar(value=str(_v("perf_log_top_n", 6))),
+            "max_display_width": tk.StringVar(value=str(_v("max_display_width", 0))),
+            "max_display_height": tk.StringVar(value=str(_v("max_display_height", 0))),
+            "diagram_scale": tk.StringVar(value=str(_v("diagram_scale", 1.0))),
+            "dot_size": tk.StringVar(value=str(_v("dot_size", 10))),
+        }
+
+        row = 0
+        tk.Label(win, text="Performance").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 4))
+        row += 1
+        tk.Checkbutton(win, text="Enable perf logging", variable=vars_map["perf_enabled"]).grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8
+        )
+        row += 1
+        tk.Label(win, text="Perf log interval (s)").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["perf_log_every_s"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Perf top N").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["perf_log_top_n"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+
+        tk.Label(win, text="Display").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 4))
+        row += 1
+        tk.Label(win, text="Max display width (0 = auto)").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["max_display_width"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Max display height (0 = auto)").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["max_display_height"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Diagram scale").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["diagram_scale"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Dot size").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["dot_size"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+
+        def parse_int(value, key):
+            if value is None:
+                return 0
+            s = str(value).strip()
+            if s == "":
+                return 0
+            try:
+                return int(float(s))
+            except Exception:
+                raise ValueError(f"{key} must be a number")
+
+        def parse_float(value, key):
+            if value is None:
+                return 0.0
+            s = str(value).strip()
+            if s == "":
+                return 0.0
+            try:
+                return float(s)
+            except Exception:
+                raise ValueError(f"{key} must be a number")
+
+        def apply_settings(close=False):
+            try:
+                new_cfg = dict(cfg)
+                new_cfg["perf_enabled"] = bool(vars_map["perf_enabled"].get())
+                new_cfg["perf_log_every_s"] = parse_float(vars_map["perf_log_every_s"].get(), "perf_log_every_s")
+                new_cfg["perf_log_top_n"] = parse_int(vars_map["perf_log_top_n"].get(), "perf_log_top_n")
+                new_cfg["max_display_width"] = parse_int(vars_map["max_display_width"].get(), "max_display_width")
+                new_cfg["max_display_height"] = parse_int(vars_map["max_display_height"].get(), "max_display_height")
+                new_cfg["diagram_scale"] = parse_float(vars_map["diagram_scale"].get(), "diagram_scale")
+                new_cfg["dot_size"] = parse_float(vars_map["dot_size"].get(), "dot_size")
+            except ValueError as e:
+                messagebox.showerror("Invalid settings", str(e), parent=win)
+                return
+
+            save_config(new_cfg)
+            self.apply_runtime_settings(new_cfg)
+            if close:
+                win.destroy()
+
+        btn_frame = tk.Frame(win)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=(10, 8))
+        tk.Button(btn_frame, text="Apply", command=lambda: apply_settings(close=False)).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Apply & Close", command=lambda: apply_settings(close=True)).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Close", command=win.destroy).pack(side="left", padx=5)
+
+    def apply_runtime_settings(self, cfg: dict):
+        self.max_display_width = int(cfg.get("max_display_width") or 0) or None
+        self.max_display_height = int(cfg.get("max_display_height") or 0) or None
+        self.perf.enabled = bool(cfg.get("perf_enabled", False))
+        self.perf.log_every_s = float(cfg.get("perf_log_every_s", 2.0))
+        self.perf.top_n = int(cfg.get("perf_log_top_n", 6))
+
+        new_scale = float(cfg.get("diagram_scale", 1.0))
+        new_dot = float(cfg.get("dot_size", 10))
+        self.diagram_scale = new_scale
+        self.dot_size = new_dot
+
+        base_w, base_h = 450, 696
+        w, h = int(base_w * new_scale), int(base_h * new_scale)
+        try:
+            self.diagram_canvas.config(width=w, height=h)
+            self.diagram_canvas.delete("all")
+            self.on_radio_click()
+        except Exception:
+            pass
+
+        # Flush buffer so new resolution takes effect immediately.
+        if hasattr(self, "img_buffer"):
+            self.img_buffer.clear()
+        if getattr(self, "video", None):
+            self.display_first_frame()
 
     # --- Frame stepping ---
     def next_frame(self, number_of_frames, play=False):

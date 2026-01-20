@@ -1,5 +1,6 @@
-{ "diagram_scale": 2,
-  "dot_size": 1,
+{
+  "diagram_scale": 2.0,
+  "dot_size": 20.0,
   "new_template": false,
   "minimal_touch_length": 280,
   "parameter1": "P1",
@@ -7,5 +8,10 @@
   "parameter3": "P3",
   "limb_parameter1": "Looking",
   "limb_parameter2": "LP2",
-  "limb_parameter3": "LP34"
+  "limb_parameter3": "LP34",
+  "max_display_width": 1250,
+  "max_display_height": 900,
+  "perf_enabled": true,
+  "perf_log_every_s": 2.0,
+  "perf_log_top_n": 6
 }

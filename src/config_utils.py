@@ -7,12 +7,52 @@ import json
 from PIL import Image, ImageTk
 
 
+def load_config():
+    try:
+        with open('config.json', 'r') as file:
+            return json.load(file)
+    except Exception:
+        return {}
+
+
+def save_config(config: dict) -> None:
+    with open('config.json', 'w') as file:
+        json.dump(config, file, indent=2, sort_keys=False)
+
+
 def load_config_flags():
     with open('config.json', 'r') as file:
         config = json.load(file)
         NEW_TEMPLATE = config.get('new_template', False)
         minimal_touch_length = config.get('minimal_touch_length', '280')
         return NEW_TEMPLATE, minimal_touch_length
+
+
+def load_perf_config():
+    with open('config.json', 'r') as file:
+        config = json.load(file)
+        enabled = bool(config.get('perf_enabled', False))
+        log_every_s = float(config.get('perf_log_every_s', 2.0))
+        top_n = int(config.get('perf_log_top_n', 6))
+        return enabled, log_every_s, top_n
+
+
+def load_display_limits():
+    with open('config.json', 'r') as file:
+        config = json.load(file)
+        max_w = config.get('max_display_width', 0)
+        max_h = config.get('max_display_height', 0)
+        try:
+            max_w = int(max_w)
+        except Exception:
+            max_w = 0
+        try:
+            max_h = int(max_h)
+        except Exception:
+            max_h = 0
+        max_w = max_w if max_w > 0 else None
+        max_h = max_h if max_h > 0 else None
+        return max_w, max_h
 
 
 def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):

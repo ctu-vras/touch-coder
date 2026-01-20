@@ -70,7 +70,7 @@ def build_ui(app):
     app.dot_size = dot_size
 
     # === Containers ===
-    app.video_frame = tk.Frame(app, bg='gray')
+    app.video_frame = tk.Frame(app, bg='#bcbcbc')
     app.timeline_frame = tk.Frame(app, bg='grey', height=50)
     app.control_frame = tk.Frame(app, bg='lightgrey', height=100)
     app.diagram_frame = tk.Frame(app, bg='lightgrey')
@@ -145,6 +145,9 @@ def _build_controls(app):
 
     sort_btn = tk.Button(app.control_frame, text="Sort Frames", command=app.sort_frames)
     sort_btn.grid(row=0, column=12, padx=5, pady=5)
+
+    settings_btn = tk.Button(app.control_frame, text="Settings", command=app.open_settings)
+    settings_btn.grid(row=0, column=15, padx=5, pady=5)
 
     app.framerate_label = tk.Label(app.control_frame, text=f"Frame Rate: -----", bg='lightgrey')
     app.framerate_label.grid(row=0, column=13, padx=5, pady=5)
