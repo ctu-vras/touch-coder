@@ -99,7 +99,7 @@ class LabelingApp(tk.Tk):
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
-        #self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
+        self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
 
         # Diagram init
         self.init_diagram()
@@ -736,14 +736,17 @@ class LabelingApp(tk.Tk):
 
     def background_update_play(self):
         import time
-        if self.video is not None:
-            while True:
-                if self.play:
-                    self.next_frame(1, play=True)
-                    if self.video.current_frame % 10 == 0:
-                        self.after(0, self.draw_timeline)
-                    self.after(0, self.display_first_frame)
-                time.sleep(0.03)
+        while True:
+            if self.play and self.video is not None:
+                start = time.perf_counter()
+                self.next_frame(1, play=True)
+                if self.video.current_frame % 10 == 0:
+                    self.after(0, self.draw_timeline)
+                interval = 1.0 / self.frame_rate if self.frame_rate else 0.04
+                elapsed = time.perf_counter() - start
+                time.sleep(max(0.0, interval - elapsed))
+            else:
+                time.sleep(0.05)
 
     def load_frame(self, frame_number):
         from PIL import Image
@@ -1078,11 +1081,15 @@ class LabelingApp(tk.Tk):
             analysis.do_analysis(directory_path, plots_path, self.video_name, debug=True, frame_rate=self.frame_rate)
 
     def play_video(self):
+        if self.video is None:
+            print("ERROR: First select video")
+            return
         if not self.play:
             self.play = True
             if not self.play_thread_on:
                 self.play_thread_on = True
-                self.background_thread_play.start()
+                if not self.background_thread_play.is_alive():
+                    self.background_thread_play.start()
 
     def stop_video(self):
         self.play = False
@@ -1123,6 +1130,7 @@ class LabelingApp(tk.Tk):
         if self.video is not None:
             print("INFO: Saving before loading new video.")
             self.save_data()
+            self.save_last_position()
 
         self.ask_labeling_mode()
         if not hasattr(self, 'labeling_mode'):
@@ -1235,6 +1243,9 @@ class LabelingApp(tk.Tk):
         else:
             print("INFO: Number of frames is correct")
 
+        # Restore last position (if present) before initial draw
+        self.restore_last_position(data_dir, video_name)
+
         # Initial draw
         self.display_first_frame()
         self.draw_timeline()
@@ -1313,8 +1324,44 @@ class LabelingApp(tk.Tk):
         saved = False
         if self.video is not None:
             self.save_data()
+            self.save_last_position()
             saved = True
         custom_confirm_close(self, saved)
+
+    def _last_position_path(self, data_dir: str, video_name: str) -> str:
+        return os.path.join(data_dir, f"{video_name}_last_position.json")
+
+    def save_last_position(self):
+        if self.video is None or self.video_name is None:
+            return
+        data_dir = os.path.join("Labeled_data", self.video_name, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        path = self._last_position_path(data_dir, self.video_name)
+        try:
+            payload = {
+                "frame": int(self.video.current_frame),
+                "total_frames": int(self.video.total_frames),
+            }
+            with open(path, "w") as f:
+                json.dump(payload, f)
+            print(f"INFO: Saved last position → {path}")
+        except Exception as e:
+            print(f"WARNING: Failed to save last position: {e}")
+
+    def restore_last_position(self, data_dir: str, video_name: str):
+        path = self._last_position_path(data_dir, video_name)
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r") as f:
+                payload = json.load(f) or {}
+            frame = int(payload.get("frame", 0))
+            frame = max(0, min(self.video.total_frames, frame))
+            self.video.current_frame = frame
+            self.video.current_frame_zone = int(self.video.current_frame / self.video.number_frames_in_zone)
+            print(f"INFO: Restored last position: frame {self.video.current_frame}")
+        except Exception as e:
+            print(f"WARNING: Failed to restore last position: {e}")
 
     # --- Settings ---
     def open_settings(self):

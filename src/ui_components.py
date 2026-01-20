@@ -137,13 +137,13 @@ def _build_controls(app):
     next_10_frame_btn = tk.Button(app.control_frame, text=">>", command=lambda: app.next_frame(7))
     next_10_frame_btn.grid(row=0, column=9, padx=5, pady=5)
 
-    play_btn = tk.Button(app.control_frame, text="Play", command=app.play_video,state='disabled')
+    play_btn = tk.Button(app.control_frame, text="Play", command=app.play_video)
     play_btn.grid(row=0, column=10, padx=5, pady=5)
 
-    stop_btn = tk.Button(app.control_frame, text="Stop", command=app.stop_video, state='disabled')
+    stop_btn = tk.Button(app.control_frame, text="Stop", command=app.stop_video)
     stop_btn.grid(row=0, column=11, padx=5, pady=5)
 
-    sort_btn = tk.Button(app.control_frame, text="Sort Frames", command=app.sort_frames)
+    sort_btn = tk.Button(app.control_frame, text="Sort Frames", command=app.sort_frames, state='disabled')
     sort_btn.grid(row=0, column=12, padx=5, pady=5)
 
     settings_btn = tk.Button(app.control_frame, text="Settings", command=app.open_settings)
