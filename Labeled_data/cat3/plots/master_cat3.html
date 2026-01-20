@@ -1,0 +1,73 @@
+
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>cat3</title>
+        <style>
+            body {
+                text-align: center;
+                font-family: Arial, sans-serif;
+            }
+            iframe {
+                width: 90%;
+                border: none;
+                display: block;
+                margin: 0 auto;
+            }
+            h2 {
+                text-align: center;
+            }
+            .row {
+                display: flex;
+                gap: 16px;
+                justify-content: center;
+                align-items: stretch;
+                flex-wrap: wrap;
+                margin: 0 auto;
+                width: 95%;
+            }
+            .half {
+                flex: 1 1 45%;
+                min-width: 420px;
+            }
+            .half iframe {
+                width: 100%;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>cat3</h1>
+    
+        <h2>touch_trajectory.html</h2>
+        <iframe src="touch_trajectory.html" style="height: 1200px;"></iframe>
+        
+        <h2>table.html</h2>
+        <iframe src="table.html" style="height: 800px;"></iframe>
+        
+        <h2>heatmap_LH.html</h2>
+        <iframe src="heatmap_LH.html" style="height: 800px;"></iframe>
+        
+        <h2>heatmap_RH.html</h2>
+        <iframe src="heatmap_RH.html" style="height: 800px;"></iframe>
+        
+        <h2>heatmap_LL.html</h2>
+        <iframe src="heatmap_LL.html" style="height: 800px;"></iframe>
+        
+        <h2>heatmap_RL.html</h2>
+        <iframe src="heatmap_RL.html" style="height: 800px;"></iframe>
+        
+        <h2>Histograms</h2>
+        <div class="row">
+            <div class="half">
+                <iframe src="histogram.html" style="height: 700px;"></iframe>
+            </div>
+            <div class="half">
+                <iframe src="histogram_2.html" style="height: 700px;"></iframe>
+            </div>
+        </div>
+    
+    </body>
+    </html>
+    

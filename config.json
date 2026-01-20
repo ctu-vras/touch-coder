@@ -11,7 +11,7 @@
   "limb_parameter3": "LP34",
   "max_display_width": 1250,
   "max_display_height": 900,
-  "perf_enabled": true,
+  "perf_enabled": false,
   "perf_log_every_s": 2.0,
   "perf_log_top_n": 6
 }

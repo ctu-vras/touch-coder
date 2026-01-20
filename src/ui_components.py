@@ -122,7 +122,7 @@ def _build_controls(app):
     save_btn = tk.Button(app.control_frame, text="Save", command=app.save_data)
     save_btn.grid(row=0, column=2, padx=5, pady=5)
 
-    analysis_btn = tk.Button(app.control_frame, text="Analysis", command=app.analysis, state='disabled')
+    analysis_btn = tk.Button(app.control_frame, text="Analysis", command=app.analysis)
     analysis_btn.grid(row=0, column=3, padx=5, pady=5)
 
     back_10_frame_btn = tk.Button(app.control_frame, text="<<", command=lambda: app.next_frame(-7))

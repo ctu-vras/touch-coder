@@ -1,0 +1,5 @@
+Limb,Total Touches,Touch Durations [Seconds],Total Duration [Seconds],Average Touch Duration [Seconds],Percentage Touching,Touch Rate [Touches per Minute],Standard Deviation [Seconds]
+LH,1,[0.16],0.16,0.16,1.2345679012345678,4.62962962962963,
+RH,4,"[0.32, 0.24, 0.16, 0.52]",1.24,0.31,9.5679012345679,18.51851851851852,0.1544884030167529
+LL,0,[],0.0,0.0,0.0,0.0,
+RL,1,[0.08],0.08,0.08,0.6172839506172839,4.62962962962963,

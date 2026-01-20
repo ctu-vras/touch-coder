@@ -103,6 +103,17 @@ class LabelingApp(tk.Tk):
 
         # Diagram init
         self.init_diagram()
+        # Timeline draw cache
+        self._timeline_dirty = True
+        self._timeline2_dirty = True
+        self._timeline_last_zone = None
+        self._timeline_last_limb = None
+        self._timeline2_last_limb = None
+        self._timeline2_last_limb = None
+        self._timeline_canvas_size = (0, 0)
+        self._timeline2_canvas_size = (0, 0)
+        self._timeline_playhead_id = None
+        self._timeline2_playhead_id = None
     # --- Param helpers ---
     def _limb_param_key_for_index(self, idx: int) -> str:
         return f"Par{idx}"
@@ -165,6 +176,8 @@ class LabelingApp(tk.Tk):
         b = self.video.frames.get(idx)
         if isinstance(b, dict):
             b["Changed"] = True
+            self._timeline_dirty = True
+            self._timeline2_dirty = True
             # optional: keep your terminal print
             if hasattr(self, "notify_bundle_changed"):
                 self.notify_bundle_changed(idx)
@@ -527,142 +540,187 @@ class LabelingApp(tk.Tk):
 
     def draw_timeline(self):
         with self.perf.time("draw_timeline"):
-            self.timeline_canvas.delete("all")
             if not (self.video and self.video.total_frames > 0):
                 return
             canvas_width = self.timeline_canvas.winfo_width()
-            sector_width = canvas_width / self.video.number_frames_in_zone
-            offset = self.video.number_frames_in_zone * self.video.current_frame_zone
-            data_source = {
-                'RH': self.video.dataRH, 'LH': self.video.dataLH, 'RL': self.video.dataRL, 'LL': self.video.dataLL
-            }
-            data = data_source.get(self.option_var_1.get(), self.video.data)
-            top = 0; bottom = 100
-            self.is_touch_timeline = False if self.video.current_frame_zone == 0 else self.video.touch_to_next_zone[self.video.current_frame_zone]
+            canvas_height = self.timeline_canvas.winfo_height()
+            limb = self.option_var_1.get()
+            zone = self.video.current_frame_zone
+            needs_full = (
+                self._timeline_dirty
+                or self._timeline_last_zone != zone
+                or self._timeline_last_limb != limb
+                or self._timeline_canvas_size != (canvas_width, canvas_height)
+            )
 
-            def get_color(frame_idx, data):
-                if frame_idx > self.video.total_frames: return 'black'
-                details = data.get(frame_idx, {})
-                xs = details.get('X', [])
-                if not xs:
+            sector_width = canvas_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
+            offset = self.video.number_frames_in_zone * zone
+            top = 0; bottom = canvas_height
+
+            if needs_full:
+                self.timeline_canvas.delete("all")
+                data_source = {
+                    'RH': self.video.dataRH, 'LH': self.video.dataLH, 'RL': self.video.dataRL, 'LL': self.video.dataLL
+                }
+                data = data_source.get(limb, self.video.data)
+                self.is_touch_timeline = False if zone == 0 else self.video.touch_to_next_zone[zone]
+
+                def get_color(frame_idx, data):
+                    if frame_idx > self.video.total_frames: return 'black'
+                    details = data.get(frame_idx, {})
+                    xs = details.get('X', [])
+                    if not xs:
+                        return self.color_during if self.is_touch_timeline else 'lightgrey'
+                    if len(xs) >= 1 and xs[0] is not None:
+                        if details.get('Onset') == 'ON':
+                            self.is_touch_timeline = True; return 'lightgreen'
+                        else:
+                            self.is_touch_timeline = False; return '#E57373'
                     return self.color_during if self.is_touch_timeline else 'lightgrey'
-                if len(xs) >= 1 and xs[0] is not None:
-                    if details.get('Onset') == 'ON':
-                        self.is_touch_timeline = True; return 'lightgreen'
-                    else:
-                        self.is_touch_timeline = False; return '#E57373'
-                return self.color_during if self.is_touch_timeline else 'lightgrey'
 
-            for frame in range(self.video.number_frames_in_zone):
-                left = frame * sector_width
-                right = left + sector_width
-                frame_offset = frame + offset
-                color = get_color(frame_offset, data)
-                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill=color, outline='black')
-                param_color = self.parameter_color_at_frame(frame_offset)
-                if param_color is not None:
+                for frame in range(self.video.number_frames_in_zone):
+                    left = frame * sector_width
+                    right = left + sector_width
+                    frame_offset = frame + offset
+                    color = get_color(frame_offset, data)
+                    self.timeline_canvas.create_rectangle(left, top, right, bottom, fill=color, outline='black')
+                    param_color = self.parameter_color_at_frame(frame_offset)
+                    if param_color is not None:
+                        mid_x = (left + right) / 2
+                        self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
+
+                    # NEW: per-limb ticks for Param1..3 on this frame
+                    colors = self.limb_parameter_colors_at_frame(frame_offset)
                     mid_x = (left + right) / 2
-                    self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
+                    offsets = (-2, 0, 2)
+                    for col, dx in zip(colors, offsets):
+                        if col:
+                            self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
 
-                # NEW: per-limb ticks for Param1..3 on this frame
+                    if frame == self.video.number_frames_in_zone - 1:
+                        if self.video.current_frame_zone + 1 < len(self.video.touch_to_next_zone):
+                            self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
+                        elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
+                            self.video.touch_to_next_zone.append(color == self.color_during)
+
+                # keep the original extra ticks behavior
                 colors = self.limb_parameter_colors_at_frame(frame_offset)
                 mid_x = (left + right) / 2
-                offsets = (-2, 0, 2)
+                offsets = (-2, 0, 2)  # horizontal pixel offsets for Param1..3
                 for col, dx in zip(colors, offsets):
                     if col:
                         self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
 
-                if frame_offset == self.video.current_frame:
-                    self.timeline_canvas.create_rectangle(left, top, right, bottom, fill='dodgerblue', outline='black')
-                if frame == self.video.number_frames_in_zone - 1:
-                    if self.video.current_frame_zone + 1 < len(self.video.touch_to_next_zone):
-                        self.video.touch_to_next_zone[self.video.current_frame_zone + 1] = (color == self.color_during)
-                    elif self.video.current_frame_zone + 1 == len(self.video.touch_to_next_zone):
-                        self.video.touch_to_next_zone.append(color == self.color_during)
-            # new:
-            colors = self.limb_parameter_colors_at_frame(frame_offset)
-            mid_x = (left + right) / 2
-            offsets = (-2, 0, 2)  # horizontal pixel offsets for Param1..3
-            for col, dx in zip(colors, offsets):
-                if col:
-                    self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
+                self._timeline_dirty = False
+                self._timeline_last_zone = zone
+                self._timeline_last_limb = limb
+                self._timeline_canvas_size = (canvas_width, canvas_height)
+                self._timeline_playhead_id = None
+
+            # Update playhead only
+            frame_in_zone = self.video.current_frame - offset
+            if 0 <= frame_in_zone < self.video.number_frames_in_zone:
+                left = frame_in_zone * sector_width
+                right = left + sector_width
+                if self._timeline_playhead_id is None:
+                    self._timeline_playhead_id = self.timeline_canvas.create_rectangle(
+                        left, top, right, bottom, fill='dodgerblue', outline='black'
+                    )
+                else:
+                    self.timeline_canvas.coords(self._timeline_playhead_id, left, top, right, bottom)
 
     def draw_timeline2(self):
         with self.perf.time("draw_timeline2"):
-            self.timeline2_canvas.delete("all")
             if not (self.video and self.video.total_frames > 0):
                 return
 
             canvas_width  = self.timeline2_canvas.winfo_width()
             canvas_height = self.timeline2_canvas.winfo_height()
             limb = self.option_var_1.get()  # currently selected limb ("LH","RH","LL","RL")
+            needs_full = (
+                self._timeline2_dirty
+                or self._timeline2_last_limb != limb
+                or self._timeline2_canvas_size != (canvas_width, canvas_height)
+            )
 
-            # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
-            on_lines   = []      # x positions of On (green)
-            off_lines  = []      # x positions of Off (red)
-            intervals  = []      # [(x_on, x_off), ...]
-            param_lines = []     # [(x, color)] from GLOBAL parameter_color_at_frame
-            limb_param_lines = []  # [(x+dx, color)] from limb_parameter_colors_at_frame
-            active_on_x = None
+            if needs_full:
+                self.timeline2_canvas.delete("all")
+                # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
+                on_lines   = []      # x positions of On (green)
+                off_lines  = []      # x positions of Off (red)
+                intervals  = []      # [(x_on, x_off), ...]
+                param_lines = []     # [(x, color)] from GLOBAL parameter_color_at_frame
+                limb_param_lines = []  # [(x+dx, color)] from limb_parameter_colors_at_frame
+                active_on_x = None
 
-            # Deterministic left->right scan across frames that exist in memory
-            for frame in sorted(self.video.frames.keys()):
-                bundle = self.video.frames.get(frame, {})
-                details = bundle.get(limb, {}) if isinstance(bundle, dict) else {}
+                # Deterministic left->right scan across frames that exist in memory
+                for frame in sorted(self.video.frames.keys()):
+                    bundle = self.video.frames.get(frame, {})
+                    details = bundle.get(limb, {}) if isinstance(bundle, dict) else {}
 
-                x = (frame / self.video.total_frames) * canvas_width
+                    x = (frame / self.video.total_frames) * canvas_width
 
-                # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
-                onset_val = details.get('Onset')
-                if onset_val == 'ON':
-                    on_lines.append(x)
-                    if active_on_x is None:
-                        active_on_x = x
-                elif onset_val == 'OFF':
-                    off_lines.append(x)
-                    if active_on_x is not None:
-                        x1, x2 = (active_on_x, x) if active_on_x <= x else (x, active_on_x)
-                        if abs(x2 - x1) >= 1:
-                            intervals.append((x1, x2))
-                        active_on_x = None
+                    # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
+                    onset_val = details.get('Onset')
+                    if onset_val == 'ON':
+                        on_lines.append(x)
+                        if active_on_x is None:
+                            active_on_x = x
+                    elif onset_val == 'OFF':
+                        off_lines.append(x)
+                        if active_on_x is not None:
+                            x1, x2 = (active_on_x, x) if active_on_x <= x else (x, active_on_x)
+                            if abs(x2 - x1) >= 1:
+                                intervals.append((x1, x2))
+                            active_on_x = None
 
-                # --- GLOBAL Parameter markers (non-limb) — always visible ---
-                col = self.parameter_color_at_frame(frame)
-                if col is not None:
-                    param_lines.append((x, col))
+                    # --- GLOBAL Parameter markers (non-limb) — always visible ---
+                    col = self.parameter_color_at_frame(frame)
+                    if col is not None:
+                        param_lines.append((x, col))
 
-                # --- Limb-specific parameter ticks (only when a limb is selected) ---
-                #      small +/-2px offsets so the three limb-params can be distinguished
-                if limb in ("LH", "RH", "LL", "RL") and hasattr(self, "limb_parameter_colors_at_frame"):
-                    colors = self.limb_parameter_colors_at_frame(frame)  # returns up to 3 colors or None
-                    for dx, c in zip((-2, 0, 2), colors):
-                        if c:
-                            limb_param_lines.append((x + dx, c))
+                    # --- Limb-specific parameter ticks (only when a limb is selected) ---
+                    #      small +/-2px offsets so the three limb-params can be distinguished
+                    if limb in ("LH", "RH", "LL", "RL") and hasattr(self, "limb_parameter_colors_at_frame"):
+                        colors = self.limb_parameter_colors_at_frame(frame)  # returns up to 3 colors or None
+                        for dx, c in zip((-2, 0, 2), colors):
+                            if c:
+                                limb_param_lines.append((x + dx, c))
 
-            # --- Draw order: 1) fills, 2) global & limb param lines, 3) On/Off edges, 4) playhead ---
-            # 1) Yellow fills
-            for x1, x2 in intervals:
-                self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
+                # --- Draw order: 1) fills, 2) global & limb param lines, 3) On/Off edges, 4) playhead ---
+                # 1) Yellow fills
+                for x1, x2 in intervals:
+                    self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
 
-            # 2) Global parameter lines
-            for x, c in param_lines:
-                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+                # 2) Global parameter lines
+                for x, c in param_lines:
+                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
 
-            #    Limb-specific parameter ticks for the selected limb
-            for x, c in limb_param_lines:
-                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+                #    Limb-specific parameter ticks for the selected limb
+                for x, c in limb_param_lines:
+                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
 
-            # 3) On/Off edge markers
-            for x in on_lines:
-                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
-            for x in off_lines:
-                self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
+                # 3) On/Off edge markers
+                for x in on_lines:
+                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
+                for x in off_lines:
+                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
 
-            # 4) Current frame indicator
+                self._timeline2_dirty = False
+                self._timeline2_last_limb = limb
+                self._timeline2_canvas_size = (canvas_width, canvas_height)
+                self._timeline2_playhead_id = None
+
+            # Current frame indicator only
             current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
             margin = 2
             current_pos = min(max(current_pos, margin), canvas_width - margin)
-            self.timeline2_canvas.create_line(current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2)
+            if self._timeline2_playhead_id is None:
+                self._timeline2_playhead_id = self.timeline2_canvas.create_line(
+                    current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2
+                )
+            else:
+                self.timeline2_canvas.coords(self._timeline2_playhead_id, current_pos, 0, current_pos, canvas_height)
     
     def update_frame_counter(self):
         if self.video:
@@ -1075,10 +1133,10 @@ class LabelingApp(tk.Tk):
     def analysis(self):
         if self.video:
             self.save_data()
-            directory_path = self.video.dataRH_path_to_csv[:self.video.dataRH_path_to_csv.rfind("data\\") + len("data\\")]
-            index = directory_path.rfind("data")
-            plots_path = directory_path[:index] + "plots" + directory_path[index + len("data"):] if index != -1 else directory_path
-            analysis.do_analysis(directory_path, plots_path, self.video_name, debug=True, frame_rate=self.frame_rate)
+            data_dir = os.path.dirname(self.video.dataRH_path_to_csv)
+            base_dir = os.path.dirname(data_dir)
+            plots_path = os.path.join(base_dir, "plots")
+            analysis.do_analysis(data_dir, plots_path, self.video_name, debug=False, frame_rate=self.frame_rate)
 
     def play_video(self):
         if self.video is None:
@@ -1242,6 +1300,16 @@ class LabelingApp(tk.Tk):
             create_frames(video_path, frames_dir, self.labeling_mode, self.video_name)
         else:
             print("INFO: Number of frames is correct")
+
+        self._timeline_dirty = True
+        self._timeline2_dirty = True
+        self._timeline_last_zone = None
+        self._timeline_last_limb = None
+        self._timeline2_last_limb = None
+        self._timeline_canvas_size = (0, 0)
+        self._timeline2_canvas_size = (0, 0)
+        self._timeline_playhead_id = None
+        self._timeline2_playhead_id = None
 
         # Restore last position (if present) before initial draw
         self.restore_last_position(data_dir, video_name)
@@ -1500,6 +1568,10 @@ class LabelingApp(tk.Tk):
         # Flush buffer so new resolution takes effect immediately.
         if hasattr(self, "img_buffer"):
             self.img_buffer.clear()
+        self._timeline_dirty = True
+        self._timeline2_dirty = True
+        self._timeline_playhead_id = None
+        self._timeline2_playhead_id = None
         if getattr(self, "video", None):
             self.display_first_frame()
 
