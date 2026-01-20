@@ -20,11 +20,11 @@ jobs:
           pip install -r requirements.txt
       - name: Build (PyInstaller)
         run: |
-          python -m PyInstaller TinyTouch.spec
+          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
           cd dist
-          zip -r TinyTouch-${{ github.ref_name }}-linux-x64.zip TinyTouch
+          zip -r TinyTouch-${{ github.ref_name }}-linux-x64.zip TinyTouch-${{ github.ref_name }}
       - uses: actions/upload-artifact@v4
         with:
           name: TinyTouch-linux-x64
@@ -43,10 +43,11 @@ jobs:
           pip install -r requirements.txt
       - name: Build (PyInstaller)
         run: |
+          $env:TINYTOUCH_APP_NAME="TinyTouch-${{ github.ref_name }}"
           python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
-          Compress-Archive -Path dist\\TinyTouch.exe -DestinationPath dist\\TinyTouch-${{ github.ref_name }}-windows-x64.zip
+          Compress-Archive -Path dist\\TinyTouch-${{ github.ref_name }}.exe -DestinationPath dist\\TinyTouch-${{ github.ref_name }}-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: TinyTouch-windows-x64

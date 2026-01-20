@@ -33,13 +33,15 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
+app_name = os.environ.get("TINYTOUCH_APP_NAME", "TinyTouch")
+
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.datas,
     [],
-    name="TinyTouch",
+    name=app_name,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
