@@ -1318,7 +1318,9 @@ class LabelingApp(tk.Tk):
         self.display_first_frame()
         self.draw_timeline()
         self.draw_timeline2()
-        self.name_label.config(text=f"Video Name: {video_name}")
+        self.name_label.config(
+            text=f"Video: {video_name} | FPS: {self.frame_rate} | Version: {self.video.program_version}"
+        )
 
         if not self.background_thread.is_alive():
             self.background_thread.start()

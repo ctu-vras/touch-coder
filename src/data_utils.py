@@ -378,7 +378,7 @@ def export_from_unified(frames: Dict[int, FrameBundle],
 
     for f in range(total_frames + 1):
         b = frames.get(f, empty_bundle())
-        row = {"Frame": f}
+        row = {"Frame": f, "Time_ms": (f / frame_rate) * 1000.0}
 
         # Limb blocks in order: LH, LL, RH, RL
         for limb in ["LH", "LL", "RH", "RL"]:
@@ -386,7 +386,6 @@ def export_from_unified(frames: Dict[int, FrameBundle],
             row[f"{limb}_X"] = _xy_str(rec.get("X", []))
             row[f"{limb}_Y"] = _xy_str(rec.get("Y", []))
             row[f"{limb}_Onset"] = rec.get("Onset", "")
-            row[f"{limb}_Bodypart"] = limb
             row[f"{limb}_Look"] = rec.get("Look", "")
             row[f"{limb}_Zones"] = json.dumps(rec.get("Zones", []) or [])
 
@@ -405,17 +404,16 @@ def export_from_unified(frames: Dict[int, FrameBundle],
                 row[f"{limb}_Parameter_{i}"] = "" if (val is None or val == "") else val
 
         row["Note"] = b.get("Note", "") if isinstance(b, dict) else ""
-        row["Time_ms"] = (f / frame_rate) * 1000.0
         rows.append(row)
 
     # Exact legacy column order
-    cols = ["Frame"]
+    cols = ["Frame", "Time_ms"]
     for limb in ["LH", "LL", "RH", "RL"]:
-        cols += [f"{limb}_X", f"{limb}_Y", f"{limb}_Onset", f"{limb}_Bodypart", f"{limb}_Look", f"{limb}_Zones"]
+        cols += [f"{limb}_X", f"{limb}_Y", f"{limb}_Onset", f"{limb}_Look", f"{limb}_Zones"]
     cols += ["Parameter_1", "Parameter_2", "Parameter_3"]
     for limb in ["LH", "LL", "RH", "RL"]:
         cols += [f"{limb}_Parameter_1", f"{limb}_Parameter_2", f"{limb}_Parameter_3"]
-    cols += ["Note", "Time_ms"]
+    cols += ["Note"]
 
     df = pd.DataFrame(rows, columns=cols)
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)

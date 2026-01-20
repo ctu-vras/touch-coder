@@ -112,64 +112,87 @@ def build_ui(app):
 
 
 def _build_controls(app):
-    # Row 0
-    app.load_video_btn = tk.Button(app.control_frame, text="Load Video", command=app.load_video)
-    app.load_video_btn.grid(row=0, column=0, padx=5, pady=5)
+    # Use pack-based rows to keep layout stable as buttons change
+    top_row = tk.Frame(app.control_frame, bg='lightgrey')
+    top_row.pack(fill="x", padx=5, pady=5)
 
-    app.cloth_btn = tk.Button(app.control_frame, text="Clothes", command=app.open_cloth_app)
-    app.cloth_btn.grid(row=0, column=1, padx=5, pady=5)
+    bottom_row = tk.Frame(app.control_frame, bg='lightgrey')
+    bottom_row.pack(fill="x", padx=5, pady=(0, 5))
 
-    save_btn = tk.Button(app.control_frame, text="Save", command=app.save_data)
-    save_btn.grid(row=0, column=2, padx=5, pady=5)
+    left_top = tk.Frame(top_row, bg='lightgrey')
+    left_top.pack(side="left")
 
-    analysis_btn = tk.Button(app.control_frame, text="Analysis", command=app.analysis)
-    analysis_btn.grid(row=0, column=3, padx=5, pady=5)
+    right_top = tk.Frame(top_row, bg='lightgrey')
+    right_top.pack(side="right")
 
-    back_10_frame_btn = tk.Button(app.control_frame, text="<<", command=lambda: app.next_frame(-7))
-    back_10_frame_btn.grid(row=0, column=5, padx=5, pady=5)
+    right_top_buttons = tk.Frame(right_top, bg='lightgrey')
+    right_top_buttons.pack(side="top", anchor="e")
 
-    back_frame_btn = tk.Button(app.control_frame, text="<", command=lambda: app.next_frame(-1))
-    back_frame_btn.grid(row=0, column=6, padx=5, pady=5)
+    right_top_status = tk.Frame(right_top, bg='lightgrey')
+    right_top_status.pack(side="top", anchor="e")
 
-    next_frame_btn = tk.Button(app.control_frame, text=">", command=lambda: app.next_frame(1))
-    next_frame_btn.grid(row=0, column=8, padx=5, pady=5)
+    app.load_video_btn = tk.Button(left_top, text="Load Video", command=app.load_video)
+    app.load_video_btn.pack(side="left", padx=5)
 
-    next_10_frame_btn = tk.Button(app.control_frame, text=">>", command=lambda: app.next_frame(7))
-    next_10_frame_btn.grid(row=0, column=9, padx=5, pady=5)
+    save_btn = tk.Button(left_top, text="Save", command=app.save_data)
+    save_btn.pack(side="left", padx=5)
 
-    play_btn = tk.Button(app.control_frame, text="Play", command=app.play_video)
-    play_btn.grid(row=0, column=10, padx=5, pady=5)
+    settings_btn = tk.Button(left_top, text="Settings", command=app.open_settings)
+    settings_btn.pack(side="left", padx=5)
 
-    stop_btn = tk.Button(app.control_frame, text="Stop", command=app.stop_video)
-    stop_btn.grid(row=0, column=11, padx=5, pady=5)
+    analysis_btn = tk.Button(left_top, text="Analysis", command=app.analysis)
+    analysis_btn.pack(side="left", padx=5)
 
-    sort_btn = tk.Button(app.control_frame, text="Sort Frames", command=app.sort_frames, state='disabled')
-    sort_btn.grid(row=0, column=12, padx=5, pady=5)
+    app.cloth_btn = tk.Button(left_top, text="Clothes", command=app.open_cloth_app)
+    app.cloth_btn.pack(side="left", padx=5)
 
-    settings_btn = tk.Button(app.control_frame, text="Settings", command=app.open_settings)
-    settings_btn.grid(row=0, column=15, padx=5, pady=5)
+    sort_btn = tk.Button(left_top, text="Sort Frames", command=app.sort_frames, state='disabled')
+    sort_btn.pack(side="left", padx=5)
 
-    app.framerate_label = tk.Label(app.control_frame, text=f"Frame Rate: -----", bg='lightgrey')
-    app.framerate_label.grid(row=0, column=13, padx=5, pady=5)
+    back_10_frame_btn = tk.Button(right_top_buttons, text="<<", command=lambda: app.next_frame(-7))
+    back_10_frame_btn.pack(side="left", padx=5)
 
-    app.min_touch_lenght_label = tk.Label(app.control_frame, text=f"Minimal Touch Length: -----", bg='lightgrey')
-    app.min_touch_lenght_label.grid(row=0, column=14, padx=5, pady=5)
+    back_frame_btn = tk.Button(right_top_buttons, text="<", command=lambda: app.next_frame(-1))
+    back_frame_btn.pack(side="left", padx=5)
 
-    # Row 1
-    app.frame_counter_label = tk.Label(app.control_frame, text="0 / 0")
-    app.frame_counter_label.grid(row=1, column=7, padx=5)
+    next_frame_btn = tk.Button(right_top_buttons, text=">", command=lambda: app.next_frame(1))
+    next_frame_btn.pack(side="left", padx=5)
 
-    app.loading_label = tk.Label(app.control_frame, text="Buffer Loaded", bg='lightgrey')
-    app.loading_label.grid(row=1, column=13, padx=5, pady=5)
+    next_10_frame_btn = tk.Button(right_top_buttons, text=">>", command=lambda: app.next_frame(7))
+    next_10_frame_btn.pack(side="left", padx=5)
 
-    app.name_label = tk.Label(app.control_frame, text="Video Name: -----", bg='lightgrey')
-    app.name_label.grid(row=1, column=14, columnspan=3, padx=5, pady=5, sticky="w")
+    play_btn = tk.Button(right_top_buttons, text="Play", command=app.play_video)
+    play_btn.pack(side="left", padx=5)
 
-    app.mode_label = tk.Label(app.control_frame, text="Mode: -----", bg='lightgrey')
-    app.mode_label.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="w")
+    stop_btn = tk.Button(right_top_buttons, text="Stop", command=app.stop_video)
+    stop_btn.pack(side="left", padx=5)
 
-    app.time_counter_label = tk.Label(app.control_frame, text="0 / 0")
-    app.time_counter_label.grid(row=0, column=7, padx=5)
+    app.frame_counter_label = tk.Label(right_top_status, text="0 / 0", bg='lightgrey')
+    app.frame_counter_label.pack(side="left", padx=5)
+
+    app.time_counter_label = tk.Label(right_top_status, text="0 / 0", bg='lightgrey')
+    app.time_counter_label.pack(side="left", padx=10)
+
+    left_bottom = tk.Frame(bottom_row, bg='lightgrey')
+    left_bottom.pack(side="left")
+
+    right_bottom = tk.Frame(bottom_row, bg='lightgrey')
+    right_bottom.pack(side="right")
+
+    app.mode_label = tk.Label(left_bottom, text="Mode: -----", bg='lightgrey')
+    app.mode_label.pack(side="left", padx=5)
+
+    app.loading_label = tk.Label(left_bottom, text="Buffer Loaded", bg='lightgrey')
+    app.loading_label.pack(side="left", padx=10)
+
+    # Keep the label for updates, but do not show it in the UI.
+    app.framerate_label = tk.Label(left_bottom, text="Frame Rate: -----", bg='lightgrey')
+
+    app.min_touch_lenght_label = tk.Label(left_bottom, text="Minimal Touch Length: -----", bg='lightgrey')
+    app.min_touch_lenght_label.pack(side="left", padx=10)
+
+    app.name_label = tk.Label(right_bottom, text="Video Name: -----", bg='lightgrey')
+    app.name_label.pack(side="left", padx=10)
 
 
 def _build_diagram_panel(app, scale):
