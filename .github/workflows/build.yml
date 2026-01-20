@@ -24,11 +24,11 @@ jobs:
       - name: Package
         run: |
           cd dist
-          zip -r TinyTouch-linux-x64.zip TinyTouch
+          zip -r TinyTouch-${{ github.ref_name }}-linux-x64.zip TinyTouch
       - uses: actions/upload-artifact@v4
         with:
           name: TinyTouch-linux-x64
-          path: dist/TinyTouch-linux-x64.zip
+          path: dist/TinyTouch-${{ github.ref_name }}-linux-x64.zip
 
   build-windows:
     runs-on: windows-latest
@@ -46,8 +46,8 @@ jobs:
           python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
-          Compress-Archive -Path dist\\TinyTouch.exe -DestinationPath dist\\TinyTouch-windows-x64.zip
+          Compress-Archive -Path dist\\TinyTouch.exe -DestinationPath dist\\TinyTouch-${{ github.ref_name }}-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: TinyTouch-windows-x64
-          path: dist/TinyTouch-windows-x64.zip
+          path: dist/TinyTouch-${{ github.ref_name }}-windows-x64.zip
