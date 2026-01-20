@@ -61,6 +61,7 @@ def custom_confirm_close(root,saved: bool):
 
     ttk.Button(btn_frame, text="OK", command=on_yes).pack(side="left", padx=10)
     ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side="left", padx=10)
+
 class LabelingApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -291,7 +292,7 @@ class LabelingApp(tk.Tk):
     def periodic_print_dot(self):
         self.diagram_canvas.delete("all")
         self.on_radio_click()  # keeps same behavior for image & palette
-        dot_size = 10
+        dot_size = getattr(self, "dot_size", 10)
         scale = getattr(self, "diagram_scale", 1.0)
         if self.video and hasattr(self.video, 'data'):
             if self.option_var_1.get() == "RH":

@@ -1,4 +1,5 @@
 { "diagram_scale": 2,
+  "dot_size": 1,
   "new_template": false,
   "minimal_touch_length": 280,
   "parameter1": "P1",

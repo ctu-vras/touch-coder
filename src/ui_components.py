@@ -20,6 +20,15 @@ def _load_diagram_scale():
     except Exception:
         return 1.0
 
+def _load_dot_size():
+    """Read a numeric dot_size from config.json; default to 10 if missing."""
+    try:
+        import json
+        with open("config.json", "r") as f:
+            cfg = json.load(f)
+        return float(cfg.get("dot_size", 10))
+    except Exception:
+        return 10.0
 
 def build_ui(app):
     """
@@ -57,6 +66,8 @@ def build_ui(app):
     # Also store diagram_size to mirror original (controller later overwrites with config_utils)
     scale = _load_diagram_scale()
     app.diagram_scale = scale
+    dot_size = _load_dot_size()
+    app.dot_size = dot_size
 
     # === Containers ===
     app.video_frame = tk.Frame(app, bg='gray')
