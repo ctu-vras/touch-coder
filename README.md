@@ -8,36 +8,19 @@ This application is designed for behavioral researchers to code self-contact (se
 
 ## Installation & Usage Guide
 
-### Windows Installation
+### Windows and Linux Installation
 
 #### Step 1: Download and Extract
 
-1. **Download** the Windows ZIP from **Releases**.
+1. **Download** the ZIP from **Releases** that matches your operating system.
 2. **Extract** the contents of the ZIP file into a folder on your computer.
 
 #### Step 2: Run the Application
 
 1. Open the extracted folder.
-2. Double-click on `TinyTouch.exe` to launch the application.
-
----
-### Linux Installation
-
-#### Step 1: Download
-
-1. **Download** the Linux ZIP from **Releases**.
-
-#### Step 2: Extract and Run
-
-Option A: Extract by double-clicking the ZIP, then run the app from the extracted folder.
-
-Option B: Extract via terminal:
-
-```bash
-unzip TinyTouch-linux-x64.zip -d TinyTouch-linux
-chmod +x TinyTouch-linux/TinyTouch
-./TinyTouch-linux/TinyTouch
-```
+2. Run the executable:
+   - Windows: `TinyTouch.exe`
+   - Linux: `TinyTouch`
 
 ---
 ### From Source (Python)
@@ -46,7 +29,7 @@ chmod +x TinyTouch-linux/TinyTouch
 
 1. Open a terminal and run:
 ```bash
-git clone -b master-linux --single-branch https://github.com/ctu-vras/touch-coder.git
+git clone -b master --single-branch https://github.com/ctu-vras/touch-coder.git
 
 cd touch-coder
 ```
@@ -71,20 +54,6 @@ python3 src/main.py
 ```
 
 ---
-### Linux App (single file, PyInstaller)
-
-This produces a single executable you can double-click. Build on Linux only.
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-python -m PyInstaller TinyTouch.spec
-```
-
-The output binary is in `dist/TinyTouch`. On first launch, `config.json` is copied next to the
-executable so you can edit it without unpacking anything.
 
 ## Application Workflow
 
@@ -97,17 +66,15 @@ executable so you can edit it without unpacking anything.
 2. **Select Clothing Zones:**
    - Click on the `Clothes` button to select the zones that are covered with clothes.
    - The data will be saved after closing the `Clothes` window.
-3. **Navigate Through Frames:**
 
+3. **Navigate Through Frames:**
    - Use the left and right arrow keys, the mouse wheel or the buttons next to the current frame number to move between frames.
    - You can also navigate by clicking in the Timeline 1 or Timeline 2.
 
 4. **Select Limb:**
-
    - Choose a limb using the radio buttons located under the diagram.
 
 5. **Code Touches:**
-
    - You can mark start of a touch by left-clicking on the diagram (a green dot will appear).
    - Mark end of a touch by right-clicking (a red dot will appear).
    - Middle-click on a dot to remove it (you can also aim on the dot and press `d` on your keyboard).
@@ -116,7 +83,6 @@ executable so you can edit it without unpacking anything.
    - You can add note by writing into `Note Entry` and clicking on `Save Note`.
 
 6. **Save Labeled Touches:**
-
    - Periodically save your work by clicking the `Save` button.
    - You can find the labeled data in `Labeled_data/name_of_video/data/export/name_of_video_export.csv`
 
@@ -129,6 +95,11 @@ The tutorial was created for now a bit outdated version but might still help.
 [Watch the tutorial video (download it)](./assets/tutorial.mp4)
 
 ## Additional Notes
+
+- **Settings Button:**
+
+  - Use the `Settings` button to change diagram size, dot size (touch markers), and video resolution.
+  - Tip: Lower video resolution runs faster.
 
 - **New Template:**
 
