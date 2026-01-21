@@ -144,6 +144,8 @@ The tutorial was created for now a bit outdated version but might still help.
 
 - **Timeline Issues:**
   - Sometimes, the timeline may not turn yellow as expected. However, the touch still exists if you see green and red dots.
+- **Trajectory Plot Alignment:**
+  - In Analysis, trajectory plots may appear misaligned. You can manually fix this using the pan tool on the top right of the graph.
 
 ## Contact information
 
