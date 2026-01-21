@@ -1,4 +1,4 @@
-# Self-Contact Coding Application TinyTouch Version 6.0
+# Self-Contact Coding Application TinyTouch
 
 ## Introduction
 
@@ -12,16 +12,35 @@ This application is designed for behavioral researchers to code self-contact (se
 
 #### Step 1: Download and Extract
 
-1. **Download** the ZIP file containing the application. (In the repository click on **Releases** (on the right side) and then download **touch-coderx_x.zip**)
+1. **Download** the Windows ZIP from **Releases**.
 2. **Extract** the contents of the ZIP file into a folder on your computer.
 
 #### Step 2: Run the Application
 
 1. Open the extracted folder.
-2. Double-click on `LabelingApplicationx_x.exe` to launch the application.
+2. Double-click on `TinyTouch.exe` to launch the application.
 
 ---
 ### Linux Installation
+
+#### Step 1: Download
+
+1. **Download** the Linux ZIP from **Releases**.
+
+#### Step 2: Extract and Run
+
+Option A: Extract by double-clicking the ZIP, then run the app from the extracted folder.
+
+Option B: Extract via terminal:
+
+```bash
+unzip TinyTouch-linux-x64.zip -d TinyTouch-linux
+chmod +x TinyTouch-linux/TinyTouch
+./TinyTouch-linux/TinyTouch
+```
+
+---
+### From Source (Python)
 
 #### Step 1: Clone the Repository
 
@@ -40,8 +59,8 @@ sudo apt install -y python3.12 python3.12-venv python3.12-tk python3-pip
 
 #### Step 3: Create and Activate a Virtual Environment
 ```bash
-python3.12 -m venv TinyTouch_env
-source TinyTouch_env/bin/activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
