@@ -45,6 +45,9 @@ import tkinter as tk
 from tkinter import ttk
 from resource_utils import resource_path
 
+PLAYBACK_BUFFER_PAUSE_S = 1.0
+PLAYBACK_BUFFER_AHEAD = 3
+
 def custom_confirm_close(root,saved: bool):
     win = tk.Toplevel(root)
     win.title("Close Application")
@@ -103,6 +106,7 @@ class LabelingApp(tk.Tk):
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
         self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
+        self.buffer_ready = False
 
         # Diagram init
         self.init_diagram()
@@ -748,6 +752,55 @@ class LabelingApp(tk.Tk):
 
         self.video.current_frame_zone = int(self.video.current_frame / self.video.number_frames_in_zone)
 
+    def _format_duration(self, seconds):
+        if seconds is None:
+            return "--:--"
+        seconds = int(max(0, seconds))
+        minutes, secs = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"{hours}:{minutes:02}:{secs:02}"
+        return f"{minutes}:{secs:02}"
+
+    def _open_frame_progress_window(self):
+        win = tk.Toplevel(self)
+        win.title("Preparing Frames")
+        win.geometry("520x170")
+        win.resizable(False, False)
+        win.transient(self)
+
+        title = tk.Label(win, text="Preparing frames...", font=("Segoe UI", 11))
+        title.pack(pady=(12, 6))
+        status = tk.Label(win, text="Starting...", font=("Segoe UI", 10))
+        status.pack()
+        bar = ttk.Progressbar(win, mode="determinate", length=460)
+        bar.pack(pady=8)
+        time_label = tk.Label(win, text="Elapsed: 0:00 | ETA: --:--", font=("Segoe UI", 9))
+        time_label.pack()
+        win.update_idletasks()
+
+        def update(count, total, stage, elapsed_s):
+            total = max(1, int(total))
+            count = min(int(count), total)
+            bar["maximum"] = total
+            bar["value"] = count
+            pct = (count / total) * 100 if total else 0
+            status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
+            eta_s = None
+            if count > 0:
+                rate = elapsed_s / count
+                eta_s = max(0.0, (total - count) * rate)
+            time_label.config(
+                text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
+            )
+            win.update_idletasks()
+
+        def close():
+            if win.winfo_exists():
+                win.destroy()
+
+        return update, close
+
     # --- Playback & buffer ---
     def background_update(self, frame_number=None):
         import time
@@ -791,6 +844,15 @@ class LabelingApp(tk.Tk):
                     else:
                         self.loading_label.config(text="Buffer Loading", bg='#E57373')
 
+                    buffer_ready = current_frame_loaded
+                    if buffer_ready:
+                        max_check = min(self.video.total_frames, frame_number + PLAYBACK_BUFFER_AHEAD)
+                        for i in range(frame_number, max_check + 1):
+                            if i not in self.img_buffer:
+                                buffer_ready = False
+                                break
+                    self.buffer_ready = buffer_ready
+
                     if was_missing and current_frame_loaded:
                         self.after(0, self.display_first_frame)
                     was_missing = not current_frame_loaded
@@ -799,6 +861,9 @@ class LabelingApp(tk.Tk):
         import time
         while True:
             if self.play and self.video is not None:
+                if not self.buffer_ready:
+                    time.sleep(PLAYBACK_BUFFER_PAUSE_S)
+                    continue
                 start = time.perf_counter()
                 self.next_frame(1, play=True)
                 if self.video.current_frame % 10 == 0:
@@ -1300,7 +1365,17 @@ class LabelingApp(tk.Tk):
         # Frames generation/check
         if not check_items_count(frames_dir, self.video.total_frames):
             print("ERROR: Number of frames is different, creating new frames")
-            create_frames(video_path, frames_dir, self.labeling_mode, self.video_name)
+            progress_update, progress_close = self._open_frame_progress_window()
+            try:
+                create_frames(
+                    video_path,
+                    frames_dir,
+                    self.labeling_mode,
+                    self.video_name,
+                    progress_cb=progress_update,
+                )
+            finally:
+                progress_close()
         else:
             print("INFO: Number of frames is correct")
 

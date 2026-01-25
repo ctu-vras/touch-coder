@@ -1,13 +1,9 @@
 {
-  "Program Version": "6.3 (Linux)",
+  "Program Version": "7.2.0 (Linux)",
   "Video Name": "cat3",
   "Labeling Mode": "Normal",
   "Frame Rate": 25.0,
-  "Zones Covered With Clothes": [
-    "L",
-    "K",
-    "J"
-  ],
+  "Zones Covered With Clothes": null,
   "Param Labels": {
     "Parameter_1": "P1",
     "Parameter_2": "P2",

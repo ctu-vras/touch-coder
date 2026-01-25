@@ -21,6 +21,7 @@ This application is designed for behavioral researchers to code self-contact (se
 2. Run the executable:
    - Windows: `TinyTouch.exe`
    - Linux: `TinyTouch`
+Tip (Linux): If you want to see progress logs (e.g., loading frames), run the app from a terminal using `./TinyTouch-<version>`.
 
 ---
 ### From Source (Python)

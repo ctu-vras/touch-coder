@@ -1,5 +1,0 @@
-Limb,Total Touches,Touch Durations [Frames],Total Duration [Frames],Average Touch Duration [Frames],Percentage Touching,Touch Rate [Touches per 100 Frames],Standard Deviation [Frames]
-LH,1,[2],2,2.0,0.6172839506172839,0.30864197530864196,
-RH,1,[7],7,7.0,2.1604938271604937,0.30864197530864196,
-LL,0,[],0,0.0,0.0,0.0,
-RL,0,[],0,0.0,0.0,0.0,

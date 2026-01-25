@@ -65,11 +65,11 @@ class Video:
         
 
         if sys.platform.startswith("win"):
-            self.program_version = "7.2.0 (Windows)"
+            self.program_version = "7.3.0 (Windows)"
         elif sys.platform.startswith("linux"):
-            self.program_version = "7.2.0 (Linux)"
+            self.program_version = "7.3.0 (Linux)"
         else:
-            self.program_version = "7.2.0 (Unknown OS)"
+            self.program_version = "7.3.0 (Unknown OS)"
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
