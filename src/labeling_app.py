@@ -47,7 +47,7 @@ from resource_utils import resource_path
 
 PLAYBACK_BUFFER_PAUSE_S = 1.0
 PLAYBACK_BUFFER_AHEAD = 3
-
+DEBUG = False
 def custom_confirm_close(root,saved: bool):
     win = tk.Toplevel(root)
     win.title("Close Application")
@@ -195,8 +195,9 @@ class LabelingApp(tk.Tk):
         idx = self.video.current_frame
         try:
             b = self.video.frames[idx]
-            print("\n=== FrameBundle UPDATED ===")
-            print(bundle_summary_str(b, frame_index=idx))
+            if DEBUG:
+                print("\n=== FrameBundle UPDATED ===")
+                print(bundle_summary_str(b, frame_index=idx))
         except Exception as e:
             print(f"[notify_bundle_changed] could not print bundle at {idx}: {e}")
     
@@ -324,6 +325,7 @@ class LabelingApp(tk.Tk):
     # --- Diagram init & routine render ---
     def init_diagram(self):
         # set up periodic dots refresh
+        self._load_zone_masks()
         self.periodic_print_dot()
 
     def periodic_print_dot(self):
@@ -500,19 +502,35 @@ class LabelingApp(tk.Tk):
         self.update_limb_parameter_buttons()
 
     # --- Diagram helpers used outside ---
+    def _load_zone_masks(self):
+        directory = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
+        if getattr(self, "_zone_dir", None) == directory and getattr(self, "_zone_masks", None):
+            return
+        self._zone_dir = directory
+        self._zone_masks = []
+        if not os.path.isdir(directory):
+            print(f"WARNING: Zones directory not found: {directory}")
+            return
+        for filename in os.listdir(directory):
+            fp = os.path.join(directory, filename)
+            if os.path.isfile(fp) and fp.lower().endswith(('.png', '.jpg', '.jpeg')):
+                image = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    continue
+                zone_name = filename.rsplit('.', 1)[0]
+                self._zone_masks.append((zone_name, image))
+
     def find_image_with_white_pixel(self, x, y):
-        import cv2, os
         with self.perf.time("find_image_with_white_pixel"):
             x = int(x); y = int(y)
-            directory = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
-            for filename in os.listdir(directory):
-                fp = os.path.join(directory, filename)
-                if os.path.isfile(fp) and fp.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    image = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
-                    if image is None:
-                        continue
-                    if image[y, x] == 0:
-                        return [filename.rsplit('.', 1)[0]]
+            if not getattr(self, "_zone_masks", None):
+                self._load_zone_masks()
+            for zone_name, image in self._zone_masks:
+                h, w = image.shape[:2]
+                if x < 0 or y < 0 or x >= w or y >= h:
+                    continue
+                if image[y, x] == 0:
+                    return [zone_name]
             return ['NN']
 
     # --- Timelines ---
@@ -801,6 +819,99 @@ class LabelingApp(tk.Tk):
 
         return update, close
 
+    def _open_video_copy_progress_window(self):
+        win = tk.Toplevel(self)
+        win.title("Copying Video")
+        win.geometry("520x170")
+        win.resizable(False, False)
+        win.transient(self)
+
+        title = tk.Label(win, text="Copying video to project...", font=("Segoe UI", 11))
+        title.pack(pady=(12, 6))
+        status = tk.Label(win, text="Starting...", font=("Segoe UI", 10))
+        status.pack()
+        bar = ttk.Progressbar(win, mode="determinate", length=460)
+        bar.pack(pady=8)
+        time_label = tk.Label(win, text="Elapsed: 0:00 | ETA: --:--", font=("Segoe UI", 9))
+        time_label.pack()
+        win.update_idletasks()
+
+        def update(count, total, stage, elapsed_s):
+            total = max(1, int(total))
+            count = min(int(count), total)
+            bar["maximum"] = total
+            bar["value"] = count
+            pct = (count / total) * 100 if total else 0
+            status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
+            eta_s = None
+            if count > 0:
+                rate = elapsed_s / count
+                eta_s = max(0.0, (total - count) * rate)
+            time_label.config(
+                text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
+            )
+            win.update_idletasks()
+
+        def close():
+            if win.winfo_exists():
+                win.destroy()
+
+        return update, close
+
+    def _copy_file_with_progress(self, src_path, dest_path, progress_cb, chunk_size=8 * 1024 * 1024):
+        total_bytes = os.path.getsize(src_path)
+        copied = 0
+        start_time = time.time()
+
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with open(src_path, "rb") as src_file, open(dest_path, "wb") as dest_file:
+            while True:
+                chunk = src_file.read(chunk_size)
+                if not chunk:
+                    break
+                dest_file.write(chunk)
+                copied += len(chunk)
+                if progress_cb:
+                    progress_cb(copied, total_bytes, "Copying video", time.time() - start_time)
+        shutil.copystat(src_path, dest_path, follow_symlinks=True)
+
+    def _prepare_video_copy(self, source_path):
+        videos_dir = os.path.join("Videos")
+        os.makedirs(videos_dir, exist_ok=True)
+        dest_path = os.path.join(videos_dir, os.path.basename(source_path))
+
+        if os.path.abspath(source_path) == os.path.abspath(dest_path):
+            print(f"INFO: Video already inside project Videos folder: {dest_path}")
+            return dest_path
+
+        if os.path.exists(dest_path):
+            try:
+                src_size = os.path.getsize(source_path)
+                dest_size = os.path.getsize(dest_path)
+                if src_size != dest_size:
+                    messagebox.showwarning(
+                        "Video Copy Skipped",
+                        "A video with the same name already exists in the Videos folder.\n"
+                        "Using the existing copy to avoid overwriting."
+                    )
+            except Exception:
+                print("WARN: Could not compare video sizes; using existing copy.")
+            print(f"INFO: Video already exists in Videos folder: {dest_path}")
+            return dest_path
+
+        progress_update, progress_close = self._open_video_copy_progress_window()
+        try:
+            self._copy_file_with_progress(source_path, dest_path, progress_update)
+        except Exception as exc:
+            print(f"ERROR: Failed to copy video: {exc}")
+            messagebox.showerror("Video Copy Failed", f"Failed to copy video:\n{exc}")
+            return None
+        finally:
+            progress_close()
+
+        print(f"INFO: Copied video to {dest_path}")
+        return dest_path
+
     # --- Playback & buffer ---
     def background_update(self, frame_number=None):
         import time
@@ -861,6 +972,16 @@ class LabelingApp(tk.Tk):
         import time
         while True:
             if self.play and self.video is not None:
+                current_frame = self.video.current_frame
+                if current_frame not in self.img_buffer:
+                    self.buffer_ready = False
+                    time.sleep(PLAYBACK_BUFFER_PAUSE_S)
+                    continue
+                next_frame = min(self.video.total_frames, current_frame + 1)
+                if next_frame not in self.img_buffer:
+                    self.buffer_ready = False
+                    time.sleep(PLAYBACK_BUFFER_PAUSE_S)
+                    continue
                 if not self.buffer_ready:
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
                     continue
@@ -1129,10 +1250,12 @@ class LabelingApp(tk.Tk):
 
     # --- Save / Export ---
     def save_data(self):
+        if not self.video or not self.video.frames_dir:
+            print("INFO: Save skipped (no video loaded).")
+            return
         self.preview_before_save(changed_only=True)
         print("INFO: Saving (unified & export)...")
         
-
         base_dir = os.path.dirname(self.video.frames_dir)  # -> Labeled_data/<video>
         data_dir   = os.path.join(base_dir, "data")
         export_dir = os.path.join(base_dir, "export")
@@ -1271,8 +1394,16 @@ class LabelingApp(tk.Tk):
         )
         if not video_path: return
 
+        copied_path = self._prepare_video_copy(video_path)
+        if not copied_path:
+            print("INFO: Video copy failed; cancelling load.")
+            return
+        video_path = copied_path
+
         self.video = Video(video_path)
-        self.video.frame_rate = round(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS), 1)
+        cap = cv2.VideoCapture(video_path)
+        self.video.frame_rate = round(cap.get(cv2.CAP_PROP_FPS), 1)
+        cap.release()
         self.frame_rate = self.video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
         min_lenght_in_frames = self.minimal_touch_lenght * self.frame_rate / 1000
@@ -1364,7 +1495,7 @@ class LabelingApp(tk.Tk):
 
         # Frames generation/check
         if not check_items_count(frames_dir, self.video.total_frames):
-            print("ERROR: Number of frames is different, creating new frames")
+            print("INFO: Number of frames is different, creating new frames")
             progress_update, progress_close = self._open_frame_progress_window()
             try:
                 create_frames(
