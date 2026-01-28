@@ -258,13 +258,13 @@ def _build_diagram_panel(app, scale):
 
     label_after_separator3 = tk.Label(app.diagram_frame, text="Parameters", font=("Arial", 10, "bold"), bg='lightgrey')
     label_after_separator3.pack(anchor="n", pady=(5, 2))
-    app.par1_btn = tk.Button(app.diagram_frame, text="Parametr 1",
+    app.par1_btn = tk.Button(app.diagram_frame, text="Parameter 1",
                              command=lambda: app.parameter_dic_insert(1), width=15, height=1)
     app.par1_btn.pack(anchor="n")
-    app.par2_btn = tk.Button(app.diagram_frame, text="Parametr 2",
+    app.par2_btn = tk.Button(app.diagram_frame, text="Parameter 2",
                              command=lambda: app.parameter_dic_insert(2), width=15, height=1)
     app.par2_btn.pack(anchor="n")
-    app.par3_btn = tk.Button(app.diagram_frame, text="Parametr 3",
+    app.par3_btn = tk.Button(app.diagram_frame, text="Parameter 3",
                              command=lambda: app.parameter_dic_insert(3), width=15, height=1)
     app.par3_btn.pack(anchor="n")
 
