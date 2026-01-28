@@ -42,7 +42,8 @@ def write_export_metadata(meta_path: str,
                           frame_rate,
                           clothes_list,
                           param_labels: dict | None = None,
-                          limb_param_labels: dict | None = None) -> None:
+                          limb_param_labels: dict | None = None,
+                          labeling_time_seconds: float | None = None) -> None:
     """
     Writes a JSON sidecar with all non-tabular export metadata that used to be
     stuffed into the first 5 lines of *_export.csv.
@@ -56,6 +57,8 @@ def write_export_metadata(meta_path: str,
         "Param Labels": param_labels or {},
         "Limb Param Labels": limb_param_labels or {},
     }
+    if labeling_time_seconds is not None:
+        meta["Total Labeling Time (hours)"] = round(float(labeling_time_seconds) / 3600.0, 4)
     os.makedirs(os.path.dirname(meta_path), exist_ok=True)
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
@@ -386,7 +389,6 @@ def export_from_unified(frames: Dict[int, FrameBundle],
             row[f"{limb}_X"] = _xy_str(rec.get("X", []))
             row[f"{limb}_Y"] = _xy_str(rec.get("Y", []))
             row[f"{limb}_Onset"] = rec.get("Onset", "")
-            row[f"{limb}_Look"] = rec.get("Look", "")
             row[f"{limb}_Zones"] = json.dumps(rec.get("Zones", []) or [])
 
         # Global params (canonical keys → fixed columns)
@@ -409,7 +411,7 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     # Exact legacy column order
     cols = ["Frame", "Time_ms"]
     for limb in ["LH", "LL", "RH", "RL"]:
-        cols += [f"{limb}_X", f"{limb}_Y", f"{limb}_Onset", f"{limb}_Look", f"{limb}_Zones"]
+        cols += [f"{limb}_X", f"{limb}_Y", f"{limb}_Onset", f"{limb}_Zones"]
     cols += ["Parameter_1", "Parameter_2", "Parameter_3"]
     for limb in ["LH", "LL", "RH", "RL"]:
         cols += [f"{limb}_Parameter_1", f"{limb}_Parameter_2", f"{limb}_Parameter_3"]
@@ -630,10 +632,8 @@ def merge_and_flip_export(
             if col not in merged_df.columns:
                 merged_df[col] = None
 
-    # normalize look columns
-    for limb in ['LH', 'LL', 'RH', 'RL']:
-        merged_df = merged_df.drop([c for c in merged_df.columns if c == f'{limb}_Look_x'], axis=1)
-        merged_df = merged_df.rename(columns={f'{limb}_Look_y': f'{limb}_Look_x'})
+    # Drop legacy Look columns (no longer used in exports).
+    merged_df = merged_df.drop(columns=[c for c in merged_df.columns if "_Look" in c], errors="ignore")
 
     merged_df = merged_df.drop_duplicates(subset=['Frame'])
     merged_df = merged_df.drop([c for c in merged_df.columns if c.endswith('_y')], axis=1)

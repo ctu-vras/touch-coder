@@ -84,6 +84,20 @@ def load_display_limits():
         return max_w, max_h
 
 
+def load_video_downscale():
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
+        config = json.load(file)
+        raw = config.get('video_downscale', 1.0)
+        try:
+            scale = float(raw)
+        except Exception:
+            scale = 1.0
+        if scale <= 0:
+            scale = 1.0
+        return scale
+
+
 def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
     """
     Sets names onto the video object and updates the buttons' labels.

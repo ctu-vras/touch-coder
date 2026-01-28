@@ -11,6 +11,7 @@ class ClothApp:
     def __init__(
         self,
         master,
+        on_save_callback,
         on_close_callback,
         initial_points=None,
         diagram_scale=DEFAULT_CLOTH_DIAGRAM_SCALE,
@@ -19,12 +20,25 @@ class ClothApp:
         # Vytvoření nového okna pomocí Toplevel
         self.top_level = tk.Toplevel(master)
         self.top_level.title("Clothes App")
+        self.on_save_callback = on_save_callback
         self.on_close_callback = on_close_callback
         self.diagram_scale = float(diagram_scale)
         self.dot_radius = int(dot_radius)
 
+        self.controls = tk.Frame(self.top_level, bg='lightgrey')
+        self.controls.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        self.controls.columnconfigure(0, weight=1)
+
+        save_btn = tk.Button(self.controls, text="Save", command=self.on_save)
+        save_btn.pack(side="left", padx=5)
+
+        save_close_btn = tk.Button(self.controls, text="Save & Close", command=self.on_close)
+        save_close_btn.pack(side="left", padx=5)
+
         self.f = tk.Frame(self.top_level, bg='lightgrey')
         self.f.grid(row=1, column=0, sticky="nsew")
+        self.top_level.columnconfigure(0, weight=1)
+        self.top_level.rowconfigure(1, weight=1)
 
         self.dots = {}
         self.img = Image.open(resource_path("icons/diagram.png"))
@@ -45,13 +59,20 @@ class ClothApp:
             for x, y in initial_points:
                 self._create_dot(x, y)
 
+        self.top_level.update_idletasks()
+        controls_h = self.controls.winfo_reqheight()
         win_w = self.img.width + 20
-        win_h = self.img.height + 20
+        win_h = self.img.height + 20 + controls_h + 10
         self.top_level.geometry(f"{win_w}x{win_h}")
+
+    def on_save(self):
+        if self.on_save_callback:
+            self.on_save_callback(self.dots, self.diagram_scale)
 
     def on_close(self):
         # Callback with dots data on close
-        self.on_close_callback(self.dots, self.diagram_scale)
+        if self.on_close_callback:
+            self.on_close_callback(self.dots, self.diagram_scale)
         self.top_level.destroy()
 
     def _create_dot(self, x, y):

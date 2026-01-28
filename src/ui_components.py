@@ -51,6 +51,8 @@ def build_ui(app):
     app.frame_cache = {}
     app.image = None
     app.img_buffer = {}
+    app.img_buffer_bytes = {}
+    app.img_buffer_total = 0
     app.play = False
     app.play_thread_on = False
     app.old_width = None

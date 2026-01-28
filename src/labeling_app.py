@@ -33,7 +33,7 @@ from config_utils import (
     load_config_flags,
     load_parameter_names_into,
     load_perf_config,
-    load_display_limits,
+    load_video_downscale,
 )
 from data_utils import (
     csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
@@ -47,6 +47,7 @@ from resource_utils import resource_path
 
 PLAYBACK_BUFFER_PAUSE_S = 1.0
 PLAYBACK_BUFFER_AHEAD = 3
+BUFFER_MAX_BYTES = 1_000_000_000
 DEBUG = False
 def custom_confirm_close(root,saved: bool):
     win = tk.Toplevel(root)
@@ -85,6 +86,9 @@ class LabelingApp(tk.Tk):
         self.minimal_touch_lenght = None
         self.NEW_TEMPLATE = False
         self.clothes_diagram_scale = DEFAULT_CLOTH_DIAGRAM_SCALE
+        self._cloth_app = None
+        self._video_time_total_s = 0.0
+        self._video_session_start = None
 
         # Build UI (creates frames, widgets, binds events; sets many attributes)
         build_ui(self)
@@ -100,8 +104,8 @@ class LabelingApp(tk.Tk):
             top_n=perf_log_top_n,
         )
         print("INFO: Perf logging enabled:", perf_enabled)
-        self.max_display_width, self.max_display_height = load_display_limits()
-        print("INFO: Max display size:", self.max_display_width, "x", self.max_display_height)
+        self.video_downscale = load_video_downscale()
+        print("INFO: Video downscale:", self.video_downscale)
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
@@ -220,9 +224,9 @@ class LabelingApp(tk.Tk):
         if getattr(self, "note_entry", None) and focus == self.note_entry and event.widget != self.note_entry:
             self.focus_set()
 
-    def navigate_left(self, event): self.next_frame(-1)
+    def navigate_left(self, event): self._request_buffered_step(-1)
     
-    def navigate_right(self, event): self.next_frame(1)
+    def navigate_right(self, event): self._request_buffered_step(1)
 
     def disable_arrow_keys(self, event=None):
         self.unbind("<Left>")
@@ -233,8 +237,8 @@ class LabelingApp(tk.Tk):
     def enable_arrow_keys(self, event=None):
         self.bind("<Left>", self.navigate_left)
         self.bind("<Right>", self.navigate_right)
-        self.bind("<Shift-Left>", lambda event: self.next_frame(-7))
-        self.bind("<Shift-Right>", lambda event: self.next_frame(7))
+        self.bind("<Shift-Left>", lambda event: self._request_buffered_step(-7))
+        self.bind("<Shift-Right>", lambda event: self._request_buffered_step(7))
 
     def update_last_mouse_position(self, event):
         self.last_mouse_x = event.x
@@ -242,15 +246,40 @@ class LabelingApp(tk.Tk):
 
     def on_resize(self, event):
         print("INFO: Resized to {}x{}".format(event.width, event.height))
-        self.img_buffer.clear()
+        self._buffer_reset()
         if self.video:
             self.display_first_frame()
 
     def on_mouse_wheel(self, event):
         if event.delta > 0 or getattr(event, "num", None) == 4:
-            self.next_frame(-1)
+            self._request_buffered_step(-1)
         elif event.delta < 0 or getattr(event, "num", None) == 5:
-            self.next_frame(1)
+            self._request_buffered_step(1)
+
+    def _request_buffered_step(self, delta):
+        if self.video is None:
+            return
+        if getattr(self, "_pending_buffer_step", None) is None:
+            self._pending_buffer_step = delta
+        else:
+            self._pending_buffer_step = delta
+        self._buffered_step_tick()
+
+    def _buffered_step_tick(self):
+        if self.video is None:
+            self._pending_buffer_step = None
+            return
+        delta = getattr(self, "_pending_buffer_step", None)
+        if delta is None:
+            return
+        current_frame = self.video.current_frame
+        next_frame = max(0, min(self.video.total_frames, current_frame + delta))
+        if current_frame not in self.img_buffer or next_frame not in self.img_buffer:
+            self.buffer_ready = False
+            self.after(50, self._buffered_step_tick)
+            return
+        self._pending_buffer_step = None
+        self.next_frame(delta)
 
     def on_middle_click(self, event=None):
         # mouse position in display coords; convert to data coords using diagram_scale
@@ -812,6 +841,10 @@ class LabelingApp(tk.Tk):
                 text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
             )
             win.update_idletasks()
+            try:
+                win.update()
+            except Exception:
+                pass
 
         def close():
             if win.winfo_exists():
@@ -851,6 +884,10 @@ class LabelingApp(tk.Tk):
                 text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
             )
             win.update_idletasks()
+            try:
+                win.update()
+            except Exception:
+                pass
 
         def close():
             if win.winfo_exists():
@@ -948,7 +985,10 @@ class LabelingApp(tk.Tk):
                     min_keep = max(0, frame_number - buffer_range)
                     max_keep = min(self.video.total_frames, frame_number + buffer_range)
                     frames_to_remove = [k for k in self.img_buffer if k < min_keep or k > max_keep]
-                    for k in frames_to_remove: del self.img_buffer[k]
+                    for k in frames_to_remove:
+                        self._buffer_remove_frame(k)
+
+                    self._evict_buffer_to_budget(frame_number)
 
                     if current_frame_loaded:
                         self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
@@ -1007,7 +1047,12 @@ class LabelingApp(tk.Tk):
                     img = self.resize_frame(img)
                 with self.perf.time("load_frame_photo"):
                     photo_img = ImageTk.PhotoImage(img)
-                self.img_buffer[frame_number] = photo_img
+                try:
+                    bytes_per_pixel = max(1, len(img.getbands()))
+                except Exception:
+                    bytes_per_pixel = 4
+                est_bytes = int(img.width * img.height * bytes_per_pixel)
+                self._buffer_store_frame(frame_number, photo_img, est_bytes)
         except Exception as e:
             print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
 
@@ -1015,18 +1060,25 @@ class LabelingApp(tk.Tk):
         with self.perf.time("resize_frame"):
             display_width = self.video_frame.winfo_width()
             display_height = self.video_frame.winfo_height()
-            if self.max_display_width:
-                display_width = min(display_width, self.max_display_width)
-            if self.max_display_height:
-                display_height = min(display_height, self.max_display_height)
             if display_width <= 0 or display_height <= 0:
                 return img
             original_width, original_height = img.size
             aspect_ratio = original_width / original_height
-            if display_width / display_height > aspect_ratio:
-                new_width = int(display_height * aspect_ratio); new_height = display_height
+
+            downscale = float(getattr(self, "video_downscale", 1.0) or 1.0)
+            if downscale <= 0:
+                downscale = 1.0
+
+            target_width = max(1, int(original_width / downscale))
+            target_height = max(1, int(original_height / downscale))
+
+            max_width = min(display_width, target_width)
+            max_height = min(display_height, target_height)
+
+            if max_width / max_height > aspect_ratio:
+                new_width = int(max_height * aspect_ratio); new_height = max_height
             else:
-                new_width = display_width; new_height = int(display_width / aspect_ratio)
+                new_width = max_width; new_height = int(max_width / aspect_ratio)
             self.old_width = new_width; self.old_height = new_height
             return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
@@ -1055,6 +1107,99 @@ class LabelingApp(tk.Tk):
             self.update_frame_counter()
             self.update_limb_parameter_buttons()
             self.update_button_colors()
+
+    def _buffer_reset(self):
+        if hasattr(self, "img_buffer"):
+            self.img_buffer.clear()
+        if hasattr(self, "img_buffer_bytes"):
+            self.img_buffer_bytes.clear()
+        self.img_buffer_total = 0
+
+    def _buffer_remove_frame(self, frame_number):
+        if frame_number in self.img_buffer:
+            del self.img_buffer[frame_number]
+        if hasattr(self, "img_buffer_bytes"):
+            removed = self.img_buffer_bytes.pop(frame_number, 0)
+            self.img_buffer_total = max(0, self.img_buffer_total - removed)
+
+    def _buffer_store_frame(self, frame_number, photo_img, est_bytes):
+        if not hasattr(self, "img_buffer_bytes"):
+            self.img_buffer_bytes = {}
+        if frame_number in self.img_buffer_bytes:
+            self.img_buffer_total = max(0, self.img_buffer_total - self.img_buffer_bytes.get(frame_number, 0))
+        self.img_buffer[frame_number] = photo_img
+        self.img_buffer_bytes[frame_number] = est_bytes
+        self.img_buffer_total = self.img_buffer_total + est_bytes
+
+    def _evict_buffer_to_budget(self, current_frame):
+        limit = BUFFER_MAX_BYTES
+        if limit is None or limit <= 0:
+            return
+        if self.img_buffer_total <= limit:
+            return
+        candidates = sorted(self.img_buffer.keys(), key=lambda k: abs(k - current_frame), reverse=True)
+        for k in candidates:
+            if k == current_frame:
+                continue
+            self._buffer_remove_frame(k)
+            if self.img_buffer_total <= limit:
+                break
+
+    def _video_time_meta_path(self, data_dir, video_name):
+        return os.path.join(data_dir, f"{video_name}_metadata.json")
+
+    def _load_video_time(self, data_dir, video_name):
+        path = self._video_time_meta_path(data_dir, video_name)
+        if not os.path.exists(path):
+            return 0.0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            return float(payload.get("Total Labeling Time (seconds)", 0.0))
+        except Exception as e:
+            print(f"WARNING: Failed to load labeling time: {e}")
+            return 0.0
+
+    def _write_video_time(self, data_dir, video_name, total_seconds):
+        path = self._video_time_meta_path(data_dir, video_name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "Total Labeling Time (hours)": round(float(total_seconds) / 3600.0, 4),
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"WARNING: Failed to save labeling time: {e}")
+
+    def _start_video_timer(self, data_dir, video_name):
+        self._video_time_total_s = self._load_video_time(data_dir, video_name)
+        self._video_session_start = time.monotonic()
+
+    def _current_video_time_s(self):
+        total = float(getattr(self, "_video_time_total_s", 0.0) or 0.0)
+        start = getattr(self, "_video_session_start", None)
+        if start is None:
+            return total
+        return total + (time.monotonic() - start)
+
+    def _persist_video_time(self):
+        if self.video is None or self.video_name is None:
+            return
+        data_dir = os.path.join("Labeled_data", self.video_name, "data")
+        total = self._current_video_time_s()
+        self._write_video_time(data_dir, self.video_name, total)
+        self._video_time_total_s = total
+        self._video_session_start = time.monotonic()
+
+    def _finalize_video_time(self):
+        if self.video is None or self.video_name is None:
+            return
+        data_dir = os.path.join("Labeled_data", self.video_name, "data")
+        total = self._current_video_time_s()
+        self._write_video_time(data_dir, self.video_name, total)
+        self._video_time_total_s = total
+        self._video_session_start = None
 
     # --- Parameter toggles & coloring ---
     def update_button_colors(self):
@@ -1253,6 +1398,7 @@ class LabelingApp(tk.Tk):
         if not self.video or not self.video.frames_dir:
             print("INFO: Save skipped (no video loaded).")
             return
+        self._persist_video_time()
         self.preview_before_save(changed_only=True)
         print("INFO: Saving (unified & export)...")
         
@@ -1300,6 +1446,7 @@ class LabelingApp(tk.Tk):
             clothes_list=clothes_list,
             param_labels=param_labels,
             limb_param_labels=limb_param_labels,
+            labeling_time_seconds=self._current_video_time_s(),
         )
 
         export_from_unified(
@@ -1376,6 +1523,7 @@ class LabelingApp(tk.Tk):
         mode_window.wait_window()
 
     def load_video(self):
+        had_video = self.video is not None
         if self.video is not None:
             print("INFO: Saving before loading new video.")
             self.save_data()
@@ -1399,6 +1547,8 @@ class LabelingApp(tk.Tk):
             print("INFO: Video copy failed; cancelling load.")
             return
         video_path = copied_path
+        if had_video:
+            self._finalize_video_time()
 
         self.video = Video(video_path)
         cap = cv2.VideoCapture(video_path)
@@ -1419,6 +1569,7 @@ class LabelingApp(tk.Tk):
         export_dir = os.path.join(base_dir, "export")
         for d in (data_dir, frames_dir, plots_dir, export_dir): os.makedirs(d, exist_ok=True)
         self.video.frames_dir = frames_dir
+        self._start_video_timer(data_dir, video_name)
 
         # --- Unified-first load ---
         unified_path = os.path.join(data_dir, f"{video_name}_unified.csv")
@@ -1534,7 +1685,7 @@ class LabelingApp(tk.Tk):
         if not self.background_thread.is_alive():
             self.background_thread.start()
         else:
-            self.img_buffer.clear()
+            self._buffer_reset()
             print("INFO: Thread already running.")
 
         # Notes
@@ -1573,18 +1724,38 @@ class LabelingApp(tk.Tk):
         if self.video is None:
             print("ERROR: First select video")
         else:
+            if self._cloth_app and self._cloth_app.top_level.winfo_exists():
+                self._cloth_app.top_level.lift()
+                self._cloth_app.top_level.focus_force()
+                return
             file_path = self.video.clothes_file_path
             if not file_path and self.video_name:
                 data_dir = os.path.join("Labeled_data", self.video_name, "data")
                 file_path = os.path.join(data_dir, f"{self.video_name}_clothes.txt")
             scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
             initial_points = self._load_clothes_points_from_file(file_path, scale)
-            ClothApp(
-                self,
-                self.update_data_clothes,
-                initial_points=initial_points,
-                diagram_scale=scale,
-            )
+            self.cloth_btn.config(state=tk.DISABLED)
+
+            def on_save(dots, diagram_scale=None):
+                self.update_data_clothes(dots, diagram_scale)
+
+            def on_close(dots, diagram_scale=None):
+                self.update_data_clothes(dots, diagram_scale)
+                self.cloth_btn.config(state=tk.NORMAL)
+                self._cloth_app = None
+
+            try:
+                self._cloth_app = ClothApp(
+                    self,
+                    on_save,
+                    on_close,
+                    initial_points=initial_points,
+                    diagram_scale=scale,
+                )
+            except Exception as e:
+                self.cloth_btn.config(state=tk.NORMAL)
+                self._cloth_app = None
+                print(f"ERROR: Failed to open Clothes App: {e}")
 
     def _load_clothes_points_from_file(self, file_path, display_scale):
         if not file_path or not os.path.exists(file_path):
@@ -1649,6 +1820,7 @@ class LabelingApp(tk.Tk):
         if self.video is not None:
             self.save_data()
             self.save_last_position()
+            self._finalize_video_time()
             saved = True
         custom_confirm_close(self, saved)
 
@@ -1703,42 +1875,24 @@ class LabelingApp(tk.Tk):
             return cfg.get(key, default)
 
         vars_map = {
-            "perf_enabled": tk.BooleanVar(value=bool(_v("perf_enabled", False))),
-            "perf_log_every_s": tk.StringVar(value=str(_v("perf_log_every_s", 2.0))),
-            "perf_log_top_n": tk.StringVar(value=str(_v("perf_log_top_n", 6))),
-            "max_display_width": tk.StringVar(value=str(_v("max_display_width", 0))),
-            "max_display_height": tk.StringVar(value=str(_v("max_display_height", 0))),
+            "video_downscale": tk.StringVar(value=str(_v("video_downscale", 1.0))),
             "diagram_scale": tk.StringVar(value=str(_v("diagram_scale", 1.0))),
             "dot_size": tk.StringVar(value=str(_v("dot_size", 10))),
+            "parameter1": tk.StringVar(value=str(_v("parameter1", "Parameter 1"))),
+            "parameter2": tk.StringVar(value=str(_v("parameter2", "Parameter 2"))),
+            "parameter3": tk.StringVar(value=str(_v("parameter3", "Parameter 3"))),
+            "limb_parameter1": tk.StringVar(value=str(_v("limb_parameter1", "Limb Parameter 1"))),
+            "limb_parameter2": tk.StringVar(value=str(_v("limb_parameter2", "Limb Parameter 2"))),
+            "limb_parameter3": tk.StringVar(value=str(_v("limb_parameter3", "Limb Parameter 3"))),
         }
 
         row = 0
-        tk.Label(win, text="Performance").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 4))
-        row += 1
-        tk.Checkbutton(win, text="Enable perf logging", variable=vars_map["perf_enabled"]).grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=8
-        )
-        row += 1
-        tk.Label(win, text="Perf log interval (s)").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["perf_log_every_s"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
-        )
-        row += 1
-        tk.Label(win, text="Perf top N").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["perf_log_top_n"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
-        )
-        row += 1
-
         tk.Label(win, text="Display").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 4))
         row += 1
-        tk.Label(win, text="Max display width (0 = auto)").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["max_display_width"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        tk.Label(win, text="Video downscale (1 = full, 2 = half)").grid(
+            row=row, column=0, sticky="w", padx=8, pady=2
         )
-        row += 1
-        tk.Label(win, text="Max display height (0 = auto)").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["max_display_height"], width=10).grid(
+        tk.Entry(win, textvariable=vars_map["video_downscale"], width=10).grid(
             row=row, column=1, sticky="w", padx=8, pady=2
         )
         row += 1
@@ -1753,17 +1907,6 @@ class LabelingApp(tk.Tk):
         )
         row += 1
 
-        def parse_int(value, key):
-            if value is None:
-                return 0
-            s = str(value).strip()
-            if s == "":
-                return 0
-            try:
-                return int(float(s))
-            except Exception:
-                raise ValueError(f"{key} must be a number")
-
         def parse_float(value, key):
             if value is None:
                 return 0.0
@@ -1775,16 +1918,60 @@ class LabelingApp(tk.Tk):
             except Exception:
                 raise ValueError(f"{key} must be a number")
 
+        tk.Label(win, text="Parameter Labels").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 4))
+        row += 1
+        tk.Label(win, text="Limb Parameter 1").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["limb_parameter1"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Limb Parameter 2").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["limb_parameter2"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Limb Parameter 3").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["limb_parameter3"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Parameter 1").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["parameter1"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Parameter 2").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["parameter2"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Parameter 3").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        tk.Entry(win, textvariable=vars_map["parameter3"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+
         def apply_settings(close=False):
             try:
                 new_cfg = dict(cfg)
-                new_cfg["perf_enabled"] = bool(vars_map["perf_enabled"].get())
-                new_cfg["perf_log_every_s"] = parse_float(vars_map["perf_log_every_s"].get(), "perf_log_every_s")
-                new_cfg["perf_log_top_n"] = parse_int(vars_map["perf_log_top_n"].get(), "perf_log_top_n")
-                new_cfg["max_display_width"] = parse_int(vars_map["max_display_width"].get(), "max_display_width")
-                new_cfg["max_display_height"] = parse_int(vars_map["max_display_height"].get(), "max_display_height")
+                downscale = parse_float(vars_map["video_downscale"].get(), "video_downscale")
+                if downscale <= 0:
+                    downscale = 1.0
+                new_cfg["video_downscale"] = downscale
                 new_cfg["diagram_scale"] = parse_float(vars_map["diagram_scale"].get(), "diagram_scale")
                 new_cfg["dot_size"] = parse_float(vars_map["dot_size"].get(), "dot_size")
+
+                def _label_from(key, default):
+                    raw = vars_map[key].get()
+                    val = str(raw).strip() if raw is not None else ""
+                    return val if val else default
+
+                new_cfg["parameter1"] = _label_from("parameter1", new_cfg.get("parameter1", "Parameter 1"))
+                new_cfg["parameter2"] = _label_from("parameter2", new_cfg.get("parameter2", "Parameter 2"))
+                new_cfg["parameter3"] = _label_from("parameter3", new_cfg.get("parameter3", "Parameter 3"))
+                new_cfg["limb_parameter1"] = _label_from("limb_parameter1", new_cfg.get("limb_parameter1", "Limb Parameter 1"))
+                new_cfg["limb_parameter2"] = _label_from("limb_parameter2", new_cfg.get("limb_parameter2", "Limb Parameter 2"))
+                new_cfg["limb_parameter3"] = _label_from("limb_parameter3", new_cfg.get("limb_parameter3", "Limb Parameter 3"))
             except ValueError as e:
                 messagebox.showerror("Invalid settings", str(e), parent=win)
                 return
@@ -1801,16 +1988,30 @@ class LabelingApp(tk.Tk):
         tk.Button(btn_frame, text="Close", command=win.destroy).pack(side="left", padx=5)
 
     def apply_runtime_settings(self, cfg: dict):
-        self.max_display_width = int(cfg.get("max_display_width") or 0) or None
-        self.max_display_height = int(cfg.get("max_display_height") or 0) or None
         self.perf.enabled = bool(cfg.get("perf_enabled", False))
         self.perf.log_every_s = float(cfg.get("perf_log_every_s", 2.0))
         self.perf.top_n = int(cfg.get("perf_log_top_n", 6))
+
+        new_downscale = float(cfg.get("video_downscale", 1.0))
+        if new_downscale <= 0:
+            new_downscale = 1.0
+        self.video_downscale = new_downscale
 
         new_scale = float(cfg.get("diagram_scale", 1.0))
         new_dot = float(cfg.get("dot_size", 10))
         self.diagram_scale = new_scale
         self.dot_size = new_dot
+
+        # Refresh parameter labels on buttons (and on the active video if present).
+        try:
+            target = self.video if self.video is not None else self
+            load_parameter_names_into(
+                target,
+                {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn},
+                {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn},
+            )
+        except Exception:
+            pass
 
         base_w, base_h = 450, 696
         w, h = int(base_w * new_scale), int(base_h * new_scale)
@@ -1823,7 +2024,7 @@ class LabelingApp(tk.Tk):
 
         # Flush buffer so new resolution takes effect immediately.
         if hasattr(self, "img_buffer"):
-            self.img_buffer.clear()
+            self._buffer_reset()
         self._timeline_dirty = True
         self._timeline2_dirty = True
         self._timeline_playhead_id = None
