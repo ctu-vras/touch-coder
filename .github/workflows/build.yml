@@ -42,22 +42,23 @@ jobs:
       image: ubuntu:20.04
     if: ${{ !endsWith(github.ref_name, '-legacy') }}
     steps:
-      - uses: actions/checkout@v4
       - name: Install system deps
         run: |
           apt-get update
-          apt-get install -y software-properties-common
-          add-apt-repository -y ppa:deadsnakes/ppa
-          apt-get update
-          apt-get install -y python3.11 python3.11-venv python3.11-dev zip
+          apt-get install -y git zip
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "requirements.txt"
       - name: Install deps
         run: |
-          python3.11 -m ensurepip --upgrade
-          python3.11 -m pip install --upgrade pip setuptools wheel
-          python3.11 -m pip install -r requirements.txt
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
       - name: Build (PyInstaller)
         run: |
-          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python3.11 -m PyInstaller TinyTouch.spec
+          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
           cd dist
