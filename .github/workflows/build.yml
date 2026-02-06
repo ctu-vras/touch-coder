@@ -37,22 +37,23 @@ jobs:
           path: dist/TinyTouch-${{ github.ref_name }}-linux-x64.zip
 
   build-linux-legacy:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
     if: ${{ !endsWith(github.ref_name, '-legacy') }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: "requirements.txt"
+      - name: Install system deps
+        run: |
+          apt-get update
+          apt-get install -y python3 python3-pip python3-venv zip
       - name: Install deps
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
+          python3 -m pip install --upgrade pip setuptools wheel
+          pip3 install -r requirements.txt
       - name: Build (PyInstaller)
         run: |
-          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python -m PyInstaller TinyTouch.spec
+          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python3 -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
           cd dist
