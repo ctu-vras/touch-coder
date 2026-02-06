@@ -1,5 +1,5 @@
 altgraph==0.17.4
-Bottleneck==1.6.0
+Bottleneck==1.4.0
 intel-cmplr-lib-ur==2025.2.1
 intel-openmp==2025.2.1
 keyboard==0.13.5
