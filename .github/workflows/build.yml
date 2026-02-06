@@ -46,14 +46,18 @@ jobs:
       - name: Install system deps
         run: |
           apt-get update
-          apt-get install -y python3 python3-pip python3-venv zip
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:deadsnakes/ppa
+          apt-get update
+          apt-get install -y python3.11 python3.11-venv python3.11-dev zip
       - name: Install deps
         run: |
-          python3 -m pip install --upgrade pip setuptools wheel
-          pip3 install -r requirements.txt
+          python3.11 -m ensurepip --upgrade
+          python3.11 -m pip install --upgrade pip setuptools wheel
+          python3.11 -m pip install -r requirements.txt
       - name: Build (PyInstaller)
         run: |
-          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python3 -m PyInstaller TinyTouch.spec
+          TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python3.11 -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
           cd dist
