@@ -45,7 +45,7 @@ jobs:
       - name: Install system deps
         run: |
           apt-get update
-          apt-get install -y git zip
+          apt-get install -y git zip lsb-release ca-certificates
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
