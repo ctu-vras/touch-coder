@@ -39,19 +39,14 @@ jobs:
   build-linux-legacy:
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:20.04
+      image: python:3.11-bullseye
     if: ${{ !endsWith(github.ref_name, '-legacy') }}
     steps:
       - name: Install system deps
         run: |
           apt-get update
-          apt-get install -y git zip lsb-release ca-certificates
+          apt-get install -y git zip
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: "requirements.txt"
       - name: Install deps
         run: |
           python -m pip install --upgrade pip setuptools wheel
