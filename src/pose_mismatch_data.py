@@ -188,17 +188,16 @@ def export_pose_dataset(
     frame_rate: float,
 ) -> None:
     rows = []
-    active_scale_raw = 0.0
-    active_scale_factor = 1.0
     for frame in range(total_frames + 1):
         bundle = ensure_pose_bundle(frames.get(frame))
+        scale_factor = 1.0
         if bundle.get("ScaleSet"):
-            active_scale_raw = float(bundle.get("ScaleRaw", 0.0) or 0.0)
-            active_scale_factor = float(bundle.get("ScaleFactor", scale_raw_to_factor(active_scale_raw)) or 1.0)
+            scale_raw = float(bundle.get("ScaleRaw", 1.0) or 1.0)
+            scale_factor = float(bundle.get("ScaleFactor", scale_raw_to_factor(scale_raw)) or 1.0)
         row = {
             "Frame": frame,
             "Time_ms": (frame / frame_rate) * 1000.0 if frame_rate else 0.0,
-            "ScaleFactor": active_scale_factor,
+            "ScaleFactor": scale_factor,
         }
         params = bundle.get("Params") or {}
         for i in (1, 2, 3):

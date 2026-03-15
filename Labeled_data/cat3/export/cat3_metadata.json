@@ -1,22 +1,18 @@
 {
-  "Program Version": "7.4.0 (Linux)",
+  "Program Version": "7.5.7 (Windows)",
   "Video Name": "cat3",
   "Labeling Mode": "Normal",
   "Frame Rate": 25.0,
-  "Zones Covered With Clothes": [
-    "BOX2",
-    "BOX1",
-    "BOX3",
-    "BOX4"
-  ],
+  "Zones Covered With Clothes": null,
   "Param Labels": {
     "Parameter_1": "Looking1",
     "Parameter_2": "P2",
     "Parameter_3": "P3"
   },
   "Limb Param Labels": {
-    "XX_Parameter_1": "LP1",
-    "XX_Parameter_2": "LP2",
-    "XX_Parameter_3": "LP3"
-  }
+    "XX_Parameter_1": "Limb Parameter 1",
+    "XX_Parameter_2": "Limb Parameter 2",
+    "XX_Parameter_3": "Limb Parameter 3"
+  },
+  "Total Labeling Time (hours)": 0.0052
 }

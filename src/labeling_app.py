@@ -11,7 +11,7 @@ import cv2
 import tkinter as tk
 from tkinter import messagebox, filedialog
 from threading import Thread
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import pandas as pd
 import keyboard
 from data_utils import bundle_summary_str  # import the helper
@@ -106,11 +106,18 @@ class LabelingApp(tk.Tk):
         self._zone_masks = []
         self._zone_centroids = {}
         self._zone_dir = None
+        self._pose_timeline_state_cache = None
         self._base_diagram_image = None
         self._outline_image = None
         self._pose_canvas_dirty = False
+        self.current_pose_scale = 1.0
+        self._last_pose_render_signature = None
+        self._pose_timeline2_photo = None
+        self._pose_timeline2_image_id = None
         self._updating_scale_widget = False
         self._scale_drag_active = False
+        self._pose_scale_carry_active = False
+        self._last_displayed_frame = None
 
         # Build UI (creates frames, widgets, binds events; sets many attributes)
         build_ui(self)
@@ -147,6 +154,8 @@ class LabelingApp(tk.Tk):
         self._timeline2_canvas_size = (0, 0)
         self._timeline_playhead_id = None
         self._timeline2_playhead_id = None
+        self._pose_timeline_scale_overlay_id = None
+        self._pose_timeline2_scale_overlay_id = None
     # --- Param helpers ---
     def _limb_param_key_for_index(self, idx: int) -> str:
         return f"Par{idx}"
@@ -171,22 +180,53 @@ class LabelingApp(tk.Tk):
         return ", ".join(parts) if parts else "No joint events"
 
     def _get_effective_pose_scale(self, frame: int | None = None) -> tuple[float, float]:
-        if frame is None:
-            frame = self.video.current_frame if self.video else 0
-        raw = 1.0
-        factor = 1.0
-        if not self.video:
-            return raw, factor
-        for idx in range(max(0, frame), -1, -1):
-            bundle = self.video.frames.get(idx)
-            if not isinstance(bundle, dict):
-                continue
-            bundle = ensure_pose_bundle(bundle)
+        with self.perf.time("pose_get_effective_scale"):
+            if frame is None:
+                frame = self.video.current_frame if self.video else 0
+            if not self.video:
+                return 1.0, 1.0
+            bundle = ensure_pose_bundle(self.video.frames.get(frame))
             if bundle.get("ScaleSet"):
-                raw = float(bundle.get("ScaleRaw", 0.0) or 0.0)
+                raw = float(bundle.get("ScaleRaw", 1.0) or 1.0)
                 factor = float(bundle.get("ScaleFactor", scale_raw_to_factor(raw)) or 1.0)
                 return raw, factor
-        return raw, factor
+            if frame == self.video.current_frame:
+                current = float(getattr(self, "current_pose_scale", 1.0) or 1.0)
+                return current, current
+            return 1.0, 1.0
+
+    def _log_pose_scale(self, message: str):
+        print(f"INFO: 3D scale {message}")
+
+    def _set_pose_scale_for_frame(self, frame: int, raw: float, redraw_overview: bool, auto_carried: bool) -> bool:
+        if not self.video:
+            return False
+        bundle = self._ensure_bundle(frame)
+        raw = float(raw)
+        factor = scale_raw_to_factor(raw)
+        if (
+            bundle.get("ScaleSet")
+            and abs(float(bundle.get("ScaleRaw", 1.0) or 1.0) - raw) < 1e-9
+            and abs(float(bundle.get("ScaleFactor", 1.0) or 1.0) - factor) < 1e-9
+            and bool(bundle.get("ScaleAutoCarry", False)) == bool(auto_carried)
+        ):
+            return False
+        bundle["ScaleRaw"] = raw
+        bundle["ScaleFactor"] = factor
+        bundle["ScaleSet"] = True
+        bundle["ScaleAutoCarry"] = bool(auto_carried)
+        bundle["Changed"] = True
+        if self._pose_timeline_state_cache is not None:
+            cached = self._pose_timeline_state_cache.get(frame)
+            if isinstance(cached, dict):
+                cached["scale_raw"] = raw
+                cached["scale_factor"] = factor
+        self._timeline_dirty = True
+        if redraw_overview:
+            self._timeline2_dirty = True
+        source = "auto-carry" if auto_carried else "manual"
+        self._log_pose_scale(f"write frame={frame} scale={raw:.2f} source={source} redraw_overview={redraw_overview}")
+        return True
 
     def _remove_white_background(self, image: Image.Image, threshold: int = 245) -> Image.Image:
         image = image.convert("RGBA")
@@ -212,61 +252,79 @@ class LabelingApp(tk.Tk):
         return image
 
     def render_pose_canvas(self):
-        if not self.is_pose_mode():
-            return
-        if self._base_diagram_image is None:
-            self._base_diagram_image = Image.open(resource_path("icons/3d/diagram.png")).convert("RGBA")
-        if self._outline_image is None:
-            outline = self._remove_white_background(Image.open(resource_path("icons/3d/outline.png")))
-            self._outline_image = self._apply_outline_alpha(outline, POSE_OUTLINE_ALPHA)
+            with self.perf.time("pose_render_canvas"):
+                if not self.is_pose_mode():
+                    return
+            if self._base_diagram_image is None:
+                with self.perf.time("pose_render_load_base"):
+                    self._base_diagram_image = Image.open(resource_path("icons/3d/diagram.png")).convert("RGBA")
+            if self._outline_image is None:
+                with self.perf.time("pose_render_load_outline"):
+                    outline = self._remove_white_background(Image.open(resource_path("icons/3d/outline.png")))
+                    self._outline_image = self._apply_outline_alpha(outline, POSE_OUTLINE_ALPHA)
 
-        base_img = self._base_diagram_image
-        outline_img = self._outline_image
-        scale = getattr(self, "diagram_scale", 1.0)
-        canvas_w = int(base_img.width * scale)
-        canvas_h = int(base_img.height * scale)
-        self.diagram_canvas.config(width=canvas_w, height=canvas_h)
+            base_img = self._base_diagram_image
+            outline_img = self._outline_image
+            scale = getattr(self, "diagram_scale", 1.0)
+            canvas_w = int(base_img.width * scale)
+            canvas_h = int(base_img.height * scale)
+            self.diagram_canvas.config(width=canvas_w, height=canvas_h)
+            dots_signature = []
+            if self.video:
+                bundle = ensure_pose_bundle(self.video.frames.get(self.video.current_frame))
+                joints = bundle.get("Joints") or {}
+                for joint in POSE_JOINTS:
+                    rec = joints.get(joint, {})
+                    event = rec.get("Event")
+                    x = rec.get("X")
+                    y = rec.get("Y")
+                    if event and x is not None and y is not None:
+                        dots_signature.append((joint, event, int(x), int(y)))
+            _raw, factor = self._get_effective_pose_scale(self.video.current_frame if self.video else 0)
+            signature = (round(scale, 4), round(factor, 4), tuple(dots_signature))
+            if (not self._pose_canvas_dirty) and self._last_pose_render_signature == signature:
+                return
 
-        composed = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-        base_resized = base_img.resize((canvas_w, canvas_h), Image.LANCZOS)
-        composed.paste(base_resized, (0, 0), base_resized)
+            with self.perf.time("pose_render_compose"):
+                composed = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+                base_resized = base_img.resize((canvas_w, canvas_h), Image.LANCZOS)
+                composed.paste(base_resized, (0, 0), base_resized)
 
-        _raw, factor = self._get_effective_pose_scale(self.video.current_frame if self.video else 0)
-        outline_w = max(1, int(canvas_w * factor))
-        outline_h = max(1, int(canvas_h * factor))
-        outline_resized = outline_img.resize((outline_w, outline_h), Image.LANCZOS)
-        anchor_x = POSE_OUTLINE_ANCHOR_X * scale
-        anchor_y = POSE_OUTLINE_ANCHOR_Y * scale
-        overlay_x = int(round(anchor_x - (anchor_x * factor)))
-        overlay_y = int(round(anchor_y - (anchor_y * factor)))
-        composed.paste(outline_resized, (overlay_x, overlay_y), outline_resized)
+                outline_w = max(1, int(canvas_w * factor))
+                outline_h = max(1, int(canvas_h * factor))
+                outline_resized = outline_img.resize((outline_w, outline_h), Image.LANCZOS)
+                anchor_x = POSE_OUTLINE_ANCHOR_X * scale
+                anchor_y = POSE_OUTLINE_ANCHOR_Y * scale
+                overlay_x = int(round(anchor_x - (anchor_x * factor)))
+                overlay_y = int(round(anchor_y - (anchor_y * factor)))
+                composed.paste(outline_resized, (overlay_x, overlay_y), outline_resized)
 
-        self.photo = ImageTk.PhotoImage(composed)
-        self.diagram_canvas.delete("all")
-        self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
+            with self.perf.time("pose_render_canvas_draw"):
+                self.photo = ImageTk.PhotoImage(composed)
+                self.diagram_canvas.delete("all")
+                self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
 
-        dot_size = getattr(self, "dot_size", 10)
-        if self.video:
-            bundle = ensure_pose_bundle(self.video.frames.get(self.video.current_frame))
-            joints = bundle.get("Joints") or {}
-            for joint in POSE_JOINTS:
-                rec = joints.get(joint, {})
-                x = rec.get("X")
-                y = rec.get("Y")
-                event = rec.get("Event")
-                if x is None or y is None or not event:
-                    continue
-                color = "green" if event == "ON" else "red"
-                self.diagram_canvas.create_oval(
-                    x * scale - dot_size,
-                    y * scale - dot_size,
-                    x * scale + dot_size,
-                    y * scale + dot_size,
-                    fill=color,
-                    outline=color,
-                )
+                dot_size = getattr(self, "dot_size", 10)
+                if self.video:
+                    for joint in POSE_JOINTS:
+                        rec = joints.get(joint, {})
+                        x = rec.get("X")
+                        y = rec.get("Y")
+                        event = rec.get("Event")
+                        if x is None or y is None or not event:
+                            continue
+                        color = "green" if event == "ON" else "red"
+                        self.diagram_canvas.create_oval(
+                            x * scale - dot_size,
+                            y * scale - dot_size,
+                            x * scale + dot_size,
+                            y * scale + dot_size,
+                            fill=color,
+                            outline=color,
+                        )
 
-        self._pose_canvas_dirty = False
+            self._pose_canvas_dirty = False
+            self._last_pose_render_signature = signature
 
     def _find_nearest_pose_joint(self, x: float, y: float, max_distance: float = 28.0):
         if not getattr(self, "_zone_centroids", None):
@@ -341,6 +399,8 @@ class LabelingApp(tk.Tk):
         self._zone_masks = []
         self._zone_centroids = {}
         self._zone_dir = None
+        self._pose_timeline_state_cache = None
+        self._last_pose_render_signature = None
 
     def _clear_frame_children(self, frame):
         for child in frame.winfo_children():
@@ -388,26 +448,37 @@ class LabelingApp(tk.Tk):
             )
             self.scale_value_label.pack(anchor="n")
 
+            scale_controls = tk.Frame(self.limb_parameter_frame, bg="lightgrey")
+            scale_controls.pack(anchor="n", pady=(2, 6))
+
             self.scale_widget = tk.Scale(
-                self.limb_parameter_frame,
+                scale_controls,
                 from_=0.7,
                 to=1.3,
                 resolution=0.01,
                 orient=tk.HORIZONTAL,
-                length=220,
+                length=180,
                 variable=self.scale_var,
                 command=self.on_scale_changed,
                 bg="lightgrey",
                 highlightthickness=0,
                 takefocus=0,
             )
-            self.scale_widget.pack(anchor="n", pady=(2, 6))
+            self.scale_widget.pack(side="left", anchor="n")
             self.scale_widget.bind("<Button-1>", self._on_scale_press)
             self.scale_widget.bind("<ButtonRelease-1>", self._on_scale_release)
             self.scale_widget.bind("<Key>", lambda _event: "break")
             self.scale_widget.bind("<MouseWheel>", lambda _event: "break")
             self.scale_widget.bind("<Button-4>", lambda _event: "break")
             self.scale_widget.bind("<Button-5>", lambda _event: "break")
+
+            tk.Button(
+                scale_controls,
+                text="1.00",
+                command=self.reset_pose_scale,
+                width=5,
+                height=1,
+            ).pack(side="left", padx=(6, 0))
 
             self.pose_events_label = tk.Label(
                 self.limb_parameter_frame,
@@ -477,12 +548,29 @@ class LabelingApp(tk.Tk):
         if not self._scale_drag_active:
             return
         frame = self.video.current_frame
-        bundle = self._ensure_bundle(frame)
         raw = float(self.scale_var.get())
-        bundle["ScaleRaw"] = raw
-        bundle["ScaleFactor"] = scale_raw_to_factor(raw)
-        bundle["ScaleSet"] = True
-        self.mark_bundle_changed(frame)
+        self.current_pose_scale = raw
+        self._pose_scale_carry_active = True
+        self._set_pose_scale_for_frame(frame, raw, redraw_overview=True, auto_carried=False)
+        self.update_pose_scale_label()
+        self._pose_canvas_dirty = True
+        self.render_pose_canvas()
+        self.draw_timeline()
+        self.draw_timeline2()
+
+    def reset_pose_scale(self):
+        if not self.video or not self.is_pose_mode():
+            return
+        raw = 1.0
+        self.current_pose_scale = raw
+        self._pose_scale_carry_active = True
+        self._set_pose_scale_for_frame(self.video.current_frame, raw, redraw_overview=True, auto_carried=False)
+        self._updating_scale_widget = True
+        try:
+            if getattr(self, "scale_var", None) is not None:
+                self.scale_var.set(raw)
+        finally:
+            self._updating_scale_widget = False
         self.update_pose_scale_label()
         self._pose_canvas_dirty = True
         self.render_pose_canvas()
@@ -577,6 +665,7 @@ class LabelingApp(tk.Tk):
             b["Changed"] = True
             self._timeline_dirty = True
             self._timeline2_dirty = True
+            self._pose_timeline_state_cache = None
             # optional: keep your terminal print
             if hasattr(self, "notify_bundle_changed"):
                 self.notify_bundle_changed(idx)
@@ -616,6 +705,19 @@ class LabelingApp(tk.Tk):
             focus = None
         if getattr(self, "note_entry", None) and focus == self.note_entry and event.widget != self.note_entry:
             self.focus_set()
+
+    def _set_loading_label_async(self, text: str, bg: str):
+        current = getattr(self, "_loading_label_state", None)
+        new_state = (text, bg)
+        if current == new_state:
+            return
+        self._loading_label_state = new_state
+
+        def _apply():
+            if getattr(self, "loading_label", None):
+                self.loading_label.config(text=text, bg=bg)
+
+        self.after(0, _apply)
 
     def navigate_left(self, event): self._request_buffered_step(-1)
     
@@ -844,43 +946,44 @@ class LabelingApp(tk.Tk):
         if self.video is None:
             return
         if self.is_pose_mode():
-            onset = "ON" if right else "OFF"
-            display_scale = getattr(self, "diagram_scale", 1.0)
-            x_pos = event.x * (1.0 / display_scale)
-            y_pos = event.y * (1.0 / display_scale)
-            zone_results = list(self.find_image_with_white_pixel(x_pos, y_pos))
-            nearest = self._pose_joint_distances(x_pos, y_pos, limit=5)
-            joint = next((zone for zone in zone_results if zone in POSE_JOINTS), None)
-            if not joint:
-                joint = self._find_nearest_pose_joint(x_pos, y_pos)
-            print(
-                "INFO: 3D click "
-                f"button={'left/onset' if right else 'right/offset'} "
-                f"canvas=({event.x}, {event.y}) "
-                f"data=({int(x_pos)}, {int(y_pos)}) "
-                f"direct_hits={zone_results} "
-                f"nearest={[(name, round(dist, 1), (round(center[0],1), round(center[1],1))) for name, dist, center in nearest]} "
-                f"chosen={joint}"
-            )
-            if not joint:
-                neighbors = self._probe_pose_zone_neighbors(x_pos, y_pos, radius=16, step=2)
+            with self.perf.time("pose_click_total"):
+                onset = "ON" if right else "OFF"
+                display_scale = getattr(self, "diagram_scale", 1.0)
+                x_pos = event.x * (1.0 / display_scale)
+                y_pos = event.y * (1.0 / display_scale)
+                zone_results = list(self.find_image_with_white_pixel(x_pos, y_pos))
+                nearest = self._pose_joint_distances(x_pos, y_pos, limit=5)
+                joint = next((zone for zone in zone_results if zone in POSE_JOINTS), None)
+                if not joint:
+                    joint = self._find_nearest_pose_joint(x_pos, y_pos)
                 print(
-                    "INFO: 3D click missed all joint zones "
-                    f"at ({int(x_pos)}, {int(y_pos)}) "
-                    f"neighbor_probe={[(name, round(dist,1), px, py) for name, (dist, px, py) in neighbors]}"
+                    "INFO: 3D click "
+                    f"button={'left/onset' if right else 'right/offset'} "
+                    f"canvas=({event.x}, {event.y}) "
+                    f"data=({int(x_pos)}, {int(y_pos)}) "
+                    f"direct_hits={zone_results} "
+                    f"nearest={[(name, round(dist, 1), (round(center[0],1), round(center[1],1))) for name, dist, center in nearest]} "
+                    f"chosen={joint}"
                 )
+                if not joint:
+                    neighbors = self._probe_pose_zone_neighbors(x_pos, y_pos, radius=16, step=2)
+                    print(
+                        "INFO: 3D click missed all joint zones "
+                        f"at ({int(x_pos)}, {int(y_pos)}) "
+                        f"neighbor_probe={[(name, round(dist,1), px, py) for name, (dist, px, py) in neighbors]}"
+                    )
+                    return
+                bundle = self._ensure_bundle(self.video.current_frame)
+                bundle["Joints"][joint]["Event"] = onset
+                bundle["Joints"][joint]["X"] = int(x_pos)
+                bundle["Joints"][joint]["Y"] = int(y_pos)
+                self.mark_bundle_changed(self.video.current_frame)
+                self.update_pose_scale_label()
+                self._pose_canvas_dirty = True
+                self.render_pose_canvas()
+                self.draw_timeline()
+                self.draw_timeline2()
                 return
-            bundle = self._ensure_bundle(self.video.current_frame)
-            bundle["Joints"][joint]["Event"] = onset
-            bundle["Joints"][joint]["X"] = int(x_pos)
-            bundle["Joints"][joint]["Y"] = int(y_pos)
-            self.mark_bundle_changed(self.video.current_frame)
-            self.update_pose_scale_label()
-            self._pose_canvas_dirty = True
-            self.render_pose_canvas()
-            self.draw_timeline()
-            self.draw_timeline2()
-            return
         onset = "ON" if right else "OFF"
         display_scale = getattr(self, "diagram_scale", 1.0)
         x_pos = event.x * (1.0 / display_scale)
@@ -1160,132 +1263,235 @@ class LabelingApp(tk.Tk):
         return None
 
     def _build_pose_timeline_state(self):
-        active_joints = set()
-        state = {}
-        for frame in range(self.video.total_frames + 1):
-            bundle = ensure_pose_bundle(self.video.frames.get(frame))
-            joints = bundle.get("Joints") or {}
-            events = {}
-            for joint in POSE_JOINTS:
-                rec = joints.get(joint, {})
-                event = rec.get("Event") if isinstance(rec, dict) else None
-                if event == "ON":
-                    active_joints.add(joint)
-                    events[joint] = "ON"
-                elif event == "OFF":
-                    active_joints.discard(joint)
-                    events[joint] = "OFF"
-            raw, factor = self._get_effective_pose_scale(frame)
-            state[frame] = {
-                "events": events,
-                "active": set(active_joints),
-                "active_count": len(active_joints),
-                "scale_raw": raw,
-                "scale_factor": factor,
-            }
-        return state
+        with self.perf.time("pose_build_timeline_state"):
+            if self._pose_timeline_state_cache is not None:
+                return self._pose_timeline_state_cache
+            active_joints = set()
+            state = {}
+            active_scale_raw = 1.0
+            active_scale_factor = 1.0
+            for frame in range(self.video.total_frames + 1):
+                bundle = ensure_pose_bundle(self.video.frames.get(frame))
+                joints = bundle.get("Joints") or {}
+                events = {}
+                for joint in POSE_JOINTS:
+                    rec = joints.get(joint, {})
+                    event = rec.get("Event") if isinstance(rec, dict) else None
+                    if event == "ON":
+                        active_joints.add(joint)
+                        events[joint] = "ON"
+                    elif event == "OFF":
+                        active_joints.discard(joint)
+                        events[joint] = "OFF"
+                if bundle.get("ScaleSet"):
+                    active_scale_raw = float(bundle.get("ScaleRaw", 1.0) or 1.0)
+                    active_scale_factor = float(
+                        bundle.get("ScaleFactor", scale_raw_to_factor(active_scale_raw)) or 1.0
+                    )
+                else:
+                    active_scale_raw = 1.0
+                    active_scale_factor = 1.0
+                state[frame] = {
+                    "events": events,
+                    "active": set(active_joints),
+                    "active_count": len(active_joints),
+                    "scale_raw": active_scale_raw,
+                    "scale_factor": active_scale_factor,
+                }
+            self._pose_timeline_state_cache = state
+            return state
 
     def _draw_pose_timeline(self):
         canvas_width = self.timeline_canvas.winfo_width()
         canvas_height = self.timeline_canvas.winfo_height()
         zone = self.video.current_frame_zone
+        needs_full = (
+            self._timeline_dirty
+            or self._timeline_last_zone != zone
+            or self._timeline_last_limb != "POSE_3D"
+            or self._timeline_canvas_size != (canvas_width, canvas_height)
+        )
         sector_width = canvas_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
         offset = self.video.number_frames_in_zone * zone
         top = 0
         bottom = canvas_height
-        self.timeline_canvas.delete("all")
-        pose_state = self._build_pose_timeline_state()
         scale_min = 0.7
         scale_max = 1.3
         scale_top = 8
         scale_bottom = max(scale_top + 10, canvas_height - 16)
-        active_strip_h = 8
+        if needs_full:
+            self.timeline_canvas.delete("all")
+            pose_state = self._build_pose_timeline_state()
+            active_strip_h = 8
 
-        for frame_offset in range(offset, min(offset + self.video.number_frames_in_zone, self.video.total_frames + 1)):
-            left = (frame_offset - offset) * sector_width
-            right = left + sector_width
-            frame_state = pose_state.get(frame_offset, {})
-            scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
-            scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
-            scale_ratio = max(0.0, min(1.0, scale_ratio))
-            y_scale = scale_bottom - (scale_bottom - scale_top) * scale_ratio
-            self.timeline_canvas.create_rectangle(left, top, right, bottom, fill="#f1f1f1", outline="#d4d4d4")
-            self.timeline_canvas.create_line(left + 1, y_scale, right - 1, y_scale, fill="#446a8a", width=2)
+            for frame_offset in range(offset, min(offset + self.video.number_frames_in_zone, self.video.total_frames + 1)):
+                left = (frame_offset - offset) * sector_width
+                right = left + sector_width
+                frame_state = pose_state.get(frame_offset, {})
+                scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
+                scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
+                scale_ratio = max(0.0, min(1.0, scale_ratio))
+                y_scale = scale_bottom - (scale_bottom - scale_top) * scale_ratio
+                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill="#f1f1f1", outline="#d4d4d4")
+                self.timeline_canvas.create_line(left + 1, y_scale, right - 1, y_scale, fill="#446a8a", width=2)
 
-            active_count = int(frame_state.get("active_count", 0) or 0)
-            if active_count > 0:
-                shade = max(180, 232 - (active_count * 8))
-                fill = f"#{shade:02x}{min(255, shade + 12):02x}{min(255, shade + 20):02x}"
-                self.timeline_canvas.create_rectangle(
-                    left,
-                    bottom - active_strip_h,
-                    right,
-                    bottom,
-                    fill=fill,
-                    outline="",
-                )
+                active_count = int(frame_state.get("active_count", 0) or 0)
+                if active_count > 0:
+                    shade = max(180, 232 - (active_count * 8))
+                    fill = f"#{shade:02x}{min(255, shade + 12):02x}{min(255, shade + 20):02x}"
+                    self.timeline_canvas.create_rectangle(
+                        left,
+                        bottom - active_strip_h,
+                        right,
+                        bottom,
+                        fill=fill,
+                        outline="",
+                    )
 
-            mid_x = left + sector_width / 2
-            on_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "ON")
-            off_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "OFF")
-            if on_count:
-                self.timeline_canvas.create_line(mid_x - 1, top + 2, mid_x - 1, bottom - active_strip_h - 2, fill="#2f8f57", width=1)
-            if off_count:
-                self.timeline_canvas.create_line(mid_x + 1, top + 2, mid_x + 1, bottom - active_strip_h - 2, fill="#c56262", width=1)
-            param_color = self.parameter_color_at_frame(frame_offset)
-            if param_color:
-                self.timeline_canvas.create_line(mid_x + 3, top + 2, mid_x + 3, bottom - active_strip_h - 2, fill=param_color, width=2)
+                mid_x = left + sector_width / 2
+                on_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "ON")
+                off_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "OFF")
+                if on_count:
+                    self.timeline_canvas.create_line(mid_x - 1, top + 2, mid_x - 1, bottom - active_strip_h - 2, fill="#2f8f57", width=1)
+                if off_count:
+                    self.timeline_canvas.create_line(mid_x + 1, top + 2, mid_x + 1, bottom - active_strip_h - 2, fill="#c56262", width=1)
+                param_color = self.parameter_color_at_frame(frame_offset)
+                if param_color:
+                    self.timeline_canvas.create_line(mid_x + 3, top + 2, mid_x + 3, bottom - active_strip_h - 2, fill=param_color, width=2)
 
-        self._timeline_dirty = False
-        self._timeline_last_zone = zone
-        self._timeline_last_limb = "POSE_3D"
-        self._timeline_canvas_size = (canvas_width, canvas_height)
-        self._timeline_playhead_id = None
+            self._timeline_dirty = False
+            self._timeline_last_zone = zone
+            self._timeline_last_limb = "POSE_3D"
+            self._timeline_canvas_size = (canvas_width, canvas_height)
+            self._timeline_playhead_id = None
+            self._pose_timeline_scale_overlay_id = None
 
         current_pos = ((self.video.current_frame - offset) / self.video.number_frames_in_zone) * canvas_width
         left = max(0, min(canvas_width - 4, current_pos))
-        self._timeline_playhead_id = self.timeline_canvas.create_rectangle(left, top, left + 4, bottom, fill="dodgerblue", outline="")
+        if self._timeline_playhead_id is None:
+            self._timeline_playhead_id = self.timeline_canvas.create_rectangle(left, top, left + 4, bottom, fill="dodgerblue", outline="")
+        else:
+            self.timeline_canvas.coords(self._timeline_playhead_id, left, top, left + 4, bottom)
+
+        current_scale = float(self._get_effective_pose_scale(self.video.current_frame)[1] or 1.0)
+        scale_ratio = (current_scale - scale_min) / (scale_max - scale_min)
+        scale_ratio = max(0.0, min(1.0, scale_ratio))
+        y_scale = scale_bottom - (scale_bottom - scale_top) * scale_ratio
+        sector_left = max(0.0, min(canvas_width, (self.video.current_frame - offset) * sector_width))
+        sector_right = max(sector_left + 1.0, min(canvas_width, sector_left + sector_width))
+        if self._pose_timeline_scale_overlay_id is None:
+            self._pose_timeline_scale_overlay_id = self.timeline_canvas.create_line(
+                sector_left + 1,
+                y_scale,
+                sector_right - 1,
+                y_scale,
+                fill="#113a5c",
+                width=3,
+            )
+        else:
+            self.timeline_canvas.coords(
+                self._pose_timeline_scale_overlay_id,
+                sector_left + 1,
+                y_scale,
+                sector_right - 1,
+                y_scale,
+            )
 
     def _draw_pose_timeline2(self):
         canvas_width = self.timeline2_canvas.winfo_width()
         canvas_height = self.timeline2_canvas.winfo_height()
-        self.timeline2_canvas.delete("all")
-        pose_state = self._build_pose_timeline_state()
-        scale_min = 0.7
-        scale_max = 1.3
+        needs_full = (
+            self._timeline2_dirty
+            or self._timeline2_last_limb != "POSE_3D"
+            or self._timeline2_canvas_size != (canvas_width, canvas_height)
+        )
+        if needs_full:
+            self.timeline2_canvas.delete("all")
+            pose_state = self._build_pose_timeline_state()
+            scale_min = 0.7
+            scale_max = 1.3
 
-        for frame in range(self.video.total_frames + 1):
-            x = (frame / self.video.total_frames) * canvas_width if self.video.total_frames else 0
-            frame_state = pose_state.get(frame, {})
-            active_count = int(frame_state.get("active_count", 0) or 0)
-            if active_count > 0:
-                shade = max(185, 235 - (active_count * 8))
-                color = f"#{shade:02x}{min(255, shade + 12):02x}{min(255, shade + 20):02x}"
-                self.timeline2_canvas.create_line(x, canvas_height - 8, x, canvas_height, fill=color, width=2)
-            scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
-            scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
-            scale_ratio = max(0.0, min(1.0, scale_ratio))
-            y_scale = (canvas_height - 10) - ((canvas_height - 14) * scale_ratio)
-            self.timeline2_canvas.create_line(x, y_scale, x, y_scale + 1, fill="#446a8a", width=1)
-            has_on = any(ev == "ON" for ev in frame_state.get("events", {}).values())
-            has_off = any(ev == "OFF" for ev in frame_state.get("events", {}).values())
-            if has_on:
-                self.timeline2_canvas.create_line(x - 1, 0, x - 1, canvas_height - 10, fill="#2f8f57", width=1)
-            if has_off:
-                self.timeline2_canvas.create_line(x + 1, 0, x + 1, canvas_height - 10, fill="#c56262", width=1)
-            param_color = self.parameter_color_at_frame(frame)
-            if param_color:
-                self.timeline2_canvas.create_line(x + 2, 0, x + 2, canvas_height - 10, fill=param_color, width=1)
+            with self.perf.time("pose_draw_timeline2_raster"):
+                img = Image.new("RGBA", (max(1, canvas_width), max(1, canvas_height)), (211, 211, 211, 255))
+                draw = ImageDraw.Draw(img)
+                total_frames = max(1, self.video.total_frames)
 
-        self._timeline2_dirty = False
-        self._timeline2_last_limb = "POSE_3D"
-        self._timeline2_canvas_size = (canvas_width, canvas_height)
-        self._timeline2_playhead_id = None
+                for frame in range(self.video.total_frames + 1):
+                    x = int(round((frame / total_frames) * (canvas_width - 1))) if canvas_width > 1 else 0
+                    frame_state = pose_state.get(frame, {})
+                    active_count = int(frame_state.get("active_count", 0) or 0)
+                    if active_count > 0:
+                        shade = max(185, 235 - (active_count * 8))
+                        color = (shade, min(255, shade + 12), min(255, shade + 20), 255)
+                        draw.line((x, canvas_height - 8, x, canvas_height), fill=color, width=2)
+
+                    scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
+                    scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
+                    scale_ratio = max(0.0, min(1.0, scale_ratio))
+                    y_scale = int(round((canvas_height - 10) - ((canvas_height - 14) * scale_ratio)))
+                    draw.point((x, y_scale), fill=(68, 106, 138, 255))
+
+                    events = frame_state.get("events", {})
+                    has_on = any(ev == "ON" for ev in events.values())
+                    has_off = any(ev == "OFF" for ev in events.values())
+                    if has_on and x - 1 >= 0:
+                        draw.line((x - 1, 0, x - 1, canvas_height - 10), fill=(47, 143, 87, 255), width=1)
+                    if has_off and x + 1 < canvas_width:
+                        draw.line((x + 1, 0, x + 1, canvas_height - 10), fill=(197, 98, 98, 255), width=1)
+
+                    param_color = self.parameter_color_at_frame(frame)
+                    if param_color:
+                        color_map = {
+                            "green": (0, 128, 0, 255),
+                            "#E57373": (229, 115, 115, 255),
+                            "red": (255, 0, 0, 255),
+                        }
+                        rgba = color_map.get(param_color, (90, 90, 90, 255))
+                        if x + 2 < canvas_width:
+                            draw.line((x + 2, 0, x + 2, canvas_height - 10), fill=rgba, width=1)
+
+                self._pose_timeline2_photo = ImageTk.PhotoImage(img)
+                self._pose_timeline2_image_id = self.timeline2_canvas.create_image(
+                    0, 0, anchor="nw", image=self._pose_timeline2_photo
+                )
+
+            self._timeline2_dirty = False
+            self._timeline2_last_limb = "POSE_3D"
+            self._timeline2_canvas_size = (canvas_width, canvas_height)
+            self._timeline2_playhead_id = None
+            self._pose_timeline2_scale_overlay_id = None
 
         current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width if self.video.total_frames else 0
-        self._timeline2_playhead_id = self.timeline2_canvas.create_line(
-            current_pos, 0, current_pos, canvas_height, fill="dodgerblue", width=2
-        )
+        if self._timeline2_playhead_id is None:
+            self._timeline2_playhead_id = self.timeline2_canvas.create_line(
+                current_pos, 0, current_pos, canvas_height, fill="dodgerblue", width=2
+            )
+        else:
+            self.timeline2_canvas.coords(self._timeline2_playhead_id, current_pos, 0, current_pos, canvas_height)
+
+        scale_min = 0.7
+        scale_max = 1.3
+        current_scale = float(self._get_effective_pose_scale(self.video.current_frame)[1] or 1.0)
+        scale_ratio = (current_scale - scale_min) / (scale_max - scale_min)
+        scale_ratio = max(0.0, min(1.0, scale_ratio))
+        y_scale = int(round((canvas_height - 10) - ((canvas_height - 14) * scale_ratio)))
+        if self._pose_timeline2_scale_overlay_id is None:
+            self._pose_timeline2_scale_overlay_id = self.timeline2_canvas.create_oval(
+                current_pos - 2,
+                y_scale - 2,
+                current_pos + 2,
+                y_scale + 2,
+                fill="#113a5c",
+                outline="",
+            )
+        else:
+            self.timeline2_canvas.coords(
+                self._pose_timeline2_scale_overlay_id,
+                current_pos - 2,
+                y_scale - 2,
+                current_pos + 2,
+                y_scale + 2,
+            )
 
     def draw_timeline(self):
         with self.perf.time("draw_timeline"):
@@ -1692,9 +1898,9 @@ class LabelingApp(tk.Tk):
                     self._evict_buffer_to_budget(frame_number)
 
                     if current_frame_loaded:
-                        self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
+                        self._set_loading_label_async("Buffer Loaded", "lightgreen")
                     else:
-                        self.loading_label.config(text="Buffer Loading", bg='#E57373')
+                        self._set_loading_label_async("Buffer Loading", "#E57373")
 
                     buffer_ready = current_frame_loaded
                     if buffer_ready:
@@ -1743,17 +1949,16 @@ class LabelingApp(tk.Tk):
             with self.perf.time("load_frame_total"):
                 frame_path = os.path.join(self.video.frames_dir, f"frame{frame_number}.jpg")
                 with self.perf.time("load_frame_open"):
-                    img = Image.open(frame_path)
+                    with Image.open(frame_path) as opened:
+                        img = opened.copy()
                 with self.perf.time("load_frame_resize"):
                     img = self.resize_frame(img)
-                with self.perf.time("load_frame_photo"):
-                    photo_img = ImageTk.PhotoImage(img)
                 try:
                     bytes_per_pixel = max(1, len(img.getbands()))
                 except Exception:
                     bytes_per_pixel = 4
                 est_bytes = int(img.width * img.height * bytes_per_pixel)
-                self._buffer_store_frame(frame_number, photo_img, est_bytes)
+                self._buffer_store_frame(frame_number, img, est_bytes)
         except Exception as e:
             print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
 
@@ -1785,14 +1990,19 @@ class LabelingApp(tk.Tk):
 
     def display_first_frame(self, frame_number=None):
         with self.perf.time("display_first_frame"):
+            previous_frame = self._last_displayed_frame
             if frame_number is None:
                 frame_number = self.video.current_frame
             else:
                 self.video.current_frame = frame_number
             if frame_number < 0 or frame_number > self.video.total_frames:
                 print("ERROR: Frame number out of bounds."); return
+            moving_forward = previous_frame is None or frame_number > previous_frame
+            moving_backward = previous_frame is not None and frame_number < previous_frame
             if frame_number in self.img_buffer:
-                photo_img = self.img_buffer[frame_number]
+                pil_img = self.img_buffer[frame_number]
+                with self.perf.time("display_frame_photo"):
+                    photo_img = ImageTk.PhotoImage(pil_img)
                 if hasattr(self, 'frame_label') and self.frame_label:
                     self.frame_label.configure(image=photo_img)
                 else:
@@ -1810,19 +2020,58 @@ class LabelingApp(tk.Tk):
             self.update_button_colors()
             if self.is_pose_mode():
                 bundle = self._ensure_bundle(self.video.current_frame)
-                if not bundle.get("ScaleSet"):
-                    raw, factor = self._get_effective_pose_scale(self.video.current_frame)
-                    bundle["ScaleRaw"] = raw
-                    bundle["ScaleFactor"] = factor
+                bundle_scale = float(bundle.get("ScaleRaw", 1.0) or 1.0)
+                bundle_auto = bool(bundle.get("ScaleAutoCarry", False))
+                carry_scale = float(self.current_pose_scale)
+                carry_differs = abs(bundle_scale - carry_scale) > 1e-9
+                if (
+                    not self.play
+                    and self._pose_scale_carry_active
+                    and bundle.get("ScaleSet")
+                    and bundle_auto
+                    and carry_differs
+                    and moving_forward
+                ):
+                    self._log_pose_scale(
+                        f"overwrite auto frame={self.video.current_frame} old={bundle_scale:.2f} new={carry_scale:.2f}"
+                    )
+                    self._set_pose_scale_for_frame(
+                        self.video.current_frame,
+                        self.current_pose_scale,
+                        redraw_overview=False,
+                        auto_carried=True,
+                    )
+                elif bundle.get("ScaleSet"):
+                    self.current_pose_scale = float(bundle.get("ScaleRaw", 1.0) or 1.0)
+                    self._pose_scale_carry_active = True
+                    source = "auto-carry" if bundle_auto else "manual"
+                    self._log_pose_scale(
+                        f"adopt frame={self.video.current_frame} scale={self.current_pose_scale:.2f} source={source}"
+                    )
+                elif not self.play and self._pose_scale_carry_active and moving_forward:
+                    self._log_pose_scale(
+                        f"carry new frame={self.video.current_frame} scale={self.current_pose_scale:.2f}"
+                    )
+                    self._set_pose_scale_for_frame(
+                        self.video.current_frame,
+                        self.current_pose_scale,
+                        redraw_overview=False,
+                        auto_carried=True,
+                    )
+                else:
+                    self._log_pose_scale(
+                        f"leave frame={self.video.current_frame} scale={bundle_scale:.2f} carry_active={self._pose_scale_carry_active} "
+                        f"forward={moving_forward} backward={moving_backward}"
+                    )
                 self._updating_scale_widget = True
                 try:
                     if getattr(self, "scale_var", None) is not None:
-                        self.scale_var.set(bundle.get("ScaleRaw", 1.0))
+                        self.scale_var.set(self.current_pose_scale)
                 finally:
                     self._updating_scale_widget = False
                 self.update_pose_scale_label()
-                self._pose_canvas_dirty = True
                 self.render_pose_canvas()
+            self._last_displayed_frame = frame_number
 
     def _buffer_reset(self):
         if hasattr(self, "img_buffer"):
@@ -2302,6 +2551,9 @@ class LabelingApp(tk.Tk):
             self._finalize_video_time()
 
         self.video = Video(video_path)
+        self.current_pose_scale = 1.0
+        self._pose_scale_carry_active = False
+        self._last_displayed_frame = None
         cap = cv2.VideoCapture(video_path)
         self.video.frame_rate = round(cap.get(cv2.CAP_PROP_FPS), 1)
         cap.release()
@@ -2794,6 +3046,8 @@ class LabelingApp(tk.Tk):
         self._timeline2_dirty = True
         self._timeline_playhead_id = None
         self._timeline2_playhead_id = None
+        self._pose_timeline_scale_overlay_id = None
+        self._pose_timeline2_scale_overlay_id = None
         if getattr(self, "video", None):
             self.display_first_frame()
 
