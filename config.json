@@ -1,5 +1,5 @@
 {
-  "diagram_scale": 1.0,
+  "diagram_scale": 0.5,
   "dot_size": 10.0,
   "new_template": false,
   "minimal_touch_length": 280,
@@ -12,5 +12,7 @@
   "video_downscale": 1.0,
   "perf_enabled": false,
   "perf_log_every_s": 2.0,
-  "perf_log_top_n": 6
+  "perf_log_top_n": 6,
+  "last_labeling_mode": "Normal",
+  "annotation_mode": "pose_3d"
 }

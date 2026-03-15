@@ -44,11 +44,24 @@ from perf_utils import PerfLogger
 import tkinter as tk
 from tkinter import ttk
 from resource_utils import resource_path
+from pose_mismatch_data import (
+    POSE_JOINTS,
+    empty_pose_bundle,
+    ensure_pose_bundle,
+    export_pose_dataset,
+    load_pose_dataset,
+    save_pose_dataset,
+    scale_raw_to_factor,
+)
 
 PLAYBACK_BUFFER_PAUSE_S = 1.0
 PLAYBACK_BUFFER_AHEAD = 3
 BUFFER_MAX_BYTES = 1_000_000_000
 DEBUG = False
+THREE_D_MODE = "3D Mismatch"
+POSE_OUTLINE_ANCHOR_X = 183.0
+POSE_OUTLINE_ANCHOR_Y = 348.0
+POSE_OUTLINE_ALPHA = 90
 def custom_confirm_close(root,saved: bool):
     win = tk.Toplevel(root)
     win.title("Close Application")
@@ -85,10 +98,19 @@ class LabelingApp(tk.Tk):
         self.video_name = None
         self.minimal_touch_lenght = None
         self.NEW_TEMPLATE = False
+        self.annotation_mode = "touch"
         self.clothes_diagram_scale = DEFAULT_CLOTH_DIAGRAM_SCALE
         self._cloth_app = None
         self._video_time_total_s = 0.0
         self._video_session_start = None
+        self._zone_masks = []
+        self._zone_centroids = {}
+        self._zone_dir = None
+        self._base_diagram_image = None
+        self._outline_image = None
+        self._pose_canvas_dirty = False
+        self._updating_scale_widget = False
+        self._scale_drag_active = False
 
         # Build UI (creates frames, widgets, binds events; sets many attributes)
         build_ui(self)
@@ -129,6 +151,368 @@ class LabelingApp(tk.Tk):
     def _limb_param_key_for_index(self, idx: int) -> str:
         return f"Par{idx}"
 
+    def is_pose_mode(self) -> bool:
+        return getattr(self, "annotation_mode", "touch") == "pose_3d"
+
+    def _annotation_mode_suffix(self) -> str:
+        return "_3d" if self.is_pose_mode() else ""
+
+    def _selected_pose_joint_event_summary(self, frame: int | None = None) -> str:
+        if not self.video:
+            return "No joint events"
+        if frame is None:
+            frame = self.video.current_frame
+        bundle = ensure_pose_bundle(self.video.frames.get(frame))
+        parts = []
+        for joint in POSE_JOINTS:
+            event = bundle["Joints"].get(joint, {}).get("Event")
+            if event:
+                parts.append(f"{joint}:{event}")
+        return ", ".join(parts) if parts else "No joint events"
+
+    def _get_effective_pose_scale(self, frame: int | None = None) -> tuple[float, float]:
+        if frame is None:
+            frame = self.video.current_frame if self.video else 0
+        raw = 1.0
+        factor = 1.0
+        if not self.video:
+            return raw, factor
+        for idx in range(max(0, frame), -1, -1):
+            bundle = self.video.frames.get(idx)
+            if not isinstance(bundle, dict):
+                continue
+            bundle = ensure_pose_bundle(bundle)
+            if bundle.get("ScaleSet"):
+                raw = float(bundle.get("ScaleRaw", 0.0) or 0.0)
+                factor = float(bundle.get("ScaleFactor", scale_raw_to_factor(raw)) or 1.0)
+                return raw, factor
+        return raw, factor
+
+    def _remove_white_background(self, image: Image.Image, threshold: int = 245) -> Image.Image:
+        image = image.convert("RGBA")
+        px = image.load()
+        width, height = image.size
+        for y in range(height):
+            for x in range(width):
+                r, g, b, a = px[x, y]
+                if r >= threshold and g >= threshold and b >= threshold:
+                    px[x, y] = (r, g, b, 0)
+        return image
+
+    def _apply_outline_alpha(self, image: Image.Image, alpha: int) -> Image.Image:
+        image = image.convert("RGBA")
+        px = image.load()
+        width, height = image.size
+        target_alpha = max(0, min(255, int(alpha)))
+        for y in range(height):
+            for x in range(width):
+                r, g, b, a = px[x, y]
+                if a > 0:
+                    px[x, y] = (r, g, b, min(a, target_alpha))
+        return image
+
+    def render_pose_canvas(self):
+        if not self.is_pose_mode():
+            return
+        if self._base_diagram_image is None:
+            self._base_diagram_image = Image.open(resource_path("icons/3d/diagram.png")).convert("RGBA")
+        if self._outline_image is None:
+            outline = self._remove_white_background(Image.open(resource_path("icons/3d/outline.png")))
+            self._outline_image = self._apply_outline_alpha(outline, POSE_OUTLINE_ALPHA)
+
+        base_img = self._base_diagram_image
+        outline_img = self._outline_image
+        scale = getattr(self, "diagram_scale", 1.0)
+        canvas_w = int(base_img.width * scale)
+        canvas_h = int(base_img.height * scale)
+        self.diagram_canvas.config(width=canvas_w, height=canvas_h)
+
+        composed = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+        base_resized = base_img.resize((canvas_w, canvas_h), Image.LANCZOS)
+        composed.paste(base_resized, (0, 0), base_resized)
+
+        _raw, factor = self._get_effective_pose_scale(self.video.current_frame if self.video else 0)
+        outline_w = max(1, int(canvas_w * factor))
+        outline_h = max(1, int(canvas_h * factor))
+        outline_resized = outline_img.resize((outline_w, outline_h), Image.LANCZOS)
+        anchor_x = POSE_OUTLINE_ANCHOR_X * scale
+        anchor_y = POSE_OUTLINE_ANCHOR_Y * scale
+        overlay_x = int(round(anchor_x - (anchor_x * factor)))
+        overlay_y = int(round(anchor_y - (anchor_y * factor)))
+        composed.paste(outline_resized, (overlay_x, overlay_y), outline_resized)
+
+        self.photo = ImageTk.PhotoImage(composed)
+        self.diagram_canvas.delete("all")
+        self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
+
+        dot_size = getattr(self, "dot_size", 10)
+        if self.video:
+            bundle = ensure_pose_bundle(self.video.frames.get(self.video.current_frame))
+            joints = bundle.get("Joints") or {}
+            for joint in POSE_JOINTS:
+                rec = joints.get(joint, {})
+                x = rec.get("X")
+                y = rec.get("Y")
+                event = rec.get("Event")
+                if x is None or y is None or not event:
+                    continue
+                color = "green" if event == "ON" else "red"
+                self.diagram_canvas.create_oval(
+                    x * scale - dot_size,
+                    y * scale - dot_size,
+                    x * scale + dot_size,
+                    y * scale + dot_size,
+                    fill=color,
+                    outline=color,
+                )
+
+        self._pose_canvas_dirty = False
+
+    def _find_nearest_pose_joint(self, x: float, y: float, max_distance: float = 28.0):
+        if not getattr(self, "_zone_centroids", None):
+            return None
+        best_joint = None
+        best_d2 = None
+        for joint in POSE_JOINTS:
+            center = self._zone_centroids.get(joint)
+            if not center:
+                continue
+            cx, cy = center
+            d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y)
+            if best_d2 is None or d2 < best_d2:
+                best_d2 = d2
+                best_joint = joint
+        if best_joint is None or best_d2 is None:
+            return None
+        if best_d2 <= max_distance * max_distance:
+            return best_joint
+        return None
+
+    def _pose_joint_distances(self, x: float, y: float, limit: int = 5):
+        distances = []
+        for joint in POSE_JOINTS:
+            center = self._zone_centroids.get(joint)
+            if not center:
+                continue
+            cx, cy = center
+            d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y)
+            distances.append((joint, d2 ** 0.5, center))
+        distances.sort(key=lambda item: item[1])
+        return distances[:limit]
+
+    def _probe_pose_zone_neighbors(self, x: float, y: float, radius: int = 10, step: int = 2):
+        if not getattr(self, "_zone_masks", None):
+            return []
+        found = {}
+        x0 = int(x)
+        y0 = int(y)
+        for dy in range(-radius, radius + 1, step):
+            for dx in range(-radius, radius + 1, step):
+                px = x0 + dx
+                py = y0 + dy
+                for zone_name, image in self._zone_masks:
+                    if zone_name not in POSE_JOINTS:
+                        continue
+                    h, w = image.shape[:2]
+                    if px < 0 or py < 0 or px >= w or py >= h:
+                        continue
+                    if image[py, px] == 0:
+                        dist = (dx * dx + dy * dy) ** 0.5
+                        prev = found.get(zone_name)
+                        if prev is None or dist < prev[0]:
+                            found[zone_name] = (dist, px, py)
+        items = sorted(found.items(), key=lambda item: item[1][0])
+        return items[:5]
+
+    def _set_sort_analysis_state(self):
+        is_pose = self.is_pose_mode()
+        has_video = self.video is not None
+        sort_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
+        analysis_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
+        cloth_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
+        if getattr(self, "sort_btn", None):
+            self.sort_btn.config(state=sort_state)
+        if getattr(self, "analysis_btn", None):
+            self.analysis_btn.config(state=analysis_state)
+        if getattr(self, "cloth_btn", None):
+            self.cloth_btn.config(state=cloth_state)
+
+    def _reset_zone_cache(self):
+        self._zone_masks = []
+        self._zone_centroids = {}
+        self._zone_dir = None
+
+    def _clear_frame_children(self, frame):
+        for child in frame.winfo_children():
+            child.destroy()
+
+    def rebuild_annotation_controls(self):
+        if not hasattr(self, "mode_controls_frame"):
+            return
+
+        self._clear_frame_children(self.mode_controls_frame)
+        self._clear_frame_children(self.limb_parameter_frame)
+        self.limb_par1_btn = None
+        self.limb_par2_btn = None
+        self.limb_par3_btn = None
+        self.scale_var = getattr(self, "scale_var", tk.DoubleVar(value=1.0))
+
+        if self.is_pose_mode():
+            if getattr(self, "mode_param_label", None):
+                self.mode_param_label.config(text="Scale")
+            if getattr(self, "mode_param_subtitle", None):
+                self.mode_param_subtitle.config(text="(3D body mismatch)")
+            tk.Label(
+                self.mode_controls_frame,
+                text="3D Mismatch",
+                font=("Arial", 10, "bold"),
+                bg="lightgrey",
+            ).pack(anchor="n", pady=(5, 2))
+            tk.Label(
+                self.mode_controls_frame,
+                text="Click a joint zone for onset/offset",
+                bg="lightgrey",
+            ).pack(anchor="n")
+
+            tk.Label(
+                self.limb_parameter_frame,
+                text="Body Scale",
+                font=("Arial", 10, "bold"),
+                bg="lightgrey",
+            ).pack(anchor="n", pady=(5, 2))
+
+            self.scale_value_label = tk.Label(
+                self.limb_parameter_frame,
+                text="Scale: 1.00x",
+                bg="lightgrey",
+            )
+            self.scale_value_label.pack(anchor="n")
+
+            self.scale_widget = tk.Scale(
+                self.limb_parameter_frame,
+                from_=0.7,
+                to=1.3,
+                resolution=0.01,
+                orient=tk.HORIZONTAL,
+                length=220,
+                variable=self.scale_var,
+                command=self.on_scale_changed,
+                bg="lightgrey",
+                highlightthickness=0,
+                takefocus=0,
+            )
+            self.scale_widget.pack(anchor="n", pady=(2, 6))
+            self.scale_widget.bind("<Button-1>", self._on_scale_press)
+            self.scale_widget.bind("<ButtonRelease-1>", self._on_scale_release)
+            self.scale_widget.bind("<Key>", lambda _event: "break")
+            self.scale_widget.bind("<MouseWheel>", lambda _event: "break")
+            self.scale_widget.bind("<Button-4>", lambda _event: "break")
+            self.scale_widget.bind("<Button-5>", lambda _event: "break")
+
+            self.pose_events_label = tk.Label(
+                self.limb_parameter_frame,
+                text="No joint events",
+                bg="lightgrey",
+                justify="left",
+                wraplength=220,
+            )
+            self.pose_events_label.pack(anchor="n")
+        else:
+            if getattr(self, "mode_param_label", None):
+                self.mode_param_label.config(text="Parameters")
+            if getattr(self, "mode_param_subtitle", None):
+                self.mode_param_subtitle.config(text="(Limb-Specific)")
+            tk.Label(
+                self.mode_controls_frame,
+                text="Limb Selector",
+                font=("Arial", 10, "bold"),
+                bg="lightgrey",
+            ).pack(anchor="n", pady=(5, 2))
+
+            for text, value in (
+                ("Right Hand", "RH"),
+                ("Left Hand", "LH"),
+                ("Right Leg", "RL"),
+                ("Left Leg", "LL"),
+            ):
+                tk.Radiobutton(
+                    self.mode_controls_frame,
+                    text=text,
+                    variable=self.option_var_1,
+                    value=value,
+                    bg="lightgrey",
+                    command=self.on_radio_click,
+                ).pack(anchor="n")
+
+            self.limb_par1_btn = tk.Button(
+                self.limb_parameter_frame,
+                text="Limb Parameter 1",
+                command=lambda: self.toggle_limb_parameter(1),
+                width=15,
+                height=1,
+            )
+            self.limb_par1_btn.pack(anchor="n")
+            self.limb_par2_btn = tk.Button(
+                self.limb_parameter_frame,
+                text="Limb Parameter 2",
+                command=lambda: self.toggle_limb_parameter(2),
+                width=15,
+                height=1,
+            )
+            self.limb_par2_btn.pack(anchor="n")
+            self.limb_par3_btn = tk.Button(
+                self.limb_parameter_frame,
+                text="Limb Parameter 3",
+                command=lambda: self.toggle_limb_parameter(3),
+                width=15,
+                height=1,
+            )
+            self.limb_par3_btn.pack(anchor="n")
+
+        self._set_sort_analysis_state()
+
+    def on_scale_changed(self, _value=None):
+        if self._updating_scale_widget or not self.video or not self.is_pose_mode():
+            return
+        if not self._scale_drag_active:
+            return
+        frame = self.video.current_frame
+        bundle = self._ensure_bundle(frame)
+        raw = float(self.scale_var.get())
+        bundle["ScaleRaw"] = raw
+        bundle["ScaleFactor"] = scale_raw_to_factor(raw)
+        bundle["ScaleSet"] = True
+        self.mark_bundle_changed(frame)
+        self.update_pose_scale_label()
+        self._pose_canvas_dirty = True
+        self.render_pose_canvas()
+        self.draw_timeline()
+        self.draw_timeline2()
+
+    def update_pose_scale_label(self):
+        if not self.is_pose_mode():
+            return
+        factor = 1.0
+        if self.video:
+            _raw, factor = self._get_effective_pose_scale(self.video.current_frame)
+        if getattr(self, "scale_value_label", None):
+            self.scale_value_label.config(text=f"Scale: {factor:.2f}x")
+        if getattr(self, "pose_events_label", None):
+            self.pose_events_label.config(text=self._selected_pose_joint_event_summary())
+
+    def _on_scale_press(self, event):
+        try:
+            hit = self.scale_widget.identify(event.x, event.y)
+        except Exception:
+            hit = None
+        if hit != "slider":
+            self._scale_drag_active = False
+            return "break"
+        self._scale_drag_active = True
+        return None
+
+    def _on_scale_release(self, _event):
+        self._scale_drag_active = False
 
     def _ensure_limb_params(self, rec: dict) -> dict:
         if not isinstance(rec.get("LimbParams"), dict):
@@ -157,6 +541,10 @@ class LabelingApp(tk.Tk):
     
     def _ensure_bundle(self, idx: int):
         b = self.video.frames.get(idx)
+        if self.is_pose_mode():
+            b = ensure_pose_bundle(b)
+            self.video.frames[idx] = b
+            return b
         if not isinstance(b, dict):
             # create an empty bundle (match your empty_bundle() structure)
             b = {
@@ -206,6 +594,11 @@ class LabelingApp(tk.Tk):
             print(f"[notify_bundle_changed] could not print bundle at {idx}: {e}")
     
     def _get_bundle(self, frame):
+        if self.is_pose_mode():
+            existing = self.video.frames.get(frame)
+            bundle = ensure_pose_bundle(existing)
+            self.video.frames[frame] = bundle
+            return bundle
         from data_utils import empty_bundle
         return self.video.frames.setdefault(frame, empty_bundle())
 
@@ -282,6 +675,55 @@ class LabelingApp(tk.Tk):
         self.next_frame(delta)
 
     def on_middle_click(self, event=None):
+        if self.is_pose_mode():
+            if self.video is None:
+                return
+            if event is None or isinstance(event, tk.Event):
+                x_disp, y_disp = self.last_mouse_x, self.last_mouse_y
+            else:
+                x_disp, y_disp = event.x, event.y
+
+            scale = getattr(self, "diagram_scale", 1.0)
+            x_pos = x_disp * (1.0 / scale)
+            y_pos = y_disp * (1.0 / scale)
+            bundle = self._ensure_bundle(self.video.current_frame)
+            joints = bundle.get("Joints") or {}
+
+            closest_joint = None
+            closest_d2 = None
+            for joint in POSE_JOINTS:
+                rec = joints.get(joint, {})
+                x = rec.get("X")
+                y = rec.get("Y")
+                event_state = rec.get("Event")
+                if x is None or y is None or not event_state:
+                    continue
+                d2 = (x - x_pos) * (x - x_pos) + (y - y_pos) * (y - y_pos)
+                if closest_d2 is None or d2 < closest_d2:
+                    closest_d2 = d2
+                    closest_joint = joint
+
+            if closest_joint is None or closest_d2 is None:
+                print(f"INFO: 3D middle click found no removable dot near ({int(x_pos)}, {int(y_pos)})")
+                return
+
+            if closest_d2 <= (20.0 / scale) ** 2:
+                joints[closest_joint]["Event"] = None
+                joints[closest_joint]["X"] = None
+                joints[closest_joint]["Y"] = None
+                self.mark_bundle_changed(self.video.current_frame)
+                self._pose_canvas_dirty = True
+                self.render_pose_canvas()
+                self.update_pose_scale_label()
+                self.draw_timeline()
+                self.draw_timeline2()
+                print(f"INFO: Removed 3D dot for {closest_joint} on frame {self.video.current_frame}")
+            else:
+                print(
+                    f"INFO: 3D middle click nearest dot too far at ({int(x_pos)}, {int(y_pos)}), "
+                    f"nearest={closest_joint}, distance={closest_d2 ** 0.5:.1f}"
+                )
+            return
         # mouse position in display coords; convert to data coords using diagram_scale
         if event is None or isinstance(event, tk.Event):
             x_disp, y_disp = self.last_mouse_x, self.last_mouse_y
@@ -354,10 +796,17 @@ class LabelingApp(tk.Tk):
     # --- Diagram init & routine render ---
     def init_diagram(self):
         # set up periodic dots refresh
+        self._reset_zone_cache()
         self._load_zone_masks()
         self.periodic_print_dot()
 
     def periodic_print_dot(self):
+        if self.is_pose_mode():
+            if self._pose_canvas_dirty:
+                self.render_pose_canvas()
+                self.update_pose_scale_label()
+            self.after(1000, self.periodic_print_dot)
+            return
         self.diagram_canvas.delete("all")
         self.on_radio_click()  # keeps same behavior for image & palette
         dot_size = getattr(self, "dot_size", 10)
@@ -392,6 +841,46 @@ class LabelingApp(tk.Tk):
         self.after(300, self.periodic_print_dot)
 
     def on_diagram_click(self, event, right):
+        if self.video is None:
+            return
+        if self.is_pose_mode():
+            onset = "ON" if right else "OFF"
+            display_scale = getattr(self, "diagram_scale", 1.0)
+            x_pos = event.x * (1.0 / display_scale)
+            y_pos = event.y * (1.0 / display_scale)
+            zone_results = list(self.find_image_with_white_pixel(x_pos, y_pos))
+            nearest = self._pose_joint_distances(x_pos, y_pos, limit=5)
+            joint = next((zone for zone in zone_results if zone in POSE_JOINTS), None)
+            if not joint:
+                joint = self._find_nearest_pose_joint(x_pos, y_pos)
+            print(
+                "INFO: 3D click "
+                f"button={'left/onset' if right else 'right/offset'} "
+                f"canvas=({event.x}, {event.y}) "
+                f"data=({int(x_pos)}, {int(y_pos)}) "
+                f"direct_hits={zone_results} "
+                f"nearest={[(name, round(dist, 1), (round(center[0],1), round(center[1],1))) for name, dist, center in nearest]} "
+                f"chosen={joint}"
+            )
+            if not joint:
+                neighbors = self._probe_pose_zone_neighbors(x_pos, y_pos, radius=16, step=2)
+                print(
+                    "INFO: 3D click missed all joint zones "
+                    f"at ({int(x_pos)}, {int(y_pos)}) "
+                    f"neighbor_probe={[(name, round(dist,1), px, py) for name, (dist, px, py) in neighbors]}"
+                )
+                return
+            bundle = self._ensure_bundle(self.video.current_frame)
+            bundle["Joints"][joint]["Event"] = onset
+            bundle["Joints"][joint]["X"] = int(x_pos)
+            bundle["Joints"][joint]["Y"] = int(y_pos)
+            self.mark_bundle_changed(self.video.current_frame)
+            self.update_pose_scale_label()
+            self._pose_canvas_dirty = True
+            self.render_pose_canvas()
+            self.draw_timeline()
+            self.draw_timeline2()
+            return
         onset = "ON" if right else "OFF"
         display_scale = getattr(self, "diagram_scale", 1.0)
         x_pos = event.x * (1.0 / display_scale)
@@ -467,8 +956,27 @@ class LabelingApp(tk.Tk):
         print(f"Unified CSV (will write changed-only): {unified_path}")
         print(f"Export  CSV (will write all frames):   {export_path}")
 
-        from data_utils import preview_lines_for_save
-        lines = preview_lines_for_save(self.video.frames, self.video.total_frames, changed_only=changed_only)
+        if self.is_pose_mode():
+            lines = []
+            for frame in range(self.video.total_frames + 1):
+                bundle = self.video.frames.get(frame)
+                if not isinstance(bundle, dict):
+                    continue
+                if changed_only and not bundle.get("Changed"):
+                    continue
+                bundle = ensure_pose_bundle(bundle)
+                _raw, factor = self._get_effective_pose_scale(frame)
+                parts = [f"frame={frame:>5}", f"scale={factor:.2f}x"]
+                summary = self._selected_pose_joint_event_summary(frame)
+                if summary != "No joint events":
+                    parts.append(summary)
+                note = bundle.get("Note")
+                if note:
+                    parts.append(f'Note="{note}"')
+                lines.append(" | ".join(parts))
+        else:
+            from data_utils import preview_lines_for_save
+            lines = preview_lines_for_save(self.video.frames, self.video.total_frames, changed_only=changed_only)
 
         if not lines:
             print("PREVIEW: No changed frames to save.")
@@ -479,6 +987,9 @@ class LabelingApp(tk.Tk):
             print("===== PREVIEW: End =====\n")
     
     def find_last_green(self, _unused_data=None):
+        if self.is_pose_mode():
+            self.video.last_green = [(None, None)]
+            return
         """
         Set self.video.last_green to the last 'ON' points for the selected limb
         at or before the current frame; clear when an 'OFF' is encountered first.
@@ -512,6 +1023,20 @@ class LabelingApp(tk.Tk):
         self.video.last_green = [(None, None)]
 
     def on_radio_click(self):
+        if self.is_pose_mode():
+            expected_dir = resource_path("icons/3d/zones")
+            if getattr(self, "_zone_dir", None) != expected_dir:
+                self._reset_zone_cache()
+                self._load_zone_masks()
+            self.render_pose_canvas()
+            self.update_pose_scale_label()
+            self.draw_timeline()
+            self.draw_timeline2()
+            return
+        expected_dir = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
+        if getattr(self, "_zone_dir", None) != expected_dir:
+            self._reset_zone_cache()
+            self._load_zone_masks()
         if self.option_var_1.get() == "RH":
             image_path = resource_path("icons/RH_new_template.png" if self.NEW_TEMPLATE else "icons/RH.png")
         elif self.option_var_1.get() == "LH":
@@ -532,11 +1057,15 @@ class LabelingApp(tk.Tk):
 
     # --- Diagram helpers used outside ---
     def _load_zone_masks(self):
-        directory = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
+        if self.is_pose_mode():
+            directory = resource_path("icons/3d/zones")
+        else:
+            directory = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
         if getattr(self, "_zone_dir", None) == directory and getattr(self, "_zone_masks", None):
             return
         self._zone_dir = directory
         self._zone_masks = []
+        self._zone_centroids = {}
         if not os.path.isdir(directory):
             print(f"WARNING: Zones directory not found: {directory}")
             return
@@ -548,18 +1077,46 @@ class LabelingApp(tk.Tk):
                     continue
                 zone_name = filename.rsplit('.', 1)[0]
                 self._zone_masks.append((zone_name, image))
+                if self.is_pose_mode() and zone_name in POSE_JOINTS:
+                    ys, xs = (image == 0).nonzero()
+                    if len(xs) > 0 and len(ys) > 0:
+                        self._zone_centroids[zone_name] = (
+                            float(xs.mean()),
+                            float(ys.mean()),
+                        )
+        if self.is_pose_mode():
+            print(
+                f"INFO: Loaded 3D zone masks from {directory}: "
+                f"{len(self._zone_masks)} masks, {len(self._zone_centroids)} joint centroids"
+            )
+        else:
+            print(f"INFO: Loaded touch zone masks from {directory}: {len(self._zone_masks)} masks")
 
     def find_image_with_white_pixel(self, x, y):
         with self.perf.time("find_image_with_white_pixel"):
             x = int(x); y = int(y)
             if not getattr(self, "_zone_masks", None):
                 self._load_zone_masks()
+            matches = []
             for zone_name, image in self._zone_masks:
                 h, w = image.shape[:2]
                 if x < 0 or y < 0 or x >= w or y >= h:
                     continue
                 if image[y, x] == 0:
-                    return [zone_name]
+                    matches.append(zone_name)
+            if self.is_pose_mode():
+                joint_matches = [zone for zone in matches if zone in POSE_JOINTS]
+                if DEBUG:
+                    print(
+                        f"DEBUG: pose pixel probe at ({x}, {y}) "
+                        f"matches={matches} joints={joint_matches} "
+                        f"mask_count={len(self._zone_masks)}"
+                    )
+                if joint_matches:
+                    return joint_matches
+                return matches or ['NN']
+            if matches:
+                return [matches[0]]
             return ['NN']
 
     # --- Timelines ---
@@ -585,16 +1142,157 @@ class LabelingApp(tk.Tk):
             self.display_first_frame()
 
     def parameter_color_at_frame(self, frame):
-        b = self._get_bundle(frame)
+        b = self.video.frames.get(frame, {}) if self.video else {}
         params = (b.get("Params") or {})
         # If any param ON => green; else if any OFF => red; else None
         if any(v == "ON" for v in params.values()): return "green"
         if any(v == "OFF" for v in params.values()): return "red"
         return None
 
+    def _pose_event_color_at_frame(self, frame):
+        bundle = ensure_pose_bundle(self.video.frames.get(frame))
+        joints = bundle.get("Joints") or {}
+        events = [rec.get("Event") for rec in joints.values() if isinstance(rec, dict)]
+        if any(event == "ON" for event in events):
+            return "green"
+        if any(event == "OFF" for event in events):
+            return "#E57373"
+        return None
+
+    def _build_pose_timeline_state(self):
+        active_joints = set()
+        state = {}
+        for frame in range(self.video.total_frames + 1):
+            bundle = ensure_pose_bundle(self.video.frames.get(frame))
+            joints = bundle.get("Joints") or {}
+            events = {}
+            for joint in POSE_JOINTS:
+                rec = joints.get(joint, {})
+                event = rec.get("Event") if isinstance(rec, dict) else None
+                if event == "ON":
+                    active_joints.add(joint)
+                    events[joint] = "ON"
+                elif event == "OFF":
+                    active_joints.discard(joint)
+                    events[joint] = "OFF"
+            raw, factor = self._get_effective_pose_scale(frame)
+            state[frame] = {
+                "events": events,
+                "active": set(active_joints),
+                "active_count": len(active_joints),
+                "scale_raw": raw,
+                "scale_factor": factor,
+            }
+        return state
+
+    def _draw_pose_timeline(self):
+        canvas_width = self.timeline_canvas.winfo_width()
+        canvas_height = self.timeline_canvas.winfo_height()
+        zone = self.video.current_frame_zone
+        sector_width = canvas_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
+        offset = self.video.number_frames_in_zone * zone
+        top = 0
+        bottom = canvas_height
+        self.timeline_canvas.delete("all")
+        pose_state = self._build_pose_timeline_state()
+        scale_min = 0.7
+        scale_max = 1.3
+        scale_top = 8
+        scale_bottom = max(scale_top + 10, canvas_height - 16)
+        active_strip_h = 8
+
+        for frame_offset in range(offset, min(offset + self.video.number_frames_in_zone, self.video.total_frames + 1)):
+            left = (frame_offset - offset) * sector_width
+            right = left + sector_width
+            frame_state = pose_state.get(frame_offset, {})
+            scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
+            scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
+            scale_ratio = max(0.0, min(1.0, scale_ratio))
+            y_scale = scale_bottom - (scale_bottom - scale_top) * scale_ratio
+            self.timeline_canvas.create_rectangle(left, top, right, bottom, fill="#f1f1f1", outline="#d4d4d4")
+            self.timeline_canvas.create_line(left + 1, y_scale, right - 1, y_scale, fill="#446a8a", width=2)
+
+            active_count = int(frame_state.get("active_count", 0) or 0)
+            if active_count > 0:
+                shade = max(180, 232 - (active_count * 8))
+                fill = f"#{shade:02x}{min(255, shade + 12):02x}{min(255, shade + 20):02x}"
+                self.timeline_canvas.create_rectangle(
+                    left,
+                    bottom - active_strip_h,
+                    right,
+                    bottom,
+                    fill=fill,
+                    outline="",
+                )
+
+            mid_x = left + sector_width / 2
+            on_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "ON")
+            off_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "OFF")
+            if on_count:
+                self.timeline_canvas.create_line(mid_x - 1, top + 2, mid_x - 1, bottom - active_strip_h - 2, fill="#2f8f57", width=1)
+            if off_count:
+                self.timeline_canvas.create_line(mid_x + 1, top + 2, mid_x + 1, bottom - active_strip_h - 2, fill="#c56262", width=1)
+            param_color = self.parameter_color_at_frame(frame_offset)
+            if param_color:
+                self.timeline_canvas.create_line(mid_x + 3, top + 2, mid_x + 3, bottom - active_strip_h - 2, fill=param_color, width=2)
+
+        self._timeline_dirty = False
+        self._timeline_last_zone = zone
+        self._timeline_last_limb = "POSE_3D"
+        self._timeline_canvas_size = (canvas_width, canvas_height)
+        self._timeline_playhead_id = None
+
+        current_pos = ((self.video.current_frame - offset) / self.video.number_frames_in_zone) * canvas_width
+        left = max(0, min(canvas_width - 4, current_pos))
+        self._timeline_playhead_id = self.timeline_canvas.create_rectangle(left, top, left + 4, bottom, fill="dodgerblue", outline="")
+
+    def _draw_pose_timeline2(self):
+        canvas_width = self.timeline2_canvas.winfo_width()
+        canvas_height = self.timeline2_canvas.winfo_height()
+        self.timeline2_canvas.delete("all")
+        pose_state = self._build_pose_timeline_state()
+        scale_min = 0.7
+        scale_max = 1.3
+
+        for frame in range(self.video.total_frames + 1):
+            x = (frame / self.video.total_frames) * canvas_width if self.video.total_frames else 0
+            frame_state = pose_state.get(frame, {})
+            active_count = int(frame_state.get("active_count", 0) or 0)
+            if active_count > 0:
+                shade = max(185, 235 - (active_count * 8))
+                color = f"#{shade:02x}{min(255, shade + 12):02x}{min(255, shade + 20):02x}"
+                self.timeline2_canvas.create_line(x, canvas_height - 8, x, canvas_height, fill=color, width=2)
+            scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
+            scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
+            scale_ratio = max(0.0, min(1.0, scale_ratio))
+            y_scale = (canvas_height - 10) - ((canvas_height - 14) * scale_ratio)
+            self.timeline2_canvas.create_line(x, y_scale, x, y_scale + 1, fill="#446a8a", width=1)
+            has_on = any(ev == "ON" for ev in frame_state.get("events", {}).values())
+            has_off = any(ev == "OFF" for ev in frame_state.get("events", {}).values())
+            if has_on:
+                self.timeline2_canvas.create_line(x - 1, 0, x - 1, canvas_height - 10, fill="#2f8f57", width=1)
+            if has_off:
+                self.timeline2_canvas.create_line(x + 1, 0, x + 1, canvas_height - 10, fill="#c56262", width=1)
+            param_color = self.parameter_color_at_frame(frame)
+            if param_color:
+                self.timeline2_canvas.create_line(x + 2, 0, x + 2, canvas_height - 10, fill=param_color, width=1)
+
+        self._timeline2_dirty = False
+        self._timeline2_last_limb = "POSE_3D"
+        self._timeline2_canvas_size = (canvas_width, canvas_height)
+        self._timeline2_playhead_id = None
+
+        current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width if self.video.total_frames else 0
+        self._timeline2_playhead_id = self.timeline2_canvas.create_line(
+            current_pos, 0, current_pos, canvas_height, fill="dodgerblue", width=2
+        )
+
     def draw_timeline(self):
         with self.perf.time("draw_timeline"):
             if not (self.video and self.video.total_frames > 0):
+                return
+            if self.is_pose_mode():
+                self._draw_pose_timeline()
                 return
             canvas_width = self.timeline_canvas.winfo_width()
             canvas_height = self.timeline_canvas.winfo_height()
@@ -686,6 +1384,9 @@ class LabelingApp(tk.Tk):
     def draw_timeline2(self):
         with self.perf.time("draw_timeline2"):
             if not (self.video and self.video.total_frames > 0):
+                return
+            if self.is_pose_mode():
+                self._draw_pose_timeline2()
                 return
 
             canvas_width  = self.timeline2_canvas.winfo_width()
@@ -1107,6 +1808,21 @@ class LabelingApp(tk.Tk):
             self.update_frame_counter()
             self.update_limb_parameter_buttons()
             self.update_button_colors()
+            if self.is_pose_mode():
+                bundle = self._ensure_bundle(self.video.current_frame)
+                if not bundle.get("ScaleSet"):
+                    raw, factor = self._get_effective_pose_scale(self.video.current_frame)
+                    bundle["ScaleRaw"] = raw
+                    bundle["ScaleFactor"] = factor
+                self._updating_scale_widget = True
+                try:
+                    if getattr(self, "scale_var", None) is not None:
+                        self.scale_var.set(bundle.get("ScaleRaw", 1.0))
+                finally:
+                    self._updating_scale_widget = False
+                self.update_pose_scale_label()
+                self._pose_canvas_dirty = True
+                self.render_pose_canvas()
 
     def _buffer_reset(self):
         if hasattr(self, "img_buffer"):
@@ -1247,6 +1963,8 @@ class LabelingApp(tk.Tk):
         self.draw_timeline()
 
     def toggle_limb_parameter(self, param_number: int):
+        if self.is_pose_mode():
+            return
         limb = self.option_var_1.get()
         frame = self.video.current_frame
 
@@ -1283,7 +2001,8 @@ class LabelingApp(tk.Tk):
         self.draw_timeline()
 
     def update_limb_parameter_buttons(self):
-        if not self.video: return
+        if self.is_pose_mode() or not self.video:
+            return
         limb = self.option_var_1.get()
         frame = self.video.current_frame
         b = self.video.frames.get(frame, {})
@@ -1302,6 +2021,8 @@ class LabelingApp(tk.Tk):
     
     def limb_parameter_colors_at_frame(self, frame):
         """Return Param1..3 colors for the SELECTED limb at a given frame."""
+        if self.is_pose_mode():
+            return []
         limb = self.option_var_1.get()
         b = self.video.frames.get(frame, {})
         rec = b.get(limb, {}) if isinstance(b, dict) else {}
@@ -1346,14 +2067,7 @@ class LabelingApp(tk.Tk):
         note_text = (self.note_entry.get() or "").strip()
 
         # ensure bundle exists, then update Note
-        b = self.video.frames.get(idx)
-        if not isinstance(b, dict):
-            # If you have data_utils.empty_bundle(), prefer importing and using that here.
-            b = {"Note": None, "Params": {}, "LH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "RH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "LL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "RL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []}}
-            self.video.frames[idx] = b
+        b = self._ensure_bundle(idx)
 
         prev = (b.get("Note") or "").strip()
         new_val = note_text if note_text else None
@@ -1415,11 +2129,14 @@ class LabelingApp(tk.Tk):
         print(f"DEBUG: Writing unified dataset → {unified_path}")
 
         from data_utils import save_unified_dataset, export_from_unified, extract_zones_from_file
-        save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
-
-        clothes_list = extract_zones_from_file(
-            self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
-        )
+        if self.is_pose_mode():
+            save_pose_dataset(unified_path, self.video.total_frames, self.video.frames)
+            clothes_list = None
+        else:
+            save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
+            clothes_list = extract_zones_from_file(
+                self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
+            )
         export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
         print(f"DEBUG: Writing export dataset → {export_path}")
 
@@ -1429,11 +2146,13 @@ class LabelingApp(tk.Tk):
             "Parameter_2": (self.par2_btn.cget("text") or "Par2"),
             "Parameter_3": (self.par3_btn.cget("text") or "Par3"),
         }
-        limb_param_labels = {
-            "XX_Parameter_1": (self.limb_par1_btn.cget("text") or "LimbPar1"),
-            "XX_Parameter_2": (self.limb_par2_btn.cget("text") or "LimbPar2"),
-            "XX_Parameter_3": (self.limb_par3_btn.cget("text") or "LimbPar3"),
-        }
+        limb_param_labels = None
+        if self.limb_par1_btn and self.limb_par2_btn and self.limb_par3_btn:
+            limb_param_labels = {
+                "XX_Parameter_1": (self.limb_par1_btn.cget("text") or "LimbPar1"),
+                "XX_Parameter_2": (self.limb_par2_btn.cget("text") or "LimbPar2"),
+                "XX_Parameter_3": (self.limb_par3_btn.cget("text") or "LimbPar3"),
+            }
         # NEW: write JSON sidecar with metadata (instead of stuffing CSV header)
         from data_utils import write_export_metadata
         meta_path = os.path.join(export_dir, f"{self.video_name}_metadata.json")
@@ -1441,7 +2160,7 @@ class LabelingApp(tk.Tk):
             meta_path=meta_path,
             program_version=self.video.program_version,
             video_name=self.video_name,
-            labeling_mode=self.labeling_mode,
+            labeling_mode=f"{self.labeling_mode} | {THREE_D_MODE}" if self.is_pose_mode() else self.labeling_mode,
             frame_rate=self.frame_rate,
             clothes_list=clothes_list,
             param_labels=param_labels,
@@ -1449,18 +2168,26 @@ class LabelingApp(tk.Tk):
             labeling_time_seconds=self._current_video_time_s(),
         )
 
-        export_from_unified(
-            self.video.frames,
-            export_path,
-            self.video.program_version,
-            self.video_name,
-            self.labeling_mode,
-            self.frame_rate,
-            clothes_list,
-            total_frames=self.video.total_frames,
-            param_labels=param_labels,
-            limb_param_labels=limb_param_labels,
-        )
+        if self.is_pose_mode():
+            export_pose_dataset(
+                self.video.frames,
+                export_path,
+                total_frames=self.video.total_frames,
+                frame_rate=self.frame_rate,
+            )
+        else:
+            export_from_unified(
+                self.video.frames,
+                export_path,
+                self.video.program_version,
+                self.video_name,
+                self.labeling_mode,
+                self.frame_rate,
+                clothes_list,
+                total_frames=self.video.total_frames,
+                param_labels=param_labels,
+                limb_param_labels=limb_param_labels,
+            )
         print("INFO: Save completed successfully.")
         for f, b in self.video.frames.items():
             if isinstance(b, dict) and b.get("Changed"):
@@ -1469,6 +2196,9 @@ class LabelingApp(tk.Tk):
 
     # --- Analysis / Sort / Playback buttons ---
     def analysis(self):
+        if self.is_pose_mode():
+            print("INFO: Analysis is disabled in 3D mismatch mode.")
+            return
         if self.video:
             self.save_data()
             data_dir = os.path.dirname(self.video.dataRH_path_to_csv)
@@ -1491,6 +2221,9 @@ class LabelingApp(tk.Tk):
         self.play = False
 
     def sort_frames(self):
+        if self.is_pose_mode():
+            print("INFO: Sort Frames is disabled in 3D mismatch mode.")
+            return
         self.save_data()
         base_dir = os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv))
         csv_path = os.path.join(base_dir, "export", f"{self.video_name}_export.csv")
@@ -1506,20 +2239,38 @@ class LabelingApp(tk.Tk):
     # --- Video load & init ---
     def ask_labeling_mode(self):
         mode_window = tk.Toplevel(self)
-        mode_window.title("Select Labeling Mode")
-        mode_window.geometry("480x220")
+        mode_window.title("Select Modes")
+        mode_window.geometry("520x320")
         mode_window.grab_set()
-        label = tk.Label(mode_window, text="Choose the labeling mode:", font=("Arial", 12))
+        label = tk.Label(mode_window, text="Choose startup modes:", font=("Arial", 12))
         label.pack(pady=10)
+        cfg = load_config()
+        labeling_var = tk.StringVar(value=getattr(self, "labeling_mode", cfg.get("last_labeling_mode", "Normal")))
+        annotation_var = tk.StringVar(value=getattr(self, "annotation_mode", cfg.get("annotation_mode", "touch")))
 
-        def set_mode(mode):
-            self.labeling_mode = mode
-            bg = 'yellow' if mode == 'Reliability' else 'lightgreen'
-            self.mode_label.config(text=f"Mode: {mode}", bg=bg)
+        tk.Label(mode_window, text="Labeling mode", font=("Arial", 10, "bold")).pack(pady=(5, 2))
+        tk.Radiobutton(mode_window, text="Normal", variable=labeling_var, value="Normal").pack()
+        tk.Radiobutton(mode_window, text="Reliability", variable=labeling_var, value="Reliability").pack()
+
+        tk.Label(mode_window, text="Annotation mode", font=("Arial", 10, "bold")).pack(pady=(12, 2))
+        tk.Radiobutton(mode_window, text="Touch", variable=annotation_var, value="touch").pack()
+        tk.Radiobutton(mode_window, text=THREE_D_MODE, variable=annotation_var, value="pose_3d").pack()
+
+        def set_mode():
+            self.labeling_mode = labeling_var.get()
+            self.annotation_mode = annotation_var.get()
+            self._reset_zone_cache()
+            bg = 'yellow' if self.labeling_mode == 'Reliability' else 'lightgreen'
+            display_annotation = "3D" if self.is_pose_mode() else "Touch"
+            self.mode_label.config(text=f"Mode: {self.labeling_mode} | {display_annotation}", bg=bg)
+            cfg["last_labeling_mode"] = self.labeling_mode
+            cfg["annotation_mode"] = self.annotation_mode
+            save_config(cfg)
+            self.rebuild_annotation_controls()
+            self._set_sort_analysis_state()
             mode_window.destroy()
 
-        tk.Button(mode_window, text="Normal", command=lambda: set_mode("Normal"), width=15).pack(pady=5)
-        tk.Button(mode_window, text="Reliability", command=lambda: set_mode("Reliability"), width=15).pack(pady=5)
+        tk.Button(mode_window, text="Continue", command=set_mode, width=18).pack(pady=16)
         mode_window.wait_window()
 
     def load_video(self):
@@ -1559,7 +2310,10 @@ class LabelingApp(tk.Tk):
         min_lenght_in_frames = self.minimal_touch_lenght * self.frame_rate / 1000
         self.min_touch_lenght_label.config(text=f"Minimal Touch Length: {min_lenght_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
-        if self.labeling_mode == "Reliability": video_name += "_reliability"
+        if self.is_pose_mode():
+            video_name += "_3d"
+        if self.labeling_mode == "Reliability":
+            video_name += "_reliability"
         self.video_name = video_name
 
         base_dir = os.path.join("Labeled_data", video_name)
@@ -1581,7 +2335,12 @@ class LabelingApp(tk.Tk):
         )
 
         # Load unified (robust: handles 0-byte / header-only files)
-        self.video.frames = load_unified_dataset(unified_path) or {}
+        if self.is_pose_mode():
+            self._reset_zone_cache()
+            self.video.frames = load_pose_dataset(unified_path) or {}
+        else:
+            self._reset_zone_cache()
+            self.video.frames = load_unified_dataset(unified_path) or {}
 
         # Rebind LimbViews to the current dict (CRITICAL)
         self.video.dataRH._frames = self.video.frames
@@ -1590,7 +2349,7 @@ class LabelingApp(tk.Tk):
         self.video.dataLL._frames = self.video.frames
 
         # Fallback: if unified is empty but export exists, recover once from export
-        if not self.video.frames and os.path.exists(export_path):
+        if (not self.is_pose_mode()) and (not self.video.frames) and os.path.exists(export_path):
             print("INFO: Unified empty; importing from export for recovery…")
             self.video.frames = import_unified_from_export(export_path) or {}
 
@@ -1614,7 +2373,7 @@ class LabelingApp(tk.Tk):
             setattr(self.video, f"data{suffix}_path_to_csv", csv_path)
 
         # If unified did not exist BUT legacy limb CSVs do, migrate them once into self.video.frames
-        if not self.video.frames:
+        if (not self.is_pose_mode()) and not self.video.frames:
             print("INFO: No unified file found; attempting legacy CSV migration...")
             any_legacy = False
             for suffix in ['RH', 'LH', 'RL', 'LL']:
@@ -1641,7 +2400,7 @@ class LabelingApp(tk.Tk):
         load_parameter_names_into(
             self.video,
             {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn},
-            {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn}
+            {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn},
         )
 
         # Frames generation/check
@@ -1703,12 +2462,13 @@ class LabelingApp(tk.Tk):
         self.update_note_entry()
 
         # Limb parameters
-        p1, p2, p3 = load_limb_parameters(os.path.join(data_dir, f"{video_name}_limb_parameters.csv"))
-        self.video.limb_parameter1, self.video.limb_parameter2, self.video.limb_parameter3 = p1, p2, p3
+        if not self.is_pose_mode():
+            p1, p2, p3 = load_limb_parameters(os.path.join(data_dir, f"{video_name}_limb_parameters.csv"))
+            self.video.limb_parameter1, self.video.limb_parameter2, self.video.limb_parameter3 = p1, p2, p3
 
         # Clothes file presence => colorize button
         self.video.clothes_file_path = os.path.join(data_dir, f"{video_name}_clothes.txt")
-        if self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
+        if (not self.is_pose_mode()) and self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
             with open(self.video.clothes_file_path, 'r') as f:
                 if len(f.readlines()) > 1:
                     self.cloth_btn.config(bg="lightgreen")
@@ -1717,10 +2477,15 @@ class LabelingApp(tk.Tk):
         for b in self.video.frames.values():
             if isinstance(b, dict):
                 b["Changed"] = False
+        self.rebuild_annotation_controls()
+        self._set_sort_analysis_state()
         print("INFO: Welcome back! I wish you happy labeling session! :)")
 
     # --- Clothes side window ---
     def open_cloth_app(self):
+        if self.is_pose_mode():
+            print("INFO: Clothes labeling is disabled in 3D mismatch mode.")
+            return
         if self.video is None:
             print("ERROR: First select video")
         else:

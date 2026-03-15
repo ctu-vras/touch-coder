@@ -140,14 +140,14 @@ def _build_controls(app):
     settings_btn = tk.Button(left_top, text="Settings", command=app.open_settings)
     settings_btn.pack(side="left", padx=5)
 
-    analysis_btn = tk.Button(left_top, text="Analysis", command=app.analysis)
-    analysis_btn.pack(side="left", padx=5)
+    app.analysis_btn = tk.Button(left_top, text="Analysis", command=app.analysis)
+    app.analysis_btn.pack(side="left", padx=5)
 
     app.cloth_btn = tk.Button(left_top, text="Clothes", command=app.open_cloth_app)
     app.cloth_btn.pack(side="left", padx=5)
 
-    sort_btn = tk.Button(left_top, text="Sort Frames", command=app.sort_frames, state='disabled')
-    sort_btn.pack(side="left", padx=5)
+    app.sort_btn = tk.Button(left_top, text="Sort Frames", command=app.sort_frames, state='disabled')
+    app.sort_btn.pack(side="left", padx=5)
 
     back_10_frame_btn = tk.Button(right_top_buttons, text="<<", command=lambda: app.next_frame(-7))
     back_10_frame_btn.pack(side="left", padx=5)
@@ -196,7 +196,6 @@ def _build_controls(app):
 
 
 def _build_diagram_panel(app, scale):
-    # radio group for limb selector
     app.option_var_1 = tk.StringVar()
     app.option_var_1.set("RH")
     # === Diagram canvas EXACTLY like original ===
@@ -222,36 +221,22 @@ def _build_diagram_panel(app, scale):
     app.diagram_canvas.bind("<Button-1>", lambda event: app.on_diagram_click(event, right=True))
     app.diagram_canvas.bind("<Button-2>", app.on_middle_click)
 
-    label_after_separator1 = tk.Label(app.diagram_frame, text="Limb Selector", font=("Arial", 10, "bold"), bg='lightgrey')
-    label_after_separator1.pack(anchor="n", pady=(5, 2))
-
-    # NOTE: The original text/values asymmetry is preserved intentionally.
-    rb = tk.Radiobutton(app.diagram_frame, text="Right Hand", variable=app.option_var_1, value="RH", bg='lightgrey')
-    rb.pack(anchor="n")
-    rb = tk.Radiobutton(app.diagram_frame, text="Left Hand", variable=app.option_var_1, value="LH", bg='lightgrey')
-    rb.pack(anchor="n")
-    rb = tk.Radiobutton(app.diagram_frame, text="Right Leg", variable=app.option_var_1, value="RL", bg='lightgrey')
-    rb.pack(anchor="n")
-    rb = tk.Radiobutton(app.diagram_frame, text="Left Leg", variable=app.option_var_1, value="LL", bg='lightgrey')
-    rb.pack(anchor="n")
+    app.mode_controls_frame = tk.Frame(app.diagram_frame, bg="lightgrey")
+    app.mode_controls_frame.pack(fill="x", anchor="n")
 
     separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
     separator.pack(fill="x", padx=5, pady=5)
 
-    label_after_separator2 = tk.Label(app.diagram_frame, text="Parameters", font=("Arial", 10, "bold"), bg='lightgrey')
-    label_after_separator2.pack(anchor="n", pady=(5, 0))
-    label_after_separator21 = tk.Label(app.diagram_frame, text="(Limb-Specific)", font=("Arial", 8), bg='lightgrey')
-    label_after_separator21.pack(anchor="n", pady=(0, 5))
+    app.mode_param_label = tk.Label(app.diagram_frame, text="Parameters", font=("Arial", 10, "bold"), bg='lightgrey')
+    app.mode_param_label.pack(anchor="n", pady=(5, 0))
+    app.mode_param_subtitle = tk.Label(app.diagram_frame, text="(Limb-Specific)", font=("Arial", 8), bg='lightgrey')
+    app.mode_param_subtitle.pack(anchor="n", pady=(0, 5))
 
-    app.limb_par1_btn = tk.Button(app.diagram_frame, text="Limb Parameter 1",
-                                  command=lambda: app.toggle_limb_parameter(1), width=15, height=1)
-    app.limb_par1_btn.pack(anchor="n")
-    app.limb_par2_btn = tk.Button(app.diagram_frame, text="Limb Parameter 2",
-                                  command=lambda: app.toggle_limb_parameter(2), width=15, height=1)
-    app.limb_par2_btn.pack(anchor="n")
-    app.limb_par3_btn = tk.Button(app.diagram_frame, text="Limb Parameter 3",
-                                  command=lambda: app.toggle_limb_parameter(3), width=15, height=1)
-    app.limb_par3_btn.pack(anchor="n")
+    app.limb_parameter_frame = tk.Frame(app.diagram_frame, bg="lightgrey")
+    app.limb_parameter_frame.pack(fill="x", anchor="n")
+    app.limb_par1_btn = None
+    app.limb_par2_btn = None
+    app.limb_par3_btn = None
 
     separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
     separator.pack(fill="x", padx=5, pady=5)
@@ -288,6 +273,9 @@ def _build_diagram_panel(app, scale):
     # Note entry & helpers (kept on root to mirror original placement)
     app.note_entry = tk.Entry(app.diagram_frame, width=40)
     app.note_entry.pack(side="bottom", fill="x", padx=5, pady=5)
+
+    if hasattr(app, "rebuild_annotation_controls"):
+        app.rebuild_annotation_controls()
 
 
 

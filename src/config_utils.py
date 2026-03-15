@@ -114,13 +114,19 @@ def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
         video_obj.parameter1_name = p1
         video_obj.parameter2_name = p2
         video_obj.parameter3_name = p3
-        par_buttons[1].config(text=f"{p1}", bg='lightgrey')
-        par_buttons[2].config(text=f"{p2}", bg='lightgrey')
-        par_buttons[3].config(text=f"{p3}", bg='lightgrey')
+        if par_buttons.get(1):
+            par_buttons[1].config(text=f"{p1}", bg='lightgrey')
+        if par_buttons.get(2):
+            par_buttons[2].config(text=f"{p2}", bg='lightgrey')
+        if par_buttons.get(3):
+            par_buttons[3].config(text=f"{p3}", bg='lightgrey')
 
         video_obj.limb_parameter1_name = config.get('limb_parameter1', 'Limb Parameter 1')
         video_obj.limb_parameter2_name = config.get('limb_parameter2', 'Limb Parameter 2')
         video_obj.limb_parameter3_name = config.get('limb_parameter3', 'Limb Parameter 3')
-        limb_par_buttons[1].config(text=f"{video_obj.limb_parameter1_name}", bg='lightgrey')
-        limb_par_buttons[2].config(text=f"{video_obj.limb_parameter2_name}", bg='lightgrey')
-        limb_par_buttons[3].config(text=f"{video_obj.limb_parameter3_name}", bg='lightgrey')
+        if limb_par_buttons.get(1):
+            limb_par_buttons[1].config(text=f"{video_obj.limb_parameter1_name}", bg='lightgrey')
+        if limb_par_buttons.get(2):
+            limb_par_buttons[2].config(text=f"{video_obj.limb_parameter2_name}", bg='lightgrey')
+        if limb_par_buttons.get(3):
+            limb_par_buttons[3].config(text=f"{video_obj.limb_parameter3_name}", bg='lightgrey')
