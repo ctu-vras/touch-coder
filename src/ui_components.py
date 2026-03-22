@@ -188,8 +188,8 @@ def _build_controls(app):
     # Keep the label for updates, but do not show it in the UI.
     app.framerate_label = tk.Label(left_bottom, text="Frame Rate: -----", bg='lightgrey')
 
-    app.min_touch_lenght_label = tk.Label(left_bottom, text="Minimal Touch Length: -----", bg='lightgrey')
-    app.min_touch_lenght_label.pack(side="left", padx=10)
+    app.min_touch_length_label = tk.Label(left_bottom, text="Minimal Touch Length: -----", bg='lightgrey')
+    app.min_touch_length_label.pack(side="left", padx=10)
 
     app.name_label = tk.Label(right_bottom, text="Video Name: -----", bg='lightgrey')
     app.name_label.pack(side="left", padx=10)
@@ -217,8 +217,8 @@ def _build_diagram_panel(app, scale):
 
     # Bind clicks on the diagram (these call back into the controller)
     app.diagram_canvas.bind("<Motion>", app.update_last_mouse_position)
-    app.diagram_canvas.bind("<Button-3>", lambda event: app.on_diagram_click(event, right=False))
-    app.diagram_canvas.bind("<Button-1>", lambda event: app.on_diagram_click(event, right=True))
+    app.diagram_canvas.bind("<Button-3>", lambda event: app.on_diagram_click(event, is_onset=False))
+    app.diagram_canvas.bind("<Button-1>", lambda event: app.on_diagram_click(event, is_onset=True))
     app.diagram_canvas.bind("<Button-2>", app.on_middle_click)
 
     app.mode_controls_frame = tk.Frame(app.diagram_frame, bg="lightgrey")
@@ -256,15 +256,11 @@ def _build_diagram_panel(app, scale):
     separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
     separator.pack(fill="x", padx=5, pady=5)
 
-    
-
-   
-
     app.select_frame_button = tk.Button(
         app.diagram_frame, text="Select Frame", command=app.select_frame, width=15, height=1
     )
-    app.select_frame_button.pack(side="bottom",padx=5, pady=5)
-     # Buttons
+    app.select_frame_button.pack(side="bottom", padx=5, pady=5)
+
     app.save_note_button = tk.Button(
         app.diagram_frame, text="Save Note", command=app.save_note, width=15, height=1
     )

@@ -5,28 +5,17 @@ import json
 import time
 import shutil
 import re
-from tkinter import ttk
-from turtle import right
-import cv2
-import tkinter as tk
-from tkinter import messagebox, filedialog
 from threading import Thread
-from PIL import Image, ImageTk, ImageDraw
+
+import cv2
 import pandas as pd
 import keyboard
-from data_utils import bundle_summary_str  # import the helper
-import analysis
-from sort_frames import process_touch_data_strict_transitions
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from PIL import Image, ImageTk, ImageDraw
 
-# Split-out modules
+import analysis
 from cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
-from video_model import Video
-from ui_components import build_ui
-from data_utils import (
-    csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
-    save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file
-)
-from frame_utils import check_items_count, create_frames
 from config_utils import (
     load_config,
     save_config,
@@ -36,14 +25,13 @@ from config_utils import (
     load_video_downscale,
 )
 from data_utils import (
+    bundle_summary_str,
     csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
     save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file,
-    FrameRecord
+    FrameRecord,
 )
+from frame_utils import check_items_count, create_frames
 from perf_utils import PerfLogger
-import tkinter as tk
-from tkinter import ttk
-from resource_utils import resource_path
 from pose_mismatch_data import (
     POSE_JOINTS,
     empty_pose_bundle,
@@ -53,7 +41,15 @@ from pose_mismatch_data import (
     save_pose_dataset,
     scale_raw_to_factor,
 )
+from resource_utils import resource_path
+from sort_frames import process_touch_data_strict_transitions
+from ui_components import build_ui
+from video_model import Video
 
+
+# =============================================================================
+# Constants
+# =============================================================================
 PLAYBACK_BUFFER_PAUSE_S = 1.0
 PLAYBACK_BUFFER_AHEAD = 3
 BUFFER_MAX_BYTES = 1_000_000_000
@@ -62,7 +58,12 @@ THREE_D_MODE = "3D Mismatch"
 POSE_OUTLINE_ANCHOR_X = 183.0
 POSE_OUTLINE_ANCHOR_Y = 348.0
 POSE_OUTLINE_ALPHA = 90
-def custom_confirm_close(root,saved: bool):
+
+
+# =============================================================================
+# Standalone helpers
+# =============================================================================
+def custom_confirm_close(root, saved: bool):
     win = tk.Toplevel(root)
     win.title("Close Application")
     win.geometry("600x300")
@@ -89,6 +90,10 @@ def custom_confirm_close(root,saved: bool):
     ttk.Button(btn_frame, text="OK", command=on_yes).pack(side="left", padx=10)
     ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side="left", padx=10)
 
+
+# =============================================================================
+# Main Application
+# =============================================================================
 class LabelingApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -96,7 +101,7 @@ class LabelingApp(tk.Tk):
         # Core state (was previously in __init__)
         self.video = None
         self.video_name = None
-        self.minimal_touch_lenght = None
+        self.minimal_touch_length = None
         self.NEW_TEMPLATE = False
         self.annotation_mode = "touch"
         self.clothes_diagram_scale = DEFAULT_CLOTH_DIAGRAM_SCALE
@@ -123,9 +128,9 @@ class LabelingApp(tk.Tk):
         build_ui(self)
 
         # Load config flags that affect UI sizing & behavior
-        self.NEW_TEMPLATE, self.minimal_touch_lenght = load_config_flags()
+        self.NEW_TEMPLATE, self.minimal_touch_length = load_config_flags()
         print("INFO: Loaded new template:", self.NEW_TEMPLATE)
-        print("INFO: Loaded minimal touch length:", self.minimal_touch_lenght)
+        print("INFO: Loaded minimal touch length:", self.minimal_touch_length)
         perf_enabled, perf_log_every_s, perf_log_top_n = load_perf_config()
         self.perf = PerfLogger(
             enabled=perf_enabled,
@@ -156,7 +161,7 @@ class LabelingApp(tk.Tk):
         self._timeline2_playhead_id = None
         self._pose_timeline_scale_overlay_id = None
         self._pose_timeline2_scale_overlay_id = None
-    # --- Param helpers ---
+    # === 3D Pose Mode & Rendering ============================================
     def _limb_param_key_for_index(self, idx: int) -> str:
         return f"Par{idx}"
 
@@ -395,6 +400,7 @@ class LabelingApp(tk.Tk):
         if getattr(self, "cloth_btn", None):
             self.cloth_btn.config(state=cloth_state)
 
+    # === UI Rebuild & Annotation Controls =====================================
     def _reset_zone_cache(self):
         self._zone_masks = []
         self._zone_centroids = {}
@@ -542,6 +548,7 @@ class LabelingApp(tk.Tk):
 
         self._set_sort_analysis_state()
 
+    # === Pose Scale Controls ==================================================
     def on_scale_changed(self, _value=None):
         if self._updating_scale_widget or not self.video or not self.is_pose_mode():
             return
@@ -602,6 +609,7 @@ class LabelingApp(tk.Tk):
     def _on_scale_release(self, _event):
         self._scale_drag_active = False
 
+    # === Data Bundle Management ================================================
     def _ensure_limb_params(self, rec: dict) -> dict:
         if not isinstance(rec.get("LimbParams"), dict):
             rec["LimbParams"] = {}
@@ -651,10 +659,6 @@ class LabelingApp(tk.Tk):
         if "Params" not in b or not isinstance(b["Params"], dict):
             b["Params"] = {}
         return b["Params"]
-    # -------------------------
-    # Callbacks & logic below are the same as before (moved unchanged)
-    # -------------------------
-    # in labeling_app.py, add helpers on the LabelingApp class
     def mark_bundle_changed(self, index=None):
         if self.video is None:
             return
@@ -697,7 +701,7 @@ class LabelingApp(tk.Tk):
         params[name] = state
         b["Params"] = params
     
-    # --- Small helpers / global clicks ---
+    # === Navigation & Input Events =============================================
     def global_click(self, event):
         try:
             focus = self.focus_get()
@@ -895,7 +899,7 @@ class LabelingApp(tk.Tk):
 
             self.mark_bundle_changed()
 
-    # --- Diagram init & routine render ---
+    # === Diagram Init & Click Handling =========================================
     def init_diagram(self):
         # set up periodic dots refresh
         self._reset_zone_cache()
@@ -942,12 +946,12 @@ class LabelingApp(tk.Tk):
                     )
         self.after(300, self.periodic_print_dot)
 
-    def on_diagram_click(self, event, right):
+    def on_diagram_click(self, event, is_onset):
         if self.video is None:
             return
         if self.is_pose_mode():
             with self.perf.time("pose_click_total"):
-                onset = "ON" if right else "OFF"
+                onset = "ON" if is_onset else "OFF"
                 display_scale = getattr(self, "diagram_scale", 1.0)
                 x_pos = event.x * (1.0 / display_scale)
                 y_pos = event.y * (1.0 / display_scale)
@@ -958,7 +962,7 @@ class LabelingApp(tk.Tk):
                     joint = self._find_nearest_pose_joint(x_pos, y_pos)
                 print(
                     "INFO: 3D click "
-                    f"button={'left/onset' if right else 'right/offset'} "
+                    f"button={'left/onset' if is_onset else 'right/offset'} "
                     f"canvas=({event.x}, {event.y}) "
                     f"data=({int(x_pos)}, {int(y_pos)}) "
                     f"direct_hits={zone_results} "
@@ -984,7 +988,7 @@ class LabelingApp(tk.Tk):
                 self.draw_timeline()
                 self.draw_timeline2()
                 return
-        onset = "ON" if right else "OFF"
+        onset = "ON" if is_onset else "OFF"
         display_scale = getattr(self, "diagram_scale", 1.0)
         x_pos = event.x * (1.0 / display_scale)
         y_pos = event.y * (1.0 / display_scale)
@@ -1158,7 +1162,7 @@ class LabelingApp(tk.Tk):
         self.draw_timeline2()
         self.update_limb_parameter_buttons()
 
-    # --- Diagram helpers used outside ---
+    # === Zone Masks & Lookups ==================================================
     def _load_zone_masks(self):
         if self.is_pose_mode():
             directory = resource_path("icons/3d/zones")
@@ -1222,7 +1226,7 @@ class LabelingApp(tk.Tk):
                 return [matches[0]]
             return ['NN']
 
-    # --- Timelines ---
+    # === Timelines =============================================================
     def on_timeline_click(self, event):
         if self.video and self.video.total_frames > 0:
             click_position = event.x
@@ -1856,7 +1860,7 @@ class LabelingApp(tk.Tk):
         print(f"INFO: Copied video to {dest_path}")
         return dest_path
 
-    # --- Playback & buffer ---
+    # === Frame Loading, Display & Buffer =======================================
     def background_update(self, frame_number=None):
         import time
         was_missing = False
@@ -2166,7 +2170,7 @@ class LabelingApp(tk.Tk):
         self._video_time_total_s = total
         self._video_session_start = None
 
-    # --- Parameter toggles & coloring ---
+    # === Parameter Toggles & Coloring ==========================================
     def update_button_colors(self):
         if self.video is None:
             return
@@ -2289,7 +2293,7 @@ class LabelingApp(tk.Tk):
                 colors.append(None)
         return colors
 
-    # --- Notes & selection ---
+    # === Notes & Frame Selection ===============================================
     def select_frame(self):
         frame = self.note_entry.get()
         try:
@@ -2356,7 +2360,7 @@ class LabelingApp(tk.Tk):
         self.note_entry.delete(0, tk.END)
         self.note_entry.insert(0, note_text)
 
-    # --- Save / Export ---
+    # === Save / Export =========================================================
     def save_data(self):
         if not self.video or not self.video.frames_dir:
             print("INFO: Save skipped (no video loaded).")
@@ -2443,7 +2447,7 @@ class LabelingApp(tk.Tk):
                 b["Changed"] = False
         print("DEBUG: Cleared bundle 'Changed' flags after save.")
 
-    # --- Analysis / Sort / Playback buttons ---
+    # === Analysis / Sort / Playback ============================================
     def analysis(self):
         if self.is_pose_mode():
             print("INFO: Analysis is disabled in 3D mismatch mode.")
@@ -2485,7 +2489,7 @@ class LabelingApp(tk.Tk):
         except Exception as e:
             print(f"ERROR in sort_frames: {e}")
 
-    # --- Video load & init ---
+    # === Video Load & Init =====================================================
     def ask_labeling_mode(self):
         mode_window = tk.Toplevel(self)
         mode_window.title("Select Modes")
@@ -2559,8 +2563,8 @@ class LabelingApp(tk.Tk):
         cap.release()
         self.frame_rate = self.video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
-        min_lenght_in_frames = self.minimal_touch_lenght * self.frame_rate / 1000
-        self.min_touch_lenght_label.config(text=f"Minimal Touch Length: {min_lenght_in_frames}")
+        min_length_in_frames = self.minimal_touch_length * self.frame_rate / 1000
+        self.min_touch_length_label.config(text=f"Minimal Touch Length: {min_length_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         if self.is_pose_mode():
             video_name += "_3d"
@@ -2733,7 +2737,7 @@ class LabelingApp(tk.Tk):
         self._set_sort_analysis_state()
         print("INFO: Welcome back! I wish you happy labeling session! :)")
 
-    # --- Clothes side window ---
+    # === Clothes Side Window ===================================================
     def open_cloth_app(self):
         if self.is_pose_mode():
             print("INFO: Clothes labeling is disabled in 3D mismatch mode.")
@@ -2832,6 +2836,7 @@ class LabelingApp(tk.Tk):
 
     
 
+    # === App Lifecycle (close, position) =======================================
     def on_close(self):
         saved = False
         if self.video is not None:
@@ -2876,7 +2881,7 @@ class LabelingApp(tk.Tk):
         except Exception as e:
             print(f"WARNING: Failed to restore last position: {e}")
 
-    # --- Settings ---
+    # === Settings ==============================================================
     def open_settings(self):
         if getattr(self, "_settings_win", None) and self._settings_win.winfo_exists():
             self._settings_win.lift()
@@ -3051,7 +3056,7 @@ class LabelingApp(tk.Tk):
         if getattr(self, "video", None):
             self.display_first_frame()
 
-    # --- Frame stepping ---
+    # === Frame Stepping ========================================================
     def next_frame(self, number_of_frames, play=False):
         if self.video is None:
             print("ERROR: Video = None"); return

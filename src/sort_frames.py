@@ -109,7 +109,7 @@ def process_touch_data_strict_transitions(csv_path: str, images_dir: str, output
     print(f"SORT: DONE – Frames sorted into: {output_dir}")
 
 
-def datavuy_process_touch_data_strict_transitions(csv_dir: str, images_dir: str, output_dir: str, fps: int | None = None) -> None:
+def datavyu_process_touch_data_strict_transitions(csv_dir: str, images_dir: str, output_dir: str, fps: int | None = None) -> None:
     frame_rate = fps or FRAME_RATE
     ms_per_frame = 1000.0 / frame_rate
 
@@ -224,4 +224,4 @@ if __name__ == '__main__':
     csv_path = 'datavyu_test'
     images_dir = 'Labeled_data/cat3_mp4/frames'
     output_dir = 'datavyu_test_frames'
-    datavuy_process_touch_data_strict_transitions(csv_path, images_dir, output_dir)
+    datavyu_process_touch_data_strict_transitions(csv_path, images_dir, output_dir)
