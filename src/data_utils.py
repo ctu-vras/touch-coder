@@ -7,6 +7,7 @@ CSV loader. Pure functions where possible; controller passes what’s needed.
 import csv
 import json
 import os
+import time
 import pandas as pd
 from typing import TypedDict, NotRequired, List, Optional, Dict
 # --- ADD to data_utils.py (near the top with other imports) ---
@@ -232,43 +233,104 @@ def save_unified_dataset(csv_path: str, total_frames: int, frames: Dict[int, Fra
     print(f"DEBUG: Unified → {csv_path}")
     print(f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, rows_written={len(changed_rows)}, union_rows={len(union_rows)}")
 
-def load_unified_dataset(csv_path: str) -> Dict[int, FrameBundle]:
+def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBundle]:
     frames: Dict[int, FrameBundle] = {}
     if not (csv_path and os.path.exists(csv_path)):
-        print(f"DEBUG: Unified not found → {csv_path}")
+        print(f"DEBUG: Unified not found → {csv_path}", flush=True)
         return frames
     try:
         size = os.path.getsize(csv_path)
-        print(f"DEBUG: Unified exists ({size} bytes) → {csv_path}")
+        print(f"DEBUG: Unified exists ({size} bytes) → {csv_path}", flush=True)
         if size == 0:
-            # 0-byte file from a previous "no changed frames" save; ignore gracefully
-            print("DEBUG: Unified is empty (0 bytes) — starting with empty frames")
+            print("DEBUG: Unified is empty (0 bytes) — starting with empty frames", flush=True)
             return frames
+        t0 = time.time()
+        print("DEBUG: load_unified_dataset: pd.read_csv starting...", flush=True)
         df = pd.read_csv(csv_path)
+        print(f"DEBUG: load_unified_dataset: pd.read_csv done in {time.time() - t0:.2f}s "
+              f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
     except pd.errors.EmptyDataError:
-        print("DEBUG: Unified had no columns (EmptyDataError) — starting with empty frames")
+        print("DEBUG: Unified had no columns (EmptyDataError) — starting with empty frames", flush=True)
         return frames
     except Exception as e:
-        print(f"ERROR: Failed to read unified CSV: {e} — starting empty")
+        print(f"ERROR: Failed to read unified CSV: {e} — starting empty", flush=True)
         return frames
 
-    for _, row in df.iterrows():
+    total_rows = len(df)
+    log_every = max(10000, total_rows // 20) if total_rows else 10000
+    last_log_t = time.time()
+    iter_start = time.time()
+
+    # itertuples is ~50-100x faster than iterrows on wide frames because it
+    # does NOT construct a fresh pandas Series per row.
+    cols = list(df.columns)
+    col_idx = {c: i for i, c in enumerate(cols)}
+    frame_i = col_idx.get("Frame", -1)
+    note_i  = col_idx.get("Note",  -1)
+    params_i = col_idx.get("Params", -1)
+    limb_i = {limb: col_idx.get(limb, -1) for limb in ("LH", "RH", "LL", "RL")}
+
+    if frame_i < 0:
+        print("ERROR: load_unified_dataset: 'Frame' column missing — aborting", flush=True)
+        return frames
+
+    print(f"DEBUG: load_unified_dataset: iterating {total_rows} rows via itertuples...", flush=True)
+
+    for row_idx, row in enumerate(df.itertuples(index=False, name=None)):
+        frame_v = row[frame_i]
         try:
-            f = int(row["Frame"])
-        except Exception:
+            f = int(frame_v)
+        except (ValueError, TypeError):
             continue
+
+        note_v = row[note_i] if note_i >= 0 else None
+        # NaN floats compare unequal to themselves; treat as missing.
+        if isinstance(note_v, float) and note_v != note_v:
+            note_v = None
+
+        def _json_at(idx, default):
+            if idx < 0:
+                return default
+            v = row[idx]
+            if isinstance(v, float) and v != v:
+                return default
+            if not v:
+                return default
+            try:
+                return json.loads(v)
+            except Exception:
+                return default
+
         frames[f] = {
-            "Note": (None if pd.isna(row.get("Note")) else str(row.get("Note"))),
-            "Params": json.loads(row.get("Params") or "{}"),
-            "LH": json.loads(row.get("LH") or "{}") or empty_record("LH"),
-            "RH": json.loads(row.get("RH") or "{}") or empty_record("RH"),
-            "LL": json.loads(row.get("LL") or "{}") or empty_record("LL"),
-            "RL": json.loads(row.get("RL") or "{}") or empty_record("RL"),
+            "Note": (None if note_v is None else str(note_v)),
+            "Params": _json_at(params_i, {}),
+            "LH": _json_at(limb_i["LH"], None) or empty_record("LH"),
+            "RH": _json_at(limb_i["RH"], None) or empty_record("RH"),
+            "LL": _json_at(limb_i["LL"], None) or empty_record("LL"),
+            "RL": _json_at(limb_i["RL"], None) or empty_record("RL"),
         }
-    print(f"DEBUG: Unified loaded rows={len(frames)}")
+
+        if (row_idx + 1) % log_every == 0 or (time.time() - last_log_t) >= 0.25:
+            elapsed = time.time() - iter_start
+            pct = (row_idx + 1) / total_rows * 100 if total_rows else 0
+            if progress_cb:
+                try:
+                    progress_cb(row_idx + 1, total_rows, "Loading unified dataset", elapsed)
+                except Exception as exc:
+                    print(f"WARN: progress_cb failed: {exc}", flush=True)
+            if (time.time() - last_log_t) >= 5.0 or (row_idx + 1) % log_every == 0:
+                print(f"DEBUG: load_unified_dataset: parsed {row_idx + 1}/{total_rows} rows "
+                      f"({pct:.1f}%, {elapsed:.1f}s elapsed)", flush=True)
+            last_log_t = time.time()
+    if progress_cb:
+        try:
+            progress_cb(total_rows, total_rows, "Loading unified dataset", time.time() - iter_start)
+        except Exception:
+            pass
+    print(f"DEBUG: Unified loaded rows={len(frames)} in {time.time() - iter_start:.1f}s", flush=True)
     return frames
 
-def import_unified_from_export(export_csv_path: str) -> Dict[int, FrameBundle]:
+def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[int, FrameBundle]:
     """
     Reconstruct a unified in-memory dict from a legacy *_export.csv.
     Reads after the 5 meta lines + 1 blank line (skiprows=6).
@@ -277,77 +339,132 @@ def import_unified_from_export(export_csv_path: str) -> Dict[int, FrameBundle]:
     """
     frames: Dict[int, FrameBundle] = {}
     if not (export_csv_path and os.path.exists(export_csv_path)):
+        print(f"DEBUG: import_unified_from_export: file does not exist → {export_csv_path}", flush=True)
         return frames
     try:
+        size = os.path.getsize(export_csv_path)
+        print(f"DEBUG: import_unified_from_export: reading {size} bytes from {export_csv_path}", flush=True)
         skip = 0
         with open(export_csv_path, "r", encoding="utf-8", errors="ignore") as fh:
             first = (fh.readline() or "").strip()
             if first.startswith("Program Version:"):
-                # legacy export with 5 meta lines + 1 blank line
                 skip = 6
+        print(f"DEBUG: import_unified_from_export: skiprows={skip}, calling pd.read_csv...", flush=True)
+        t0 = time.time()
         df = pd.read_csv(export_csv_path, skiprows=skip)
+        print(f"DEBUG: import_unified_from_export: pd.read_csv done in {time.time() - t0:.2f}s "
+              f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
     except Exception as e:
-        print(f"ERROR: import_unified_from_export read failed: {e}")
+        print(f"ERROR: import_unified_from_export read failed: {e}", flush=True)
         return frames
 
-    def parse_xy(s: str) -> list[int]:
+    def parse_xy(s) -> list[int]:
         if not isinstance(s, str) or not s.strip():
             return []
         return [int(x) for x in s.split(",") if x.strip().isdigit()]
 
-    for _, row in df.iterrows():
-        # Frame index
+    def _clean(v):
+        # Normalize NaN / empty-string to None.
+        if v is None:
+            return None
+        if isinstance(v, float) and v != v:  # NaN
+            return None
+        if v == "":
+            return None
+        return v
+
+    # itertuples is ~50-100x faster than iterrows on wide frames because it
+    # does NOT construct a fresh pandas Series per row (that was the cause
+    # of the 4-rows-in-20-seconds freeze).
+    cols = list(df.columns)
+    col_idx = {c: i for i, c in enumerate(cols)}
+    frame_i = col_idx.get("Frame", -1)
+    note_i  = col_idx.get("Note",  -1)
+    global_param_i = [col_idx.get(f"Parameter_{p}", -1) for p in (1, 2, 3)]
+    limb_field_i: Dict[str, Dict[str, int]] = {}
+    for limb in ("LH", "LL", "RH", "RL"):
+        limb_field_i[limb] = {
+            "X":     col_idx.get(f"{limb}_X", -1),
+            "Y":     col_idx.get(f"{limb}_Y", -1),
+            "Onset": col_idx.get(f"{limb}_Onset", -1),
+            "Look":  col_idx.get(f"{limb}_Look", -1),
+            "Zones": col_idx.get(f"{limb}_Zones", -1),
+            "P1":    col_idx.get(f"{limb}_Parameter_1", -1),
+            "P2":    col_idx.get(f"{limb}_Parameter_2", -1),
+            "P3":    col_idx.get(f"{limb}_Parameter_3", -1),
+        }
+
+    if frame_i < 0:
+        print("ERROR: import_unified_from_export: 'Frame' column missing — aborting", flush=True)
+        return frames
+
+    total_rows = len(df)
+    log_every = max(10000, total_rows // 20) if total_rows else 10000
+    last_log_t = time.time()
+    iter_start = time.time()
+    print(f"DEBUG: import_unified_from_export: iterating {total_rows} rows via itertuples "
+          f"(progress every {log_every} rows or 5s)...", flush=True)
+
+    def _at(row, idx, default=None):
+        if idx < 0:
+            return default
+        return row[idx]
+
+    for row_idx, row in enumerate(df.itertuples(index=False, name=None)):
         try:
-            f = int(row["Frame"])
-        except Exception:
+            f = int(row[frame_i])
+        except (ValueError, TypeError):
             continue
 
-        # Base bundle
+        note_v = _clean(_at(row, note_i))
         b: FrameBundle = {
-            "Note": (None if pd.isna(row.get("Note")) else str(row.get("Note"))),
-            "Params": {},  # will fill below
+            "Note": (None if note_v is None else str(note_v)),
+            "Params": {},
             "LH": empty_record("LH"),
             "LL": empty_record("LL"),
             "RH": empty_record("RH"),
             "RL": empty_record("RL"),
         }
 
-        # ---- Global Params: Parameter_1..3 -> Par1..Par3
+        # Global params Parameter_1..3 -> Par1..Par3
         params: Dict[str, Optional[str]] = {}
-        for i in (1, 2, 3):
-            col = f"Parameter_{i}"
-            val = row.get(col)
-            if pd.isna(val) or val == "":
-                val = None
-            params[f"Par{i}"] = val
+        for p_num, gp_idx in enumerate(global_param_i, start=1):
+            params[f"Par{p_num}"] = _clean(_at(row, gp_idx))
         if any(v is not None for v in params.values()):
             b["Params"] = params
 
-        # ---- Limbs
-        for limb in ["LH", "LL", "RH", "RL"]:
-            xr = parse_xy(row.get(f"{limb}_X", ""))
-            yr = parse_xy(row.get(f"{limb}_Y", ""))
-            onset = row.get(f"{limb}_Onset", "") or ""
-            look  = row.get(f"{limb}_Look", "") or ""
-            zones_raw = row.get(f"{limb}_Zones", "[]")
+        # Limbs
+        for limb in ("LH", "LL", "RH", "RL"):
+            li = limb_field_i[limb]
+            xr = parse_xy(_at(row, li["X"], ""))
+            yr = parse_xy(_at(row, li["Y"], ""))
+            onset = _at(row, li["Onset"], "") or ""
+            look  = _at(row, li["Look"], "") or ""
+            if isinstance(onset, float) and onset != onset:
+                onset = ""
+            if isinstance(look, float) and look != look:
+                look = ""
+            zones_raw = _at(row, li["Zones"], "[]")
             try:
-                zones = json.loads(zones_raw) if isinstance(zones_raw, str) else (zones_raw or [])
+                if isinstance(zones_raw, str):
+                    zones = json.loads(zones_raw)
+                elif isinstance(zones_raw, float) and zones_raw != zones_raw:
+                    zones = []
+                else:
+                    zones = zones_raw or []
             except Exception:
                 zones = []
 
             rec: FrameRecord = {
                 "X": xr, "Y": yr, "Onset": onset, "Bodypart": limb, "Look": look,
-                "Zones": zones, "Touch": None
+                "Zones": zones, "Touch": None,
             }
 
-            # LimbParams: {limb}_Parameter_{1..3} -> Par1..Par3
-            lp: Dict[str, Optional[str]] = {}
-            for i in (1, 2, 3):
-                col = f"{limb}_Parameter_{i}"
-                val = row.get(col)
-                if pd.isna(val) or val == "":
-                    val = None
-                lp[f"Par{i}"] = val
+            lp: Dict[str, Optional[str]] = {
+                "Par1": _clean(_at(row, li["P1"])),
+                "Par2": _clean(_at(row, li["P2"])),
+                "Par3": _clean(_at(row, li["P3"])),
+            }
             if any(v is not None for v in lp.values()):
                 rec["LimbParams"] = lp
 
@@ -355,7 +472,26 @@ def import_unified_from_export(export_csv_path: str) -> Dict[int, FrameBundle]:
 
         frames[f] = b
 
-    print(f"DEBUG: import_unified_from_export → frames={len(frames)} from {export_csv_path}")
+        if (row_idx + 1) % log_every == 0 or (time.time() - last_log_t) >= 0.25:
+            elapsed = time.time() - iter_start
+            pct = (row_idx + 1) / total_rows * 100 if total_rows else 0
+            if progress_cb:
+                try:
+                    progress_cb(row_idx + 1, total_rows, "Importing labels from export", elapsed)
+                except Exception as exc:
+                    print(f"WARN: progress_cb failed: {exc}", flush=True)
+            if (time.time() - last_log_t) >= 5.0 or (row_idx + 1) % log_every == 0:
+                print(f"DEBUG: import_unified_from_export: parsed {row_idx + 1}/{total_rows} rows "
+                      f"({pct:.1f}%, {elapsed:.1f}s elapsed)", flush=True)
+            last_log_t = time.time()
+
+    if progress_cb:
+        try:
+            progress_cb(total_rows, total_rows, "Importing labels from export", time.time() - iter_start)
+        except Exception:
+            pass
+    print(f"DEBUG: import_unified_from_export → frames={len(frames)} "
+          f"from {export_csv_path} in {time.time() - iter_start:.1f}s", flush=True)
     return frames
 
 def export_from_unified(frames: Dict[int, FrameBundle],
