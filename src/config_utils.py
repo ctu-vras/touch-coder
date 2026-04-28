@@ -98,6 +98,20 @@ def load_video_downscale():
         return scale
 
 
+def load_jump_seconds():
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
+        config = json.load(file)
+        raw = config.get('jump_seconds', 1.0)
+        try:
+            seconds = float(raw)
+        except Exception:
+            seconds = 1.0
+        if seconds <= 0:
+            seconds = 1.0
+        return seconds
+
+
 def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
     """
     Sets names onto the video object and updates the buttons' labels.

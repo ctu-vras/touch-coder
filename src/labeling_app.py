@@ -23,6 +23,7 @@ from config_utils import (
     load_parameter_names_into,
     load_perf_config,
     load_video_downscale,
+    load_jump_seconds,
 )
 from data_utils import (
     bundle_summary_str,
@@ -140,6 +141,10 @@ class LabelingApp(tk.Tk):
         print("INFO: Perf logging enabled:", perf_enabled)
         self.video_downscale = load_video_downscale()
         print("INFO: Video downscale:", self.video_downscale)
+        self.jump_seconds = load_jump_seconds()
+        self.jump_frame_count = 7  # fallback until a video loads & framerate is known
+        print(f"INFO: Fast-jump configured to {self.jump_seconds}s")
+        self._refresh_jump_label()
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
@@ -736,8 +741,18 @@ class LabelingApp(tk.Tk):
     def enable_arrow_keys(self, event=None):
         self.bind("<Left>", self.navigate_left)
         self.bind("<Right>", self.navigate_right)
-        self.bind("<Shift-Left>", lambda event: self._request_buffered_step(-7))
-        self.bind("<Shift-Right>", lambda event: self._request_buffered_step(7))
+        self.bind("<Shift-Left>", lambda event: self._request_buffered_step(-self.jump_frame_count))
+        self.bind("<Shift-Right>", lambda event: self._request_buffered_step(self.jump_frame_count))
+
+    def _refresh_jump_label(self):
+        label = getattr(self, "jump_label", None)
+        if label is None:
+            return
+        if self.video is not None and getattr(self, "frame_rate", None):
+            text = f"Jump: {self.jump_frame_count} frames ({self.jump_seconds}s)"
+        else:
+            text = f"Jump: {self.jump_seconds}s (load video to see frames)"
+        label.config(text=text)
 
     def update_last_mouse_position(self, event):
         self.last_mouse_x = event.x
@@ -2568,6 +2583,10 @@ class LabelingApp(tk.Tk):
         cap.release()
         self.frame_rate = self.video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
+        self.jump_frame_count = max(1, round(self.frame_rate * self.jump_seconds))
+        print(f"INFO: Fast-jump set to {self.jump_frame_count} frames "
+              f"({self.jump_seconds}s @ {self.frame_rate} fps)")
+        self._refresh_jump_label()
         min_length_in_frames = self.minimal_touch_length * self.frame_rate / 1000
         self.min_touch_length_label.config(text=f"Minimal Touch Length: {min_length_in_frames}")
         video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -2905,6 +2924,7 @@ class LabelingApp(tk.Tk):
             "video_downscale": tk.StringVar(value=str(_v("video_downscale", 1.0))),
             "diagram_scale": tk.StringVar(value=str(_v("diagram_scale", 1.0))),
             "dot_size": tk.StringVar(value=str(_v("dot_size", 10))),
+            "jump_seconds": tk.StringVar(value=str(_v("jump_seconds", 1.0))),
             "parameter1": tk.StringVar(value=str(_v("parameter1", "Parameter 1"))),
             "parameter2": tk.StringVar(value=str(_v("parameter2", "Parameter 2"))),
             "parameter3": tk.StringVar(value=str(_v("parameter3", "Parameter 3"))),
@@ -2930,6 +2950,13 @@ class LabelingApp(tk.Tk):
         row += 1
         tk.Label(win, text="Dot size").grid(row=row, column=0, sticky="w", padx=8, pady=2)
         tk.Entry(win, textvariable=vars_map["dot_size"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Fast-jump seconds (>> / Shift+Arrow)").grid(
+            row=row, column=0, sticky="w", padx=8, pady=2
+        )
+        tk.Entry(win, textvariable=vars_map["jump_seconds"], width=10).grid(
             row=row, column=1, sticky="w", padx=8, pady=2
         )
         row += 1
@@ -2987,6 +3014,10 @@ class LabelingApp(tk.Tk):
                 new_cfg["video_downscale"] = downscale
                 new_cfg["diagram_scale"] = parse_float(vars_map["diagram_scale"].get(), "diagram_scale")
                 new_cfg["dot_size"] = parse_float(vars_map["dot_size"].get(), "dot_size")
+                jump_seconds = parse_float(vars_map["jump_seconds"].get(), "jump_seconds")
+                if jump_seconds <= 0:
+                    jump_seconds = 1.0
+                new_cfg["jump_seconds"] = jump_seconds
 
                 def _label_from(key, default):
                     raw = vars_map[key].get()
@@ -3023,6 +3054,18 @@ class LabelingApp(tk.Tk):
         if new_downscale <= 0:
             new_downscale = 1.0
         self.video_downscale = new_downscale
+
+        new_jump_seconds = float(cfg.get("jump_seconds", 1.0))
+        if new_jump_seconds <= 0:
+            new_jump_seconds = 1.0
+        self.jump_seconds = new_jump_seconds
+        if self.video is not None and getattr(self, "frame_rate", None):
+            self.jump_frame_count = max(1, round(self.frame_rate * self.jump_seconds))
+            print(f"INFO: Fast-jump updated to {self.jump_frame_count} frames "
+                  f"({self.jump_seconds}s @ {self.frame_rate} fps)")
+        else:
+            print(f"INFO: Fast-jump updated to {self.jump_seconds}s (no video loaded)")
+        self._refresh_jump_label()
 
         new_scale = float(cfg.get("diagram_scale", 1.0))
         new_dot = float(cfg.get("dot_size", 10))

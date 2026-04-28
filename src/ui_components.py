@@ -149,7 +149,7 @@ def _build_controls(app):
     app.sort_btn = tk.Button(left_top, text="Sort Frames", command=app.sort_frames, state='disabled')
     app.sort_btn.pack(side="left", padx=5)
 
-    back_10_frame_btn = tk.Button(right_top_buttons, text="<<", command=lambda: app.next_frame(-7))
+    back_10_frame_btn = tk.Button(right_top_buttons, text="<<", command=lambda: app.next_frame(-app.jump_frame_count))
     back_10_frame_btn.pack(side="left", padx=5)
 
     back_frame_btn = tk.Button(right_top_buttons, text="<", command=lambda: app.next_frame(-1))
@@ -158,7 +158,7 @@ def _build_controls(app):
     next_frame_btn = tk.Button(right_top_buttons, text=">", command=lambda: app.next_frame(1))
     next_frame_btn.pack(side="left", padx=5)
 
-    next_10_frame_btn = tk.Button(right_top_buttons, text=">>", command=lambda: app.next_frame(7))
+    next_10_frame_btn = tk.Button(right_top_buttons, text=">>", command=lambda: app.next_frame(app.jump_frame_count))
     next_10_frame_btn.pack(side="left", padx=5)
 
     play_btn = tk.Button(right_top_buttons, text="Play", command=app.play_video)
@@ -190,6 +190,9 @@ def _build_controls(app):
 
     app.min_touch_length_label = tk.Label(left_bottom, text="Minimal Touch Length: -----", bg='lightgrey')
     app.min_touch_length_label.pack(side="left", padx=10)
+
+    app.jump_label = tk.Label(left_bottom, text="Jump: -----", bg='lightgrey')
+    app.jump_label.pack(side="left", padx=10)
 
     app.name_label = tk.Label(right_bottom, text="Video Name: -----", bg='lightgrey')
     app.name_label.pack(side="left", padx=10)
@@ -279,8 +282,8 @@ def _bind_navigation(app):
     app.bind("<KeyPress-d>", app.on_middle_click)
     app.bind("<Left>", app.navigate_left)
     app.bind("<Right>", app.navigate_right)
-    app.bind("<Shift-Left>", lambda event: app.next_frame(-7))
-    app.bind("<Shift-Right>", lambda event: app.next_frame(7))
+    app.bind("<Shift-Left>", lambda event: app.next_frame(-app.jump_frame_count))
+    app.bind("<Shift-Right>", lambda event: app.next_frame(app.jump_frame_count))
 
     # Wheel bindings: Windows/Mac vs Linux
     if sys.platform.startswith("linux"):

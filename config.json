@@ -10,6 +10,7 @@
   "limb_parameter2": "LP2",
   "limb_parameter3": "LP3",
   "video_downscale": 1.0,
+  "jump_seconds": 1.0,
   "perf_enabled": false,
   "perf_log_every_s": 2.0,
   "perf_log_top_n": 10,
