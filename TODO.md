@@ -1,0 +1,1 @@
+app crashing when closed during frame generation

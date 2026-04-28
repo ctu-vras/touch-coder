@@ -29,6 +29,10 @@ Labeled_data/**
 
 *.env
 *.exe
+
+# Ignore test data (extracted frames)
+tests/data/
+
 # Ignore log files
 *.log
 
@@ -50,3 +54,6 @@ TinyTouch_env/
 # Ignore generated sorted frames
 Labeled_data/*/sorted_frames/
 Labeled_data/*/sorted_frames/**
+
+.claude
+AGENTS.md

@@ -14,5 +14,5 @@
   "perf_log_every_s": 2.0,
   "perf_log_top_n": 10,
   "last_labeling_mode": "Normal",
-  "annotation_mode": "pose_3d"
+  "annotation_mode": "touch"
 }

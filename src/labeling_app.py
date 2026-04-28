@@ -1738,23 +1738,25 @@ class LabelingApp(tk.Tk):
         win.update_idletasks()
 
         def update(count, total, stage, elapsed_s):
-            total = max(1, int(total))
-            count = min(int(count), total)
-            bar["maximum"] = total
-            bar["value"] = count
-            pct = (count / total) * 100 if total else 0
-            status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
-            eta_s = None
-            if count > 0:
-                rate = elapsed_s / count
-                eta_s = max(0.0, (total - count) * rate)
-            time_label.config(
-                text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
-            )
-            win.update_idletasks()
+            if not win.winfo_exists():
+                return
             try:
+                total = max(1, int(total))
+                count = min(int(count), total)
+                bar["maximum"] = total
+                bar["value"] = count
+                pct = (count / total) * 100 if total else 0
+                status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
+                eta_s = None
+                if count > 0:
+                    rate = elapsed_s / count
+                    eta_s = max(0.0, (total - count) * rate)
+                time_label.config(
+                    text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
+                )
+                win.update_idletasks()
                 win.update()
-            except Exception:
+            except tk.TclError:
                 pass
 
         def close():
@@ -1781,23 +1783,25 @@ class LabelingApp(tk.Tk):
         win.update_idletasks()
 
         def update(count, total, stage, elapsed_s):
-            total = max(1, int(total))
-            count = min(int(count), total)
-            bar["maximum"] = total
-            bar["value"] = count
-            pct = (count / total) * 100 if total else 0
-            status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
-            eta_s = None
-            if count > 0:
-                rate = elapsed_s / count
-                eta_s = max(0.0, (total - count) * rate)
-            time_label.config(
-                text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
-            )
-            win.update_idletasks()
+            if not win.winfo_exists():
+                return
             try:
+                total = max(1, int(total))
+                count = min(int(count), total)
+                bar["maximum"] = total
+                bar["value"] = count
+                pct = (count / total) * 100 if total else 0
+                status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
+                eta_s = None
+                if count > 0:
+                    rate = elapsed_s / count
+                    eta_s = max(0.0, (total - count) * rate)
+                time_label.config(
+                    text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
+                )
+                win.update_idletasks()
                 win.update()
-            except Exception:
+            except tk.TclError:
                 pass
 
         def close():
@@ -2387,9 +2391,10 @@ class LabelingApp(tk.Tk):
             clothes_list = None
         else:
             save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
-            clothes_list = extract_zones_from_file(
-                self.video.clothes_file_path or self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
-            )
+            clothes_path = self.video.clothes_file_path
+            if not clothes_path and self.video.dataNotes_path_to_csv:
+                clothes_path = self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
+            clothes_list = extract_zones_from_file(clothes_path) if clothes_path else None
         export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
         print(f"DEBUG: Writing export dataset → {export_path}")
 

@@ -8,7 +8,11 @@ import re
 import sys
 import time
 import shutil
+import subprocess
+import logging
 import cv2
+
+logger = logging.getLogger(__name__)
 
 
 _FRAME_RE = re.compile(r"^frame(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
@@ -70,60 +74,111 @@ def check_items_count(folder_path, expected_count):
     return True
 
 
-def create_frames(
-    video_path,
-    frames_dir,
-    labeling_mode,
-    video_name,
-    progress_cb=None,
-    progress_interval_s=1.0,
-):
-    print("INFO: Checking if frames need to be created...")
+def _get_ffmpeg_exe():
+    """Return path to bundled ffmpeg binary, or None if unavailable."""
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.isfile(exe):
+            return exe
+    except ImportError:
+        pass
+    return None
+
+
+def _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interval_s):
+    """Extract frames using the bundled ffmpeg binary (fast path)."""
+    ffmpeg_exe = _get_ffmpeg_exe()
+    if ffmpeg_exe is None:
+        return False
+
+    logger.info("Using ffmpeg for frame extraction: %s", ffmpeg_exe)
+
+    os.makedirs(frames_dir, exist_ok=True)
+    output_pattern = os.path.join(frames_dir, "frame%d.jpg")
+
+    # Get total frame count for progress reporting
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    logger.info(
+        "Video properties: frames=%d, fps=%.3f, size=%dx%d",
+        total_frames, fps, width, height,
+    )
+
+    cmd = [
+        ffmpeg_exe,
+        "-i", video_path,
+        "-q:v", "2",
+        "-start_number", "0",
+        output_pattern,
+    ]
+
+    start_time = time.time()
     last_progress_ts = 0.0
-    start_time = None
 
-    def maybe_report(count, total, stage):
-        nonlocal last_progress_ts, start_time
-        if progress_cb is None:
-            return
-        now = time.time()
-        if start_time is None:
-            start_time = now
-        if (now - last_progress_ts) >= progress_interval_s or count >= total:
-            last_progress_ts = now
-            progress_cb(count, total, stage, now - start_time)
+    # Run ffmpeg and monitor progress by counting output files periodically
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
-    if labeling_mode == "Reliability":
-        original_video_name = video_name.replace("_reliability", "")
-        original_frames_dir = os.path.join("Labeled_data", original_video_name, "frames")
-        if os.path.exists(original_frames_dir):
-            print(f"INFO: Found existing frames at {original_frames_dir}. Copying instead of generating...")
-            os.makedirs(frames_dir, exist_ok=True)
-            frame_files = os.listdir(original_frames_dir)
-            total_files = len(frame_files)
-            for index, filename in enumerate(frame_files):
-                src = os.path.join(original_frames_dir, filename)
-                dst = os.path.join(frames_dir, filename)
-                shutil.copy2(src, dst)
-                progress = ((index + 1) / total_files) * 100
-                sys.stdout.write(f"\rCopying frames... {progress:.2f}%")
-                sys.stdout.flush()
-                maybe_report(index + 1, total_files, "Copying frames")
-            print("\nINFO: Frames copied successfully.")
-            return
+    while process.poll() is None:
+        time.sleep(progress_interval_s)
+        if progress_cb and total_frames:
+            now = time.time()
+            if (now - last_progress_ts) >= progress_interval_s:
+                last_progress_ts = now
+                count = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
+                progress_cb(count, total_frames, "Generating frames", now - start_time)
 
-    print("INFO: Creating frames from video...")
+    if process.returncode != 0:
+        stderr = process.stderr.read().decode(errors="replace")
+        logger.error("ffmpeg failed (exit %d): %s", process.returncode, stderr[-1000:])
+        return False
+
+    frame_count = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
+    logger.info("ffmpeg extracted %d frames successfully.", frame_count)
+
+    # Final progress report
+    if progress_cb and total_frames:
+        progress_cb(frame_count, total_frames, "Generating frames", time.time() - start_time)
+
+    if total_frames and abs(frame_count - total_frames) > max(1, int(total_frames * FRAME_COUNT_TOLERANCE_PCT)):
+        logger.warning(
+            "ffmpeg generated %d frames, but expected %d.", frame_count, total_frames
+        )
+
+    return True
+
+
+def _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interval_s):
+    """Extract frames using OpenCV sequential decode+write (fallback path)."""
+    logger.info("Using OpenCV for frame extraction (fallback).")
+
     vidcap = cv2.VideoCapture(video_path)
     is_opened = vidcap.isOpened()
     total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = vidcap.get(cv2.CAP_PROP_FPS)
     width = int(vidcap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"INFO: VideoCapture opened: {is_opened}")
-    print(f"INFO: Video properties: frames={total_frames}, fps={fps:.3f}, size={width}x{height}")
+    logger.info("VideoCapture opened: %s", is_opened)
+    logger.info(
+        "Video properties: frames=%d, fps=%.3f, size=%dx%d",
+        total_frames, fps, width, height,
+    )
+
     success, image = vidcap.read()
     count = 0
     os.makedirs(frames_dir, exist_ok=True)
+
+    last_progress_ts = 0.0
+    start_time = time.time()
+
     while success:
         frame_path = os.path.join(frames_dir, f"frame{count}.jpg")
         cv2.imwrite(frame_path, image)
@@ -132,8 +187,52 @@ def create_frames(
         progress = (count / total_frames) * 100 if total_frames else 0
         sys.stdout.write(f"\rGenerating frames... {progress:.2f}%")
         sys.stdout.flush()
-        maybe_report(count, total_frames or count, "Generating frames")
+        if progress_cb:
+            now = time.time()
+            if (now - last_progress_ts) >= progress_interval_s or count >= total_frames:
+                last_progress_ts = now
+                progress_cb(count, total_frames or count, "Generating frames", now - start_time)
+
     vidcap.release()
-    print("\nINFO: Frames have been created successfully.")
+    logger.info("OpenCV extracted %d frames successfully.", count)
     if total_frames and count != total_frames:
-        print(f"WARN: Generated {count} frames, but OpenCV reported {total_frames} total frames.")
+        logger.warning(
+            "Generated %d frames, but OpenCV reported %d total frames.",
+            count, total_frames,
+        )
+
+
+def create_frames(
+    video_path,
+    frames_dir,
+    labeling_mode,
+    video_name,
+    progress_cb=None,
+    progress_interval_s=1.0,
+):
+    logger.info("Checking if frames need to be created...")
+
+    if labeling_mode == "Reliability":
+        original_video_name = video_name.replace("_reliability", "")
+        original_frames_dir = os.path.join("Labeled_data", original_video_name, "frames")
+        if os.path.exists(original_frames_dir):
+            logger.info("Found existing frames at %s. Copying instead of generating...", original_frames_dir)
+            os.makedirs(frames_dir, exist_ok=True)
+            frame_files = os.listdir(original_frames_dir)
+            total_files = len(frame_files)
+            start_time = time.time()
+            for index, filename in enumerate(frame_files):
+                src = os.path.join(original_frames_dir, filename)
+                dst = os.path.join(frames_dir, filename)
+                shutil.copy2(src, dst)
+                if progress_cb:
+                    now = time.time()
+                    progress_cb(index + 1, total_files, "Copying frames", now - start_time)
+            logger.info("Frames copied successfully.")
+            return
+
+    logger.info("Creating frames from video...")
+
+    # Try ffmpeg first (faster), fall back to OpenCV
+    if not _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interval_s):
+        _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interval_s)
