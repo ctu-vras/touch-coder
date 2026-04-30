@@ -16,14 +16,14 @@ flagged/
 # Ignore the icons folder (if not needed in the repo)
 
 
-# Include the Videos folder and its contents
+# Ignore Videos folder contents (large binaries kept locally only)
+# Exception: cat3.mp4 is the in-repo sample used for quick smoke testing.
 Videos/**
-!Videos/cat3_mp4.mp4
+!Videos/cat3.mp4
 
-# Include the Labeled_data folder and its contents
-
+# Ignore Labeled_data contents but keep the folder in the repo
 Labeled_data/**
-!Labeled_data/cat3_mp4/**
+!Labeled_data/.gitkeep
 
 # Ignore config and environment files
 

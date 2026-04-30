@@ -284,6 +284,7 @@ def _bind_navigation(app):
     app.bind("<Right>", app.navigate_right)
     app.bind("<Shift-Left>", lambda event: app.next_frame(-app.jump_frame_count))
     app.bind("<Shift-Right>", lambda event: app.next_frame(app.jump_frame_count))
+    app.bind("<space>", app.toggle_play)
 
     # Wheel bindings: Windows/Mac vs Linux
     if sys.platform.startswith("linux"):

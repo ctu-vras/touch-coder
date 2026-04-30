@@ -26,6 +26,7 @@ from config_utils import (
     load_perf_config,
     load_video_downscale,
     load_jump_seconds,
+    load_realtime_arrow_hold,
 )
 from data_utils import (
     bundle_summary_str,
@@ -56,6 +57,18 @@ from video_model import Video
 PLAYBACK_BUFFER_PAUSE_S = 1.0
 PLAYBACK_BUFFER_AHEAD = 3
 BUFFER_MAX_BYTES = 1_000_000_000
+# Realtime arrow-hold tuning.
+# HOLD_START_DELAY_MS: how long the key must be held before realtime playback
+# kicks in. The OS keyboard auto-repeat delay (typically ~500ms) is shorter,
+# so we explicitly gate on elapsed time since the first KeyPress.
+# HOLD_RELEASE_TIMEOUT_MS: gap with no auto-repeat KeyPress before we treat
+# the key as released. OS auto-repeat fires ~every 30ms while held, so 100ms
+# is a comfortable margin that responds quickly when the user lets go.
+# HOLD_WATCHDOG_INTERVAL_MS: how often the watchdog polls. Set <= timeout/2
+# so the actual stop-latency stays close to HOLD_RELEASE_TIMEOUT_MS.
+HOLD_START_DELAY_MS = 500
+HOLD_RELEASE_TIMEOUT_MS = 100
+HOLD_WATCHDOG_INTERVAL_MS = 50
 DEBUG = False
 THREE_D_MODE = "3D Mismatch"
 POSE_OUTLINE_ANCHOR_X = 183.0
@@ -147,6 +160,17 @@ class LabelingApp(tk.Tk):
         self.jump_frame_count = 7  # fallback until a video loads & framerate is known
         print(f"INFO: Fast-jump configured to {self.jump_seconds}s")
         self._refresh_jump_label()
+
+        # Realtime arrow-hold playback state (no KeyRelease bindings — OS keyboard
+        # auto-repeat KeyPress events act as a heartbeat, polled by a watchdog).
+        self.realtime_arrow_hold = load_realtime_arrow_hold()
+        print(f"INFO: Realtime arrow hold: {self.realtime_arrow_hold}")
+        self.play_dir = 1                     # 1 = forward, -1 = backward (set by arrow-hold)
+        self._arrow_held_dir = None           # currently-held arrow direction (1 / -1 / None)
+        self._first_arrow_press_ms = 0.0      # time of the initial KeyPress (gates 1s hold delay)
+        self._last_arrow_press_ms = 0.0       # heartbeat: time of most recent KeyPress
+        self._hold_watchdog_id = None         # after() id for the release-detection watchdog
+        self._hold_play_active = False        # True while arrow-hold-driven playback is running
 
         # Timeline and buffering helpers
         self.background_thread = Thread(target=self.background_update, daemon=True)
@@ -741,21 +765,115 @@ class LabelingApp(tk.Tk):
 
         self.after(0, _apply)
 
-    def navigate_left(self, event): self._request_buffered_step(-1)
-    
-    def navigate_right(self, event): self._request_buffered_step(1)
+    def navigate_left(self, event):  self._on_arrow_press(-1)
+    def navigate_right(self, event): self._on_arrow_press(1)
 
     def disable_arrow_keys(self, event=None):
         self.unbind("<Left>")
         self.unbind("<Right>")
         self.unbind("<Shift-Left>")
         self.unbind("<Shift-Right>")
+        # Tear down hold state so an in-flight playback doesn't get orphaned
+        # if arrow keys are unbound while the user is holding one.
+        self._cancel_arrow_hold_state()
 
     def enable_arrow_keys(self, event=None):
         self.bind("<Left>", self.navigate_left)
         self.bind("<Right>", self.navigate_right)
         self.bind("<Shift-Left>", lambda event: self._request_buffered_step(-self.jump_frame_count))
         self.bind("<Shift-Right>", lambda event: self._request_buffered_step(self.jump_frame_count))
+
+    # --- Realtime arrow-hold playback ---------------------------------------
+    # Strategy: bind ONLY KeyPress (no KeyRelease — those proved unreliable).
+    # The OS keyboard auto-repeat fires KeyPress events ~every 30ms while a
+    # key is physically held. We treat each KeyPress as a heartbeat:
+    #
+    #   - 1st KeyPress while idle: do a one-frame step (tap behavior).
+    #   - Auto-repeat KeyPresses for the same direction: keep updating the
+    #     heartbeat. Once the key has been held for HOLD_START_DELAY_MS (1s),
+    #     start framerate-paced playback (matches the Play button's engine).
+    #   - A watchdog timer polls every HOLD_WATCHDOG_INTERVAL_MS. If no
+    #     KeyPress has arrived in HOLD_RELEASE_TIMEOUT_MS (100ms), the key
+    #     has been released and we stop playback.
+    def _on_arrow_press(self, direction):
+        """KeyPress on Left (-1) or Right (+1)."""
+        if self.video is None:
+            return
+        if not self.realtime_arrow_hold:
+            self._request_buffered_step(direction)
+            return
+
+        now_ms = time.monotonic() * 1000.0
+
+        if self._arrow_held_dir == direction:
+            # Auto-repeat KeyPress → user is holding. Update heartbeat and
+            # gate playback on elapsed-since-first-press exceeding the 1s
+            # hold threshold (OS auto-repeat starts much sooner, ~500ms).
+            self._last_arrow_press_ms = now_ms
+            if (not self._hold_play_active
+                    and (now_ms - self._first_arrow_press_ms) >= HOLD_START_DELAY_MS):
+                self._begin_hold_playback(direction)
+            return
+
+        # Fresh press. If the user was already holding the OPPOSITE direction
+        # and we have an active hold-playback, kill it before switching.
+        if self._hold_play_active:
+            self.play = False
+            self._hold_play_active = False
+            self.play_dir = 1
+
+        self._arrow_held_dir = direction
+        self._first_arrow_press_ms = now_ms
+        self._last_arrow_press_ms = now_ms
+        self._request_buffered_step(direction)  # immediate one-frame step (tap behavior)
+        self._ensure_hold_watchdog()
+
+    def _ensure_hold_watchdog(self):
+        if self._hold_watchdog_id is not None:
+            return
+        self._hold_watchdog_id = self.after(HOLD_WATCHDOG_INTERVAL_MS, self._hold_watchdog_tick)
+
+    def _hold_watchdog_tick(self):
+        self._hold_watchdog_id = None
+        if self._arrow_held_dir is None:
+            return
+        now_ms = time.monotonic() * 1000.0
+        if now_ms - self._last_arrow_press_ms > HOLD_RELEASE_TIMEOUT_MS:
+            # No KeyPress events recently → key has been released.
+            direction = self._arrow_held_dir
+            self._arrow_held_dir = None
+            if self._hold_play_active:
+                self.play = False
+                self._hold_play_active = False
+                self.play_dir = 1
+                print(f"INFO: Realtime hold released (dir={direction})")
+            return
+        # Still held — keep polling.
+        self._hold_watchdog_id = self.after(HOLD_WATCHDOG_INTERVAL_MS, self._hold_watchdog_tick)
+
+    def _begin_hold_playback(self, direction):
+        if self._arrow_held_dir != direction or self.video is None:
+            return
+        self.play_dir = direction
+        self.play = True
+        self._hold_play_active = True
+        if not self.play_thread_on:
+            self.play_thread_on = True
+            if not self.background_thread_play.is_alive():
+                self.background_thread_play.start()
+        print(f"INFO: Realtime hold started (dir={direction}, fps={self.frame_rate})")
+
+    def _cancel_arrow_hold_state(self):
+        """Force-stop any in-flight hold state. Used when arrow keys are unbound."""
+        if self._hold_watchdog_id is not None:
+            try: self.after_cancel(self._hold_watchdog_id)
+            except Exception: pass
+            self._hold_watchdog_id = None
+        self._arrow_held_dir = None
+        if self._hold_play_active:
+            self.play = False
+            self._hold_play_active = False
+            self.play_dir = 1
 
     def _refresh_jump_label(self):
         label = getattr(self, "jump_label", None)
@@ -2062,15 +2180,23 @@ class LabelingApp(tk.Tk):
                 self.buffer_ready = buffer_ready
 
     def background_update_play(self):
-        import time
         while True:
             if self.play and self.video is not None:
+                direction = 1 if getattr(self, "play_dir", 1) >= 0 else -1
                 current_frame = self.video.current_frame
+                # Stop at boundaries so the loop doesn't busy-spin against an edge.
+                if (direction > 0 and current_frame >= self.video.total_frames) or \
+                   (direction < 0 and current_frame <= 0):
+                    self.play = False
+                    self._hold_play_active = False
+                    self.play_dir = 1
+                    print(f"INFO: Playback stopped at boundary (frame {current_frame}, dir={direction})")
+                    continue
                 if current_frame not in self.img_buffer:
                     self.buffer_ready = False
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
                     continue
-                next_frame = min(self.video.total_frames, current_frame + 1)
+                next_frame = max(0, min(self.video.total_frames, current_frame + direction))
                 if next_frame not in self.img_buffer:
                     self.buffer_ready = False
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
@@ -2079,7 +2205,7 @@ class LabelingApp(tk.Tk):
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
                     continue
                 start = time.perf_counter()
-                self.next_frame(1, play=True)
+                self.next_frame(direction, play=True)
                 if self.video.current_frame % 10 == 0:
                     self.after(0, self.draw_timeline)
                 interval = 1.0 / self.frame_rate if self.frame_rate else 0.04
@@ -2650,6 +2776,10 @@ class LabelingApp(tk.Tk):
         if self.video is None:
             print("ERROR: First select video")
             return
+        # Always play forward when the user clicks Play, regardless of any
+        # prior arrow-hold state that may have left play_dir = -1.
+        self.play_dir = 1
+        self._hold_play_active = False
         if not self.play:
             self.play = True
             if not self.play_thread_on:
@@ -2659,6 +2789,12 @@ class LabelingApp(tk.Tk):
 
     def stop_video(self):
         self.play = False
+
+    def toggle_play(self, event=None):
+        if self.play:
+            self.stop_video()
+        else:
+            self.play_video()
 
     def sort_frames(self):
         if self.is_pose_mode():
@@ -3139,6 +3275,7 @@ class LabelingApp(tk.Tk):
             "limb_parameter1": tk.StringVar(value=str(_v("limb_parameter1", "Limb Parameter 1"))),
             "limb_parameter2": tk.StringVar(value=str(_v("limb_parameter2", "Limb Parameter 2"))),
             "limb_parameter3": tk.StringVar(value=str(_v("limb_parameter3", "Limb Parameter 3"))),
+            "realtime_arrow_hold": tk.BooleanVar(value=bool(_v("realtime_arrow_hold", True))),
         }
 
         row = 0
@@ -3165,6 +3302,13 @@ class LabelingApp(tk.Tk):
             row=row, column=0, sticky="w", padx=8, pady=2
         )
         tk.Entry(win, textvariable=vars_map["jump_seconds"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=2
+        )
+        row += 1
+        tk.Label(win, text="Realtime hold (arrow keys play at video framerate)").grid(
+            row=row, column=0, sticky="w", padx=8, pady=2
+        )
+        tk.Checkbutton(win, variable=vars_map["realtime_arrow_hold"]).grid(
             row=row, column=1, sticky="w", padx=8, pady=2
         )
         row += 1
@@ -3238,6 +3382,7 @@ class LabelingApp(tk.Tk):
                 new_cfg["limb_parameter1"] = _label_from("limb_parameter1", new_cfg.get("limb_parameter1", "Limb Parameter 1"))
                 new_cfg["limb_parameter2"] = _label_from("limb_parameter2", new_cfg.get("limb_parameter2", "Limb Parameter 2"))
                 new_cfg["limb_parameter3"] = _label_from("limb_parameter3", new_cfg.get("limb_parameter3", "Limb Parameter 3"))
+                new_cfg["realtime_arrow_hold"] = bool(vars_map["realtime_arrow_hold"].get())
             except ValueError as e:
                 messagebox.showerror("Invalid settings", str(e), parent=win)
                 return
@@ -3274,6 +3419,14 @@ class LabelingApp(tk.Tk):
         else:
             print(f"INFO: Fast-jump updated to {self.jump_seconds}s (no video loaded)")
         self._refresh_jump_label()
+
+        # Realtime arrow-hold toggle. If user disables it mid-session while a
+        # hold-driven playback is active, tear that playback down cleanly.
+        new_realtime = bool(cfg.get("realtime_arrow_hold", True))
+        if not new_realtime:
+            self._cancel_arrow_hold_state()
+        self.realtime_arrow_hold = new_realtime
+        print(f"INFO: Realtime arrow hold: {self.realtime_arrow_hold}")
 
         new_scale = float(cfg.get("diagram_scale", 1.0))
         new_dot = float(cfg.get("dot_size", 10))

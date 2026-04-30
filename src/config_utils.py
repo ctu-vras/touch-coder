@@ -112,6 +112,13 @@ def load_jump_seconds():
         return seconds
 
 
+def load_realtime_arrow_hold():
+    config_path = _ensure_config_file()
+    with open(config_path, 'r') as file:
+        config = json.load(file)
+        return bool(config.get('realtime_arrow_hold', True))
+
+
 def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
     """
     Sets names onto the video object and updates the buttons' labels.
