@@ -23,7 +23,7 @@ POSE_JOINTS = [
 
 
 def empty_pose_joint_map() -> Dict[str, dict]:
-    return {joint: {"Event": None, "X": None, "Y": None} for joint in POSE_JOINTS}
+    return {joint: {"Event": None, "X": None, "Y": None, "Opacity": 1.0} for joint in POSE_JOINTS}
 
 
 def empty_pose_bundle() -> dict:
@@ -33,6 +33,11 @@ def empty_pose_bundle() -> dict:
         "ScaleRaw": 1.0,
         "ScaleFactor": 1.0,
         "ScaleSet": False,
+        "ScaleAutoCarry": False,
+        "HeadScaleRaw": 1.0,
+        "HeadScaleFactor": 1.0,
+        "HeadScaleSet": False,
+        "HeadScaleAutoCarry": False,
         "Joints": empty_pose_joint_map(),
     }
 
@@ -57,7 +62,7 @@ def ensure_pose_bundle(bundle: Optional[dict]) -> dict:
     for joint in POSE_JOINTS:
         rec = joints.get(joint)
         if not isinstance(rec, dict):
-            joints[joint] = {"Event": None, "X": None, "Y": None}
+            joints[joint] = {"Event": None, "X": None, "Y": None, "Opacity": 1.0}
         else:
             if "Event" not in rec:
                 rec["Event"] = None
@@ -65,12 +70,29 @@ def ensure_pose_bundle(bundle: Optional[dict]) -> dict:
                 rec["X"] = None
             if "Y" not in rec:
                 rec["Y"] = None
+            try:
+                op = float(rec.get("Opacity", 1.0))
+                if op != op:  # NaN guard
+                    op = 1.0
+                rec["Opacity"] = max(0.0, min(1.0, op))
+            except (TypeError, ValueError):
+                rec["Opacity"] = 1.0
     if "ScaleRaw" not in bundle:
         bundle["ScaleRaw"] = 1.0
     if "ScaleFactor" not in bundle:
         bundle["ScaleFactor"] = scale_raw_to_factor(bundle["ScaleRaw"])
     if "ScaleSet" not in bundle:
         bundle["ScaleSet"] = bundle.get("ScaleRaw", 1.0) != 1.0
+    if "ScaleAutoCarry" not in bundle:
+        bundle["ScaleAutoCarry"] = False
+    if "HeadScaleRaw" not in bundle:
+        bundle["HeadScaleRaw"] = 1.0
+    if "HeadScaleFactor" not in bundle:
+        bundle["HeadScaleFactor"] = scale_raw_to_factor(bundle["HeadScaleRaw"])
+    if "HeadScaleSet" not in bundle:
+        bundle["HeadScaleSet"] = bundle.get("HeadScaleRaw", 1.0) != 1.0
+    if "HeadScaleAutoCarry" not in bundle:
+        bundle["HeadScaleAutoCarry"] = False
     if "Note" not in bundle:
         bundle["Note"] = None
     return bundle
@@ -114,6 +136,21 @@ def load_pose_dataset(csv_path: str) -> Dict[int, dict]:
         else:
             bundle["ScaleSet"] = str(scale_set).strip().lower() in ("1", "true", "yes")
         try:
+            bundle["HeadScaleRaw"] = float(row.get("HeadScaleRaw", 1.0) or 1.0)
+        except Exception:
+            bundle["HeadScaleRaw"] = 1.0
+        try:
+            bundle["HeadScaleFactor"] = float(
+                row.get("HeadScaleFactor", scale_raw_to_factor(bundle["HeadScaleRaw"])) or 1.0
+            )
+        except Exception:
+            bundle["HeadScaleFactor"] = scale_raw_to_factor(bundle["HeadScaleRaw"])
+        head_scale_set = row.get("HeadScaleSet", None)
+        if head_scale_set is None or (isinstance(head_scale_set, float) and pd.isna(head_scale_set)):
+            bundle["HeadScaleSet"] = bundle["HeadScaleRaw"] != 1.0
+        else:
+            bundle["HeadScaleSet"] = str(head_scale_set).strip().lower() in ("1", "true", "yes")
+        try:
             joints = json.loads(row.get("Joints") or "{}")
         except Exception:
             joints = {}
@@ -144,6 +181,9 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
                     "ScaleRaw": row.get("ScaleRaw"),
                     "ScaleFactor": row.get("ScaleFactor"),
                     "ScaleSet": row.get("ScaleSet"),
+                    "HeadScaleRaw": row.get("HeadScaleRaw") if "HeadScaleRaw" in row else 1.0,
+                    "HeadScaleFactor": row.get("HeadScaleFactor") if "HeadScaleFactor" in row else 1.0,
+                    "HeadScaleSet": row.get("HeadScaleSet") if "HeadScaleSet" in row else False,
                     "Joints": row.get("Joints"),
                 }
         except Exception:
@@ -164,6 +204,11 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
                 "ScaleRaw": bundle.get("ScaleRaw", 0.0),
                 "ScaleFactor": bundle.get("ScaleFactor", scale_raw_to_factor(bundle.get("ScaleRaw", 0.0))),
                 "ScaleSet": bool(bundle.get("ScaleSet", False)),
+                "HeadScaleRaw": bundle.get("HeadScaleRaw", 1.0),
+                "HeadScaleFactor": bundle.get(
+                    "HeadScaleFactor", scale_raw_to_factor(bundle.get("HeadScaleRaw", 1.0))
+                ),
+                "HeadScaleSet": bool(bundle.get("HeadScaleSet", False)),
                 "Joints": json.dumps(bundle.get("Joints") or {}),
             }
         )
@@ -174,7 +219,18 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
     for row in changed_rows:
         existing_map[row["Frame"]] = row
 
-    cols = ["Frame", "Note", "Params", "ScaleRaw", "ScaleFactor", "ScaleSet", "Joints"]
+    cols = [
+        "Frame",
+        "Note",
+        "Params",
+        "ScaleRaw",
+        "ScaleFactor",
+        "ScaleSet",
+        "HeadScaleRaw",
+        "HeadScaleFactor",
+        "HeadScaleSet",
+        "Joints",
+    ]
     out_rows = [existing_map[k] for k in sorted(existing_map.keys())]
     df = pd.DataFrame(out_rows, columns=cols)
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
@@ -194,10 +250,17 @@ def export_pose_dataset(
         if bundle.get("ScaleSet"):
             scale_raw = float(bundle.get("ScaleRaw", 1.0) or 1.0)
             scale_factor = float(bundle.get("ScaleFactor", scale_raw_to_factor(scale_raw)) or 1.0)
+        head_scale_factor = 1.0
+        if bundle.get("HeadScaleSet"):
+            head_raw = float(bundle.get("HeadScaleRaw", 1.0) or 1.0)
+            head_scale_factor = float(
+                bundle.get("HeadScaleFactor", scale_raw_to_factor(head_raw)) or 1.0
+            )
         row = {
             "Frame": frame,
             "Time_ms": (frame / frame_rate) * 1000.0 if frame_rate else 0.0,
             "ScaleFactor": scale_factor,
+            "HeadScaleFactor": head_scale_factor,
         }
         params = bundle.get("Params") or {}
         for i in (1, 2, 3):
@@ -206,14 +269,33 @@ def export_pose_dataset(
         joints = bundle.get("Joints") or {}
         for joint in POSE_JOINTS:
             event = None
+            opacity = None
             if isinstance(joints.get(joint), dict):
                 event = joints[joint].get("Event")
+                opacity = joints[joint].get("Opacity")
             row[f"{joint}_Event"] = "" if event in (None, "") else event
+            if event in (None, ""):
+                row[f"{joint}_Opacity"] = ""
+            else:
+                try:
+                    op = float(opacity if opacity is not None else 1.0)
+                    op = max(0.0, min(1.0, op))
+                    row[f"{joint}_Opacity"] = op
+                except (TypeError, ValueError):
+                    row[f"{joint}_Opacity"] = 1.0
         row["Note"] = bundle.get("Note") or ""
         rows.append(row)
 
-    cols = ["Frame", "Time_ms", "ScaleFactor", "Parameter_1", "Parameter_2", "Parameter_3"]
-    cols.extend(f"{joint}_Event" for joint in POSE_JOINTS)
+    cols = [
+        "Frame",
+        "Time_ms",
+        "ScaleFactor",
+        "HeadScaleFactor",
+        "Parameter_1",
+        "Parameter_2",
+        "Parameter_3",
+    ]
+    cols.extend(c for joint in POSE_JOINTS for c in (f"{joint}_Event", f"{joint}_Opacity"))
     cols.append("Note")
     df = pd.DataFrame(rows, columns=cols)
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
