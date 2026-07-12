@@ -1,34 +1,47 @@
 import cv2
 # --- top of video_model.py ---
 import sys
-from typing import Dict
+from typing import Dict, Iterator
 from data_utils import empty_bundle, FrameBundle
-from collections import UserDict
 
-class LimbView(UserDict):
-    def __init__(self, frames: Dict[int, FrameBundle], limb: str):
-        super().__init__()
-        self._frames = frames
+
+class LimbView:
+    """Read/write view onto a single limb ('RH'/'LH'/'RL'/'LL') across the owning
+    Video's live `frames` dict. Reads never mutate; writes create the bundle on demand.
+    `frames` is resolved lazily from the owner, so reassigning `video.frames` needs no rebind."""
+    def __init__(self, video, limb: str):
+        self._video = video
         self._limb = limb
 
-    def __getitem__(self, frame: int):
-        b = self._frames.setdefault(frame, empty_bundle())
-        return b[self._limb]
+    @property
+    def _frames(self) -> Dict[int, FrameBundle]:
+        return self._video.frames
 
-    def __setitem__(self, frame: int, rec):
-        b = self._frames.setdefault(frame, empty_bundle())
-        b[self._limb] = rec
+    # --- reads: never insert ---
+    def __getitem__(self, frame: int):
+        return self._frames[frame][self._limb]          # KeyError if frame absent; no mutation
 
     def get(self, frame, default=None):
         b = self._frames.get(frame)
         return (b[self._limb] if b and self._limb in b else default)
 
-    def setdefault(self, frame, rec):
-        if frame not in self._frames:
-            self._frames[frame] = empty_bundle()
-        if not self._frames[frame][self._limb]:
-            self._frames[frame][self._limb] = rec
-        return self._frames[frame][self._limb]
+    def __contains__(self, frame) -> bool:
+        return frame in self._frames
+
+    def __len__(self) -> int:
+        return len(self._frames)
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._frames)
+
+    def keys(self):   return self._frames.keys()
+    def values(self): return (b[self._limb] for b in self._frames.values() if self._limb in b)
+    def items(self):  return ((f, b[self._limb]) for f, b in self._frames.items() if self._limb in b)
+
+    # --- write: creating the bundle here is intended ---
+    def __setitem__(self, frame: int, rec):
+        b = self._frames.setdefault(frame, empty_bundle())
+        b[self._limb] = rec
 
 class Video:
     def __init__(self, video_path):
@@ -45,10 +58,10 @@ class Video:
         self.dots = []
         self.frames: Dict[int, FrameBundle] = {}
         # Expose limb views so existing code (dataRH/LH/RL/LL) keeps working:
-        self.dataRH = LimbView(self.frames, "RH")
-        self.dataLH = LimbView(self.frames, "LH")
-        self.dataRL = LimbView(self.frames, "RL")
-        self.dataLL = LimbView(self.frames, "LL")
+        self.dataRH = LimbView(self, "RH")
+        self.dataLH = LimbView(self, "LH")
+        self.dataRL = LimbView(self, "RL")
+        self.dataLL = LimbView(self, "LL")
 
         self.is_touchRH = False
         self.is_touchLH = False

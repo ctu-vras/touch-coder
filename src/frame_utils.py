@@ -17,6 +17,10 @@ _FRAME_RE = re.compile(r"^frame(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
 FRAME_COUNT_TOLERANCE_PCT = 0.001  # allow up to 0.1% missing frames
 
 
+class FrameExtractionError(RuntimeError):
+    """Raised when frame extraction produced zero usable frames."""
+
+
 def check_items_count(folder_path, expected_count):
     items = os.listdir(folder_path) if os.path.exists(folder_path) else []
     total_items = len(items)
@@ -230,6 +234,7 @@ def _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interva
     print(f"INFO: OpenCV extracted {count} frames in {time.time() - start_time:.1f}s.")
     if total_frames and count != total_frames:
         print(f"WARN: Generated {count} frames, but OpenCV reported {total_frames} total frames.")
+    return count
 
 
 def create_frames(
@@ -259,7 +264,10 @@ def create_frames(
                     now = time.time()
                     progress_cb(index + 1, total_files, "Copying frames", now - start_time)
             print(f"INFO: Frames copied successfully ({total_files} files in {time.time() - start_time:.1f}s).")
-            return
+            if total_files == 0:
+                raise FrameExtractionError(
+                    f"Reliability copy produced 0 frames from {original_frames_dir}")
+            return total_files
 
     print("INFO: Creating frames from video...")
 
@@ -267,4 +275,15 @@ def create_frames(
     if not _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interval_s):
         print("INFO: Falling back to OpenCV extraction.")
         _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interval_s)
-    print("INFO: create_frames() finished.")
+
+    # Recount after extraction so the guard covers BOTH the ffmpeg and OpenCV
+    # paths uniformly. A genuinely empty folder is a hard failure (rule 0:
+    # never fail silently); a non-zero-but-below-tolerance result stays a WARN.
+    frame_count = _count_jpg_files(frames_dir)
+    if frame_count == 0:
+        msg = (f"Frame extraction produced 0 frames for {video_path!r}. "
+               f"The file may be unreadable or use an unsupported codec.")
+        print(f"ERROR: {msg}")
+        raise FrameExtractionError(msg)
+    print(f"INFO: create_frames() finished ({frame_count} frames).")
+    return frame_count

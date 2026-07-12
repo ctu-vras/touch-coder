@@ -18,6 +18,7 @@ from PIL import Image, ImageTk, ImageDraw
 
 import analysis
 from cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
+from atomic_io import atomic_write
 from config_utils import (
     load_config,
     save_config,
@@ -34,10 +35,11 @@ from data_utils import (
     save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file,
     FrameRecord,
 )
-from frame_utils import check_items_count, create_frames
+from frame_utils import check_items_count, create_frames, FrameExtractionError
 from perf_utils import PerfLogger
 from pose_mismatch_data import (
     POSE_JOINTS,
+    PoseUnifiedReadError,
     empty_pose_bundle,
     ensure_pose_bundle,
     export_pose_dataset,
@@ -46,7 +48,6 @@ from pose_mismatch_data import (
     scale_raw_to_factor,
 )
 from resource_utils import resource_path
-from sort_frames import process_touch_data_strict_transitions
 from ui_components import build_ui
 from video_model import Video
 
@@ -81,7 +82,7 @@ POSE_BODY_SCALE_COLOR = "#446a8a"
 POSE_BODY_SCALE_OVERLAY_COLOR = "#113a5c"
 POSE_HEAD_SCALE_COLOR = "#d18a3a"
 POSE_HEAD_SCALE_OVERLAY_COLOR = "#8a4413"
-# Quality (per-joint opacity) slider — used only in 3D mismatch mode.
+# Quality (per-joint opacity) slider â€” used only in 3D mismatch mode.
 POSE_QUALITY_COLOR = "#3a9d5d"
 
 
@@ -178,7 +179,7 @@ class LabelingApp(tk.Tk):
         print(f"INFO: Fast-jump configured to {self.jump_seconds}s")
         self._refresh_jump_label()
 
-        # Realtime arrow-hold playback state (no KeyRelease bindings — OS keyboard
+        # Realtime arrow-hold playback state (no KeyRelease bindings â€” OS keyboard
         # auto-repeat KeyPress events act as a heartbeat, polled by a watchdog).
         self.realtime_arrow_hold = load_realtime_arrow_hold()
         print(f"INFO: Realtime arrow hold: {self.realtime_arrow_hold}")
@@ -245,7 +246,7 @@ class LabelingApp(tk.Tk):
                 parts.append(f"{joint}:{event}")
         return ", ".join(parts) if parts else "No joint events"
 
-    # body/head share the same machinery — keys + carry attrs are looked up by kind
+    # body/head share the same machinery â€” keys + carry attrs are looked up by kind
     _POSE_SCALE_KEYS = {
         "body": ("ScaleRaw", "ScaleFactor", "ScaleSet", "ScaleAutoCarry"),
         "head": ("HeadScaleRaw", "HeadScaleFactor", "HeadScaleSet", "HeadScaleAutoCarry"),
@@ -484,18 +485,14 @@ class LabelingApp(tk.Tk):
         items = sorted(found.items(), key=lambda item: item[1][0])
         return items[:5]
 
-    def _set_sort_analysis_state(self):
+    def _set_mode_button_states(self):
         is_pose = self.is_pose_mode()
         has_video = self.video is not None
-        sort_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
-        analysis_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
-        cloth_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
-        if getattr(self, "sort_btn", None):
-            self.sort_btn.config(state=sort_state)
+        touch_only_state = tk.NORMAL if (has_video and not is_pose) else tk.DISABLED
         if getattr(self, "analysis_btn", None):
-            self.analysis_btn.config(state=analysis_state)
+            self.analysis_btn.config(state=touch_only_state)
         if getattr(self, "cloth_btn", None):
-            self.cloth_btn.config(state=cloth_state)
+            self.cloth_btn.config(state=touch_only_state)
 
     # === UI Rebuild & Annotation Controls =====================================
     def _reset_zone_cache(self):
@@ -569,8 +566,8 @@ class LabelingApp(tk.Tk):
             self.scale_value_label = value_label
 
     def _build_pose_quality_slider(self, parent=None):
-        # Per-joint "Quality" (opacity) slider — mirrors the scale-slider helper
-        # but operates on 0.0–1.0 and edits the dot fill alpha of the
+        # Per-joint "Quality" (opacity) slider â€” mirrors the scale-slider helper
+        # but operates on 0.0â€“1.0 and edits the dot fill alpha of the
         # last-clicked joint on the current frame.
         if parent is None:
             parent = self.limb_parameter_frame
@@ -726,7 +723,7 @@ class LabelingApp(tk.Tk):
             )
             self.limb_par3_btn.pack(anchor="n")
 
-        self._set_sort_analysis_state()
+        self._set_mode_button_states()
 
     # === Pose Scale Controls ==================================================
     def _pose_scale_var(self, kind: str):
@@ -883,7 +880,7 @@ class LabelingApp(tk.Tk):
         finally:
             self._updating_quality_widget = False
         widget.config(state=tk.NORMAL)
-        label.config(text=f"Quality: {joint} — {op:.2f}")
+        label.config(text=f"Quality: {joint} â€” {op:.2f}")
 
     def _on_quality_press(self, event):
         widget = getattr(self, "pose_quality_widget", None)
@@ -925,7 +922,7 @@ class LabelingApp(tk.Tk):
         rec["Opacity"] = op
         self.mark_bundle_changed(self.video.current_frame)
         if getattr(self, "pose_quality_value_label", None):
-            self.pose_quality_value_label.config(text=f"Quality: {joint} — {op:.2f}")
+            self.pose_quality_value_label.config(text=f"Quality: {joint} â€” {op:.2f}")
         self._pose_canvas_dirty = True
         self.render_pose_canvas()
         print(
@@ -950,7 +947,7 @@ class LabelingApp(tk.Tk):
         finally:
             self._updating_quality_widget = False
         if getattr(self, "pose_quality_value_label", None):
-            self.pose_quality_value_label.config(text=f"Quality: {joint} — 1.00")
+            self.pose_quality_value_label.config(text=f"Quality: {joint} â€” 1.00")
         self._pose_canvas_dirty = True
         self.render_pose_canvas()
         print(
@@ -1123,6 +1120,14 @@ class LabelingApp(tk.Tk):
         if getattr(self, "note_entry", None) and focus == self.note_entry and event.widget != self.note_entry:
             self.focus_set()
 
+    def _entry_has_focus(self):
+        """True when the Note entry currently holds keyboard focus."""
+        try:
+            return getattr(self, "note_entry", None) is not None \
+                and self.focus_get() is self.note_entry
+        except Exception:
+            return False
+
     def _set_loading_label_async(self, text: str, bg: str):
         current = getattr(self, "_loading_label_state", None)
         new_state = (text, bg)
@@ -1139,23 +1144,8 @@ class LabelingApp(tk.Tk):
     def navigate_left(self, event):  self._on_arrow_press(-1)
     def navigate_right(self, event): self._on_arrow_press(1)
 
-    def disable_arrow_keys(self, event=None):
-        self.unbind("<Left>")
-        self.unbind("<Right>")
-        self.unbind("<Shift-Left>")
-        self.unbind("<Shift-Right>")
-        # Tear down hold state so an in-flight playback doesn't get orphaned
-        # if arrow keys are unbound while the user is holding one.
-        self._cancel_arrow_hold_state()
-
-    def enable_arrow_keys(self, event=None):
-        self.bind("<Left>", self.navigate_left)
-        self.bind("<Right>", self.navigate_right)
-        self.bind("<Shift-Left>", lambda event: self._request_buffered_step(-self.jump_frame_count))
-        self.bind("<Shift-Right>", lambda event: self._request_buffered_step(self.jump_frame_count))
-
     # --- Realtime arrow-hold playback ---------------------------------------
-    # Strategy: bind ONLY KeyPress (no KeyRelease — those proved unreliable).
+    # Strategy: bind ONLY KeyPress (no KeyRelease â€” those proved unreliable).
     # The OS keyboard auto-repeat fires KeyPress events ~every 30ms while a
     # key is physically held. We treat each KeyPress as a heartbeat:
     #
@@ -1177,7 +1167,7 @@ class LabelingApp(tk.Tk):
         now_ms = time.monotonic() * 1000.0
 
         if self._arrow_held_dir == direction:
-            # Auto-repeat KeyPress → user is holding. Update heartbeat and
+            # Auto-repeat KeyPress â†’ user is holding. Update heartbeat and
             # gate playback on elapsed-since-first-press exceeding the 1s
             # hold threshold (OS auto-repeat starts much sooner, ~500ms).
             self._last_arrow_press_ms = now_ms
@@ -1210,7 +1200,7 @@ class LabelingApp(tk.Tk):
             return
         now_ms = time.monotonic() * 1000.0
         if now_ms - self._last_arrow_press_ms > HOLD_RELEASE_TIMEOUT_MS:
-            # No KeyPress events recently → key has been released.
+            # No KeyPress events recently â†’ key has been released.
             direction = self._arrow_held_dir
             self._arrow_held_dir = None
             if self._hold_play_active:
@@ -1219,7 +1209,7 @@ class LabelingApp(tk.Tk):
                 self.play_dir = 1
                 print(f"INFO: Realtime hold released (dir={direction})")
             return
-        # Still held — keep polling.
+        # Still held â€” keep polling.
         self._hold_watchdog_id = self.after(HOLD_WATCHDOG_INTERVAL_MS, self._hold_watchdog_tick)
 
     def _begin_hold_playback(self, direction):
@@ -1391,7 +1381,7 @@ class LabelingApp(tk.Tk):
                 closest_d2 = d2
                 closest_idx = i
 
-        # threshold in data coords (≈20 px in display); translates to 20/scale
+        # threshold in data coords (â‰ˆ20 px in display); translates to 20/scale
         if closest_idx is not None and closest_d2 <= (20.0 / scale) ** 2:
             # delete this point and its zones bucket (if present)
             del xs[closest_idx]
@@ -1431,7 +1421,7 @@ class LabelingApp(tk.Tk):
 
     def _render_diagram_dots(self):
         """Repaint the diagram canvas with the current frame's dots + ghost.
-        Single render pass — no scheduling. Safe to call from click handlers
+        Single render pass â€” no scheduling. Safe to call from click handlers
         for instant visual feedback, and from the periodic poller as a fallback.
         """
         if self.is_pose_mode():
@@ -1665,7 +1655,7 @@ class LabelingApp(tk.Tk):
         at or before the current frame; clear when an 'OFF' is encountered first.
 
         Walks integer frame indices backward from current_frame instead of
-        sorting all dict keys — O(distance to last ON/OFF) instead of
+        sorting all dict keys â€” O(distance to last ON/OFF) instead of
         O(N log N) per call. Matters at 300k+ frames.
         """
         if self.is_pose_mode():
@@ -2276,7 +2266,7 @@ class LabelingApp(tk.Tk):
                                 intervals.append((x1, x2))
                             active_on_x = None
 
-                    # --- GLOBAL Parameter markers (non-limb) — always visible ---
+                    # --- GLOBAL Parameter markers (non-limb) â€” always visible ---
                     col = self.parameter_color_at_frame(frame)
                     if col is not None:
                         param_lines.append((x, col))
@@ -2338,9 +2328,13 @@ class LabelingApp(tk.Tk):
                 else:
                     return f"{minutes}:{seconds:02}.{milliseconds:03}"
 
-            current_time = self.video.current_frame / self.video.frame_rate * 1000
-            total_time = self.video.total_frames / self.video.frame_rate * 1000
-            self.time_counter_label.config(text=f"{format_time(int(current_time))} / {format_time(int(total_time))}")
+            if self.video.frame_rate:
+                current_time = self.video.current_frame / self.video.frame_rate * 1000
+                total_time = self.video.total_frames / self.video.frame_rate * 1000
+                self.time_counter_label.config(text=f"{format_time(int(current_time))} / {format_time(int(total_time))}")
+            else:
+                # FPS probe returned 0/None for this container; time is unknowable.
+                self.time_counter_label.config(text="--:-- / --:--")
 
         else:
             self.frame_counter_label.config(text="0 / 0")
@@ -2561,7 +2555,7 @@ class LabelingApp(tk.Tk):
 
                 # Capture per-tick context once. Workers must NOT touch Tk widgets,
                 # so we read winfo_width / winfo_height here on the bg thread (same
-                # risk profile as before this change — bg thread already did this).
+                # risk profile as before this change â€” bg thread already did this).
                 frames_dir = self.video.frames_dir
                 display_w = self.video_frame.winfo_width()
                 display_h = self.video_frame.winfo_height()
@@ -2682,7 +2676,7 @@ class LabelingApp(tk.Tk):
                 time.sleep(0.05)
 
     def _resize_for_buffer(self, img, display_width, display_height, downscale):
-        """Tk-free resize used by worker threads. Pure CPU work — no widget calls."""
+        """Tk-free resize used by worker threads. Pure CPU work â€” no widget calls."""
         if display_width <= 0 or display_height <= 0:
             return img
         original_width, original_height = img.size
@@ -2867,8 +2861,7 @@ class LabelingApp(tk.Tk):
             "Total Labeling Time (hours)": round(float(total_seconds) / 3600.0, 4),
         }
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+            atomic_write(path, lambda f: json.dump(payload, f, indent=2, ensure_ascii=False))
         except Exception as e:
             print(f"WARNING: Failed to save labeling time: {e}")
 
@@ -2899,6 +2892,12 @@ class LabelingApp(tk.Tk):
         total = self._current_video_time_s()
         self._write_video_time(data_dir, self.video_name, total)
         self._video_time_total_s = total
+        self._video_session_start = None
+
+    def _stop_video_timer_if_any(self):
+        """Stop the labeling-time timer without persisting, discarding the
+        current session's elapsed time. Used when a load aborts after the
+        timer was already started (e.g. frame extraction failed)."""
         self._video_session_start = None
 
     # === Parameter Toggles & Coloring ==========================================
@@ -3045,7 +3044,6 @@ class LabelingApp(tk.Tk):
 
     def save_note(self):
         print("INFO: Saving note...")
-        self.enable_arrow_keys()
 
         idx = self.video.current_frame
         note_text = (self.note_entry.get() or "").strip()
@@ -3110,11 +3108,20 @@ class LabelingApp(tk.Tk):
         print(f"DEBUG: Export dir: {export_dir}")
         print(f"DEBUG: Frames dir: {self.video.frames_dir}")
         unified_path = os.path.join(data_dir, f"{self.video_name}_unified.csv")
-        print(f"DEBUG: Writing unified dataset → {unified_path}")
+        print(f"DEBUG: Writing unified dataset â†’ {unified_path}")
 
         from data_utils import save_unified_dataset, export_from_unified, extract_zones_from_file
         if self.is_pose_mode():
-            save_pose_dataset(unified_path, self.video.total_frames, self.video.frames)
+            try:
+                save_pose_dataset(unified_path, self.video.total_frames, self.video.frames)
+            except PoseUnifiedReadError:
+                traceback.print_exc()
+                messagebox.showerror(
+                    "Save aborted",
+                    "The existing 3D data file could not be read and was NOT overwritten, "
+                    "so no annotations were lost. Please check the file, then save again.",
+                )
+                return  # abort save_data â†’ Changed flags stay set; export not rewritten
             clothes_list = None
         else:
             save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
@@ -3123,7 +3130,7 @@ class LabelingApp(tk.Tk):
                 clothes_path = self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
             clothes_list = extract_zones_from_file(clothes_path) if clothes_path else None
         export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
-        print(f"DEBUG: Writing export dataset → {export_path}")
+        print(f"DEBUG: Writing export dataset â†’ {export_path}")
 
         # labeling_app.py (inside save_data, before export_from_unified call)
         param_labels = {
@@ -3215,22 +3222,6 @@ class LabelingApp(tk.Tk):
         else:
             self.play_video()
 
-    def sort_frames(self):
-        if self.is_pose_mode():
-            print("INFO: Sort Frames is disabled in 3D mismatch mode.")
-            return
-        self.save_data()
-        base_dir = os.path.dirname(os.path.dirname(self.video.dataRH_path_to_csv))
-        csv_path = os.path.join(base_dir, "export", f"{self.video_name}_export.csv")
-        images_dir = self.video.frames_dir
-        output_dir = os.path.join(base_dir, "sorted_frames")
-        os.makedirs(output_dir, exist_ok=True)
-        try:
-            process_touch_data_strict_transitions(csv_path, images_dir, output_dir)
-            print(f"INFO: Sorted frames written to {output_dir}")
-        except Exception as e:
-            print(f"ERROR in sort_frames: {e}")
-
     # === Video Load & Init =====================================================
     def ask_labeling_mode(self):
         mode_window = tk.Toplevel(self)
@@ -3262,7 +3253,7 @@ class LabelingApp(tk.Tk):
             cfg["annotation_mode"] = self.annotation_mode
             save_config(cfg)
             self.rebuild_annotation_controls()
-            self._set_sort_analysis_state()
+            self._set_mode_button_states()
             mode_window.destroy()
 
         tk.Button(mode_window, text="Continue", command=set_mode, width=18).pack(pady=16)
@@ -3365,19 +3356,13 @@ class LabelingApp(tk.Tk):
                 sys.stdout.flush()
                 self.video.frames = {}
 
-            # Rebind LimbViews to the current dict (CRITICAL)
-            self.video.dataRH._frames = self.video.frames
-            self.video.dataLH._frames = self.video.frames
-            self.video.dataRL._frames = self.video.frames
-            self.video.dataLL._frames = self.video.frames
-
             # Fallback: if unified is empty but export exists, recover once from export.
             # We deliberately do NOT write the unified CSV here: on huge videos
             # (e.g. 300k+ frames) writing all rows blocks the UI thread for tens of
             # seconds. The next regular Save will materialize the unified file
             # naturally; until then we just keep the recovered dict in memory.
             if (not self.is_pose_mode()) and (not self.video.frames) and os.path.exists(export_path):
-                print("INFO: Unified empty; importing from export for recovery…", flush=True)
+                print("INFO: Unified empty; importing from export for recoveryâ€¦", flush=True)
                 try:
                     t_recover = time.time()
                     self.video.frames = import_unified_from_export(
@@ -3390,11 +3375,6 @@ class LabelingApp(tk.Tk):
                     sys.stdout.flush()
                     self.video.frames = {}
 
-                # Rebind again to the recovered dict
-                self.video.dataRH._frames = self.video.frames
-                self.video.dataLH._frames = self.video.frames
-                self.video.dataRL._frames = self.video.frames
-                self.video.dataLL._frames = self.video.frames
                 print(
                     f"INFO: Recovery loaded {len(self.video.frames)} frames in memory "
                     f"(unified CSV will be written on first Save).",
@@ -3455,6 +3435,18 @@ class LabelingApp(tk.Tk):
                     self.video_name,
                     progress_cb=progress_update,
                 )
+            except FrameExtractionError as exc:
+                print(f"ERROR: load_video: frame extraction failed: {exc}", flush=True)
+                messagebox.showerror(
+                    "Frame Extraction Failed",
+                    f"Could not extract frames from this video:\n\n{exc}\n\n"
+                    "The file may be unreadable or use an unsupported codec. "
+                    "The video was not loaded.",
+                )
+                # Undo the labeling-time timer started before extraction so a
+                # failed load doesn't leak an accumulating timer.
+                self._stop_video_timer_if_any()
+                return
             finally:
                 progress_close()
         else:
@@ -3520,7 +3512,7 @@ class LabelingApp(tk.Tk):
             if isinstance(b, dict):
                 b["Changed"] = False
         self.rebuild_annotation_controls()
-        self._set_sort_analysis_state()
+        self._set_mode_button_states()
         print("INFO: Welcome back! I wish you happy labeling session! :)")
 
     # === Clothes Side Window ===================================================
@@ -3609,7 +3601,9 @@ class LabelingApp(tk.Tk):
         text_file_path = os.path.join(data_folder, f"{self.video_name}_clothes.txt")
         self.video.clothes_file_path = text_file_path
         scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
-        with open(text_file_path, mode='w') as f:
+
+        def _write_clothes_lines(f):
+            nonlocal scale
             f.write("Coordinates and Zones for Clothing Items:\n")
             f.write(f"DiagramScale: {scale}\n")
             for dot_id, (x, y) in self.data_clothes.items():
@@ -3618,6 +3612,8 @@ class LabelingApp(tk.Tk):
                 zones = self.find_image_with_white_pixel(x / scale, y / scale)
                 zones_str = ','.join(zones)
                 f.write(f"Dot ID {dot_id}: X={x}, Y={y}, Zones={zones_str}\n")
+
+        atomic_write(text_file_path, _write_clothes_lines)
         print("INFO: Clothes saved")
 
     
@@ -3650,9 +3646,8 @@ class LabelingApp(tk.Tk):
                 "frame": int(self.video.current_frame),
                 "total_frames": int(self.video.total_frames),
             }
-            with open(path, "w") as f:
-                json.dump(payload, f)
-            print(f"INFO: Saved last position → {path}")
+            atomic_write(path, lambda f: json.dump(payload, f))
+            print(f"INFO: Saved last position â†’ {path}")
         except Exception as e:
             print(f"WARNING: Failed to save last position: {e}")
 

@@ -4,6 +4,14 @@ from typing import Dict, Optional
 
 import pandas as pd
 
+from atomic_io import atomic_write
+
+
+class PoseUnifiedReadError(RuntimeError):
+    """Existing 3D unified CSV exists but is unparseable, so the incremental save
+    cannot safely merge prior rows. Raised (instead of overwriting) to protect the
+    already-saved history from being replaced with only this session's changes."""
+
 
 POSE_JOINTS = [
     "L_ANKLE",
@@ -186,8 +194,16 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
                     "HeadScaleSet": row.get("HeadScaleSet") if "HeadScaleSet" in row else False,
                     "Joints": row.get("Joints"),
                 }
-        except Exception:
-            existing_map = {}
+        except pd.errors.EmptyDataError:
+            # Header-only / no data rows: genuinely nothing to preserve. Safe to proceed.
+            print(f"DEBUG: 3D unified has no data rows (EmptyDataError) → {csv_path}; "
+                  f"treating existing as empty.")
+        except Exception as e:
+            # Genuine parse failure (e.g. a truncated file from an interrupted save, C1).
+            # Do NOT overwrite: writing now would drop every prior frame.
+            print(f"ERROR: Failed to read existing 3D unified CSV → {csv_path}: {e}. "
+                  f"Aborting save to avoid overwriting previously-saved rows.")
+            raise PoseUnifiedReadError(csv_path) from e
 
     for frame in range(total_frames + 1):
         bundle = frames.get(frame)
@@ -233,8 +249,7 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
     ]
     out_rows = [existing_map[k] for k in sorted(existing_map.keys())]
     df = pd.DataFrame(out_rows, columns=cols)
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    df.to_csv(csv_path, index=False)
+    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
 
 
 def export_pose_dataset(
@@ -298,5 +313,4 @@ def export_pose_dataset(
     cols.extend(c for joint in POSE_JOINTS for c in (f"{joint}_Event", f"{joint}_Opacity"))
     cols.append("Note")
     df = pd.DataFrame(rows, columns=cols)
-    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
-    df.to_csv(out_csv, index=False)
+    atomic_write(out_csv, lambda f: df.to_csv(f, index=False))

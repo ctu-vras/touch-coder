@@ -146,9 +146,6 @@ def _build_controls(app):
     app.cloth_btn = tk.Button(left_top, text="Clothes", command=app.open_cloth_app)
     app.cloth_btn.pack(side="left", padx=5)
 
-    app.sort_btn = tk.Button(left_top, text="Sort Frames", command=app.sort_frames, state='disabled')
-    app.sort_btn.pack(side="left", padx=5)
-
     back_10_frame_btn = tk.Button(right_top_buttons, text="<<", command=lambda: app.next_frame(-app.jump_frame_count))
     back_10_frame_btn.pack(side="left", padx=5)
 
@@ -278,13 +275,29 @@ def _build_diagram_panel(app, scale):
 
 
 
+def _guard_key(app, cb):
+    """Skip a global nav key action while the Note entry holds focus.
+
+    The keystroke still reaches the Entry (its class binding ran first in
+    bindtag order); we only suppress the nav side effect. Returns None so no
+    other binding is broken. The guard sits at the binding site — not inside
+    the handler — because on_middle_click is also bound to <Button-2> on the
+    canvas, which must keep working regardless of Note-entry focus.
+    """
+    def wrapped(event):
+        if app._entry_has_focus():
+            return
+        return cb(event)
+    return wrapped
+
+
 def _bind_navigation(app):
-    app.bind("<KeyPress-d>", app.on_middle_click)
-    app.bind("<Left>", app.navigate_left)
-    app.bind("<Right>", app.navigate_right)
-    app.bind("<Shift-Left>", lambda event: app.next_frame(-app.jump_frame_count))
-    app.bind("<Shift-Right>", lambda event: app.next_frame(app.jump_frame_count))
-    app.bind("<space>", app.toggle_play)
+    app.bind("<KeyPress-d>", _guard_key(app, app.on_middle_click))
+    app.bind("<Left>", _guard_key(app, app.navigate_left))
+    app.bind("<Right>", _guard_key(app, app.navigate_right))
+    app.bind("<Shift-Left>", _guard_key(app, lambda event: app.next_frame(-app.jump_frame_count)))
+    app.bind("<Shift-Right>", _guard_key(app, lambda event: app.next_frame(app.jump_frame_count)))
+    app.bind("<space>", _guard_key(app, app.toggle_play))
 
     # Wheel bindings: Windows/Mac vs Linux
     if sys.platform.startswith("linux"):

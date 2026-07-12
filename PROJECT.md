@@ -38,7 +38,6 @@ touch-coder/
 │   ├── frame_utils.py            # Frame extraction (ffmpeg → OpenCV fallback) + integrity check
 │   ├── config_utils.py           # config.json read / write, parameter-name binding
 │   ├── cloth_app.py              # Clothing-zone selector dialog (Toplevel)
-│   ├── sort_frames.py            # Strict-transition touch-event grouping → frames + metadata
 │   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
 │   ├── perf_utils.py             # Optional perf timer + periodic summary logging
 │   └── resource_utils.py         # PyInstaller-aware asset path resolution
@@ -172,16 +171,13 @@ Labeled_data/<video_name>/
 │   └── <video>_metadata.json         # Program version, FPS, mode, clothes zones, param labels,
 │                                     # total labeling time (hours)
 ├── frames/                           # frame0.jpg ... frameN.jpg (one per video frame)
-├── plots/                            # Plotly HTMLs from "Analysis" (touch mode only)
-└── sorted_frames/                    # "Sort Frames" output (touch mode only)
-    ├── touch/, no_touch/             # Aggregate frame buckets
-    └── touches/<limb>_<seq>/         # One folder per touch event with metadata.json
+└── plots/                            # Plotly HTMLs from "Analysis" (touch mode only)
 ```
 
 The split between `data/<video>_unified.csv` and `export/<video>_export.csv` is deliberate:
 
 - **Unified CSV** is the source of truth for round-trips. Saves are *incremental* -- only frames whose `Changed` flag is set are upserted into the on-disk file (preserving previous rows if no edits exist this session).
-- **Export CSV** is rewritten from scratch each save with one row per frame in the canonical legacy column order. Downstream consumers (Analysis, Sort Frames, external tooling) read this file.
+- **Export CSV** is rewritten from scratch each save with one row per frame in the canonical legacy column order. Downstream consumers (Analysis, external tooling) read this file.
 
 If a unified CSV is missing on load, the app first tries to recover from the export CSV (`import_unified_from_export`), falling back to legacy per-limb CSVs (`csv_to_dict`) if needed.
 
@@ -242,8 +238,7 @@ When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file
 3. **Annotate** -- pick a limb, click onsets/offsets, set gaze and parameters, type notes. Edits stay in memory until Save.
 4. **Save** -- `Save` button (or auto on Close / before Load) writes the unified CSV (incremental), the export CSV (full), and the metadata sidecar. The `Changed` flags are cleared.
 5. **Analysis** (touch mode only) -- runs `analysis.do_analysis` over the export CSV: per-limb summary stats, transition heatmaps, touch-trajectory plots, histograms, and a master HTML opened in the browser. Output lands in `plots/`.
-6. **Sort Frames** (touch mode only) -- runs `sort_frames.process_touch_data_strict_transitions`: copies the actual frame JPGs into `sorted_frames/touches/<limb>_<n>/` (one folder per touch event with `metadata.json` describing zone transitions) plus aggregate `touch/` and `no_touch/` buckets.
-7. **Close** -- final save, persists labeling-time accumulator and last frame position.
+6. **Close** -- final save, persists labeling-time accumulator and last frame position.
 
 ## Local Build
 

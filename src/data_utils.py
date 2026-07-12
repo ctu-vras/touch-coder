@@ -10,6 +10,8 @@ import os
 import time
 import pandas as pd
 from typing import TypedDict, NotRequired, List, Optional, Dict
+
+from atomic_io import atomic_write
 # --- ADD to data_utils.py (near the top with other imports) ---
 from typing import TypedDict, Dict, Optional
 import json
@@ -60,9 +62,7 @@ def write_export_metadata(meta_path: str,
     }
     if labeling_time_seconds is not None:
         meta["Total Labeling Time (hours)"] = round(float(labeling_time_seconds) / 3600.0, 4)
-    os.makedirs(os.path.dirname(meta_path), exist_ok=True)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2, ensure_ascii=False)
+    atomic_write(meta_path, lambda f: json.dump(meta, f, indent=2, ensure_ascii=False))
 
 def _prepend_header(
     path,
@@ -227,8 +227,7 @@ def save_unified_dataset(csv_path: str, total_frames: int, frames: Dict[int, Fra
     union_rows = [existing_map[k] for k in sorted(existing_map.keys())]
     cols = ["Frame", "Note", "Params", "LH", "RH", "LL", "RL"]
     df = pd.DataFrame(union_rows, columns=cols)
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    df.to_csv(csv_path, index=False)
+    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
 
     print(f"DEBUG: Unified → {csv_path}")
     print(f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, rows_written={len(changed_rows)}, union_rows={len(union_rows)}")
@@ -517,7 +516,8 @@ def export_from_unified(frames: Dict[int, FrameBundle],
 
     for f in range(total_frames + 1):
         b = frames.get(f, empty_bundle())
-        row = {"Frame": f, "Time_ms": (f / frame_rate) * 1000.0}
+        # 0-FPS probe (some containers) must not abort the export; matches export_pose_dataset.
+        row = {"Frame": f, "Time_ms": (f / frame_rate) * 1000.0 if frame_rate else 0.0}
 
         # Limb blocks in order: LH, LL, RH, RL
         for limb in ["LH", "LL", "RH", "RL"]:
@@ -554,8 +554,7 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     cols += ["Note"]
 
     df = pd.DataFrame(rows, columns=cols)
-    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
-    df.to_csv(out_csv, index=False)
+    atomic_write(out_csv, lambda f: df.to_csv(f, index=False))
 
     # Keep 5-line header; append label mappings to the last line
     '''
