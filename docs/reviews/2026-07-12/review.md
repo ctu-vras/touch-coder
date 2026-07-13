@@ -161,9 +161,13 @@ A truncated config (see C1) raises `JSONDecodeError` on startup → hard crash w
 **Files:** `data_utils.py:84,96,627,662,688,698,713,727,857`; `config_utils.py`; `analysis.py:714`; `sort_frames.py:106,215`. These default to the Windows locale (cp1252). pandas defaults to UTF-8, so the pandas-written unified CSV and the builtin-`open` readers disagree. Non-ASCII notes/names raise `UnicodeEncodeError` or round-trip to mojibake. Analysis HTML declares `<meta charset=UTF-8>` but is written without it, and interpolates the video name unescaped.
 
 ### M7 — Resource leaks + O(n²) polling in frame extraction
+> **Fix plan:** [fix_M7.md](done/fix_M7.md)
+
 **File:** `frame_utils.py:87-90,156-176,198-228,251-260`. No `try/finally` around `cv2.VideoCapture`/ffmpeg `Popen` (leaked handles / orphaned ffmpeg if `imwrite` or `progress_cb` raises). The progress loop calls `_count_jpg_files` (a full `os.listdir`) every ~second while the directory grows → roughly O(n²) on long videos. Reliability copy invokes `progress_cb` once per file (tens of thousands of Tk updates) and copies non-frame files indiscriminately.
 
 ### M8 — `load_pose_dataset` uses the slow `iterrows()` path
+> **Fix plan:** [fix_M8.md](done/fix_M8.md)
+
 **File:** `pose_mismatch_data.py:113`. The touch loaders were explicitly moved to `itertuples` to fix a "4 rows in 20s" freeze; the pose loader (the active mode) still uses `iterrows` and will reproduce that freeze on large datasets.
 
 ### M9 — `on_close` logic is inverted; Cancel leaves a half-dead app
@@ -175,9 +179,13 @@ A truncated config (see C1) raises `JSONDecodeError` on startup → hard crash w
 **File:** `data_utils.py:361-364`. `... if x.strip().isdigit()` discards negatives/floats/whitespace-mangled tokens, so a bad X can survive in Y (or vice-versa), misaligning the paired click lists during export→unified recovery.
 
 ### M11 — Pose `ScaleFactor` not clamped on load
+> **Fix plan:** [fix_M11.md](done/fix_M11.md)
+
 **File:** `pose_mismatch_data.py:130-132`. PROJECT.md states `ScaleFactor ∈ [0.7,1.3]`, but the loader trusts the on-disk value and `ensure_pose_bundle` only clamps when the key is absent. A hand-edited/corrupt CSV propagates an out-of-range scale into render/export.
 
 ### M12 — Analysis: error-swallowing reader + lossy transition metrics
+> **Fix plan:** [fix_M12.md](done/fix_M12.md)
+
 **File:** `analysis.py:69-84,133,149,157-165`. `_read_export_df` collapses every exception into a generic `ValueError`, hiding permission/disk/parse errors. Transition metrics use only `zones[0]` (dropping multi-zone clicks and intermediate changes), and a touch still open on the last frame fabricates a `start==end` self-transition that inflates the heatmap diagonal.
 
 ---

@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from typing import Dict, Optional
 
 import pandas as pd
@@ -53,6 +54,8 @@ def empty_pose_bundle() -> dict:
 def scale_raw_to_factor(scale_raw: float) -> float:
     try:
         value = float(scale_raw)
+        if value != value:  # NaN guard: min/max would leak the upper bound.
+            value = 1.0
     except Exception:
         value = 1.0
     return max(0.7, min(1.3, value))
@@ -89,14 +92,54 @@ def ensure_pose_bundle(bundle: Optional[dict]) -> dict:
         bundle["ScaleRaw"] = 1.0
     if "ScaleFactor" not in bundle:
         bundle["ScaleFactor"] = scale_raw_to_factor(bundle["ScaleRaw"])
+    for raw_key, factor_key in (
+        ("ScaleRaw", "ScaleFactor"),
+        ("HeadScaleRaw", "HeadScaleFactor"),
+    ):
+        if raw_key not in bundle:
+            bundle[raw_key] = 1.0
+        old_raw = bundle[raw_key]
+        raw_invalid = False
+        try:
+            raw_value = float(old_raw)
+            if raw_value != raw_value:
+                raw_invalid = True
+                raw_value = 1.0
+        except Exception:
+            raw_invalid = True
+            raw_value = 1.0
+        sanitized_raw = scale_raw_to_factor(raw_value)
+        if raw_invalid or sanitized_raw != raw_value:
+            print(
+                "WARNING: pose scale out of range/NaN on load: "
+                f"{raw_key}={old_raw!r} -> {sanitized_raw}"
+            )
+        bundle[raw_key] = sanitized_raw
+
+        factor_was_present = factor_key in bundle
+        if not factor_was_present:
+            bundle[factor_key] = scale_raw_to_factor(sanitized_raw)
+        old_factor = bundle[factor_key]
+        factor_invalid = False
+        try:
+            factor_value = float(old_factor)
+            if factor_value != factor_value:
+                factor_invalid = True
+                factor_value = scale_raw_to_factor(sanitized_raw)
+        except Exception:
+            factor_invalid = True
+            factor_value = scale_raw_to_factor(sanitized_raw)
+        sanitized_factor = scale_raw_to_factor(factor_value)
+        if factor_was_present and (factor_invalid or sanitized_factor != factor_value):
+            print(
+                "WARNING: pose scale out of range/NaN on load: "
+                f"{factor_key}={old_factor!r} -> {sanitized_factor}"
+            )
+        bundle[factor_key] = sanitized_factor
     if "ScaleSet" not in bundle:
         bundle["ScaleSet"] = bundle.get("ScaleRaw", 1.0) != 1.0
     if "ScaleAutoCarry" not in bundle:
         bundle["ScaleAutoCarry"] = False
-    if "HeadScaleRaw" not in bundle:
-        bundle["HeadScaleRaw"] = 1.0
-    if "HeadScaleFactor" not in bundle:
-        bundle["HeadScaleFactor"] = scale_raw_to_factor(bundle["HeadScaleRaw"])
     if "HeadScaleSet" not in bundle:
         bundle["HeadScaleSet"] = bundle.get("HeadScaleRaw", 1.0) != 1.0
     if "HeadScaleAutoCarry" not in bundle:
@@ -118,52 +161,67 @@ def load_pose_dataset(csv_path: str) -> Dict[int, dict]:
         print(f"ERROR: Failed to read 3D unified CSV: {e}")
         return frames
 
-    for _, row in df.iterrows():
+    col_idx = {c: i for i, c in enumerate(df.columns)}
+    if "Frame" not in col_idx:
+        print("ERROR: load_pose_dataset: 'Frame' column missing — aborting", flush=True)
+        return frames
+
+    iter_start = time.perf_counter()
+    for row in df.itertuples(index=False, name=None):
+        def _get(name, default=None):
+            i = col_idx.get(name, -1)
+            return default if i < 0 else row[i]
+
         try:
-            frame = int(row["Frame"])
+            frame = int(_get("Frame"))
         except Exception:
             continue
         bundle = empty_pose_bundle()
-        note = row.get("Note")
+        note = _get("Note")
         bundle["Note"] = None if pd.isna(note) else str(note)
         try:
-            bundle["Params"] = json.loads(row.get("Params") or "{}")
+            bundle["Params"] = json.loads(_get("Params") or "{}")
         except Exception:
             bundle["Params"] = {}
         try:
-            bundle["ScaleRaw"] = float(row.get("ScaleRaw", 1.0) or 1.0)
+            bundle["ScaleRaw"] = float(_get("ScaleRaw", 1.0) or 1.0)
         except Exception:
             bundle["ScaleRaw"] = 1.0
         try:
-            bundle["ScaleFactor"] = float(row.get("ScaleFactor", scale_raw_to_factor(bundle["ScaleRaw"])) or 1.0)
+            bundle["ScaleFactor"] = float(_get("ScaleFactor", scale_raw_to_factor(bundle["ScaleRaw"])) or 1.0)
         except Exception:
             bundle["ScaleFactor"] = scale_raw_to_factor(bundle["ScaleRaw"])
-        scale_set = row.get("ScaleSet", None)
+        scale_set = _get("ScaleSet", None)
         if scale_set is None or (isinstance(scale_set, float) and pd.isna(scale_set)):
             bundle["ScaleSet"] = bundle["ScaleRaw"] != 1.0
         else:
             bundle["ScaleSet"] = str(scale_set).strip().lower() in ("1", "true", "yes")
         try:
-            bundle["HeadScaleRaw"] = float(row.get("HeadScaleRaw", 1.0) or 1.0)
+            bundle["HeadScaleRaw"] = float(_get("HeadScaleRaw", 1.0) or 1.0)
         except Exception:
             bundle["HeadScaleRaw"] = 1.0
         try:
             bundle["HeadScaleFactor"] = float(
-                row.get("HeadScaleFactor", scale_raw_to_factor(bundle["HeadScaleRaw"])) or 1.0
+                _get("HeadScaleFactor", scale_raw_to_factor(bundle["HeadScaleRaw"])) or 1.0
             )
         except Exception:
             bundle["HeadScaleFactor"] = scale_raw_to_factor(bundle["HeadScaleRaw"])
-        head_scale_set = row.get("HeadScaleSet", None)
+        head_scale_set = _get("HeadScaleSet", None)
         if head_scale_set is None or (isinstance(head_scale_set, float) and pd.isna(head_scale_set)):
             bundle["HeadScaleSet"] = bundle["HeadScaleRaw"] != 1.0
         else:
             bundle["HeadScaleSet"] = str(head_scale_set).strip().lower() in ("1", "true", "yes")
         try:
-            joints = json.loads(row.get("Joints") or "{}")
+            joints = json.loads(_get("Joints") or "{}")
         except Exception:
             joints = {}
         bundle["Joints"] = joints
         frames[frame] = ensure_pose_bundle(bundle)
+    print(
+        f"DEBUG: load_pose_dataset: parsed {len(df)} rows into {len(frames)} frames "
+        f"via itertuples in {time.perf_counter() - iter_start:.2f}s",
+        flush=True,
+    )
     return frames
 
 

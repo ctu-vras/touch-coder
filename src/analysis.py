@@ -19,6 +19,10 @@ from resource_utils import resource_path
 LIMBS = ["LH", "RH", "LL", "RL"]
 
 
+class ExportReadError(ValueError):
+    """Raised when neither current nor legacy export CSV parsing succeeds."""
+
+
 def _normalize_onset(value) -> str:
     if value is None:
         return ""
@@ -37,7 +41,11 @@ def _parse_xy_list(value):
     for p in parts:
         try:
             out.append(float(p))
-        except ValueError:
+        except ValueError as exc:
+            print(
+                f"WARN: analysis ignored invalid coordinate token {p!r} "
+                f"from {value!r}: {exc}"
+            )
             continue
     return out
 
@@ -53,7 +61,8 @@ def _parse_zones(value):
     try:
         parsed = json.loads(s)
         return parsed if parsed is not None else []
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        print(f"WARN: analysis could not parse zones {value!r}: {exc}")
         return []
 
 
@@ -68,21 +77,35 @@ def _flatten_zones(zones):
 
 
 def _read_export_df(export_path):
+    parse_errors = (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError)
     try:
         df = pd.read_csv(export_path)
         if "Frame" in df.columns:
             return df
-    except Exception:
-        df = None
+        missing_frame = ValueError("required 'Frame' column is missing")
+        print(f"WARN: current export CSV parse failed for {export_path}: {missing_frame}")
+    except OSError as exc:
+        print(f"ERROR: cannot open export CSV {export_path}: {exc!r}")
+        raise
+    except parse_errors as exc:
+        print(f"WARN: current export CSV parse failed for {export_path}: {exc!r}")
 
     # fallback for older exports with header lines
     try:
         df = pd.read_csv(export_path, skiprows=6)
         if "Frame" in df.columns:
             return df
-    except Exception:
-        pass
-    raise ValueError(f"Could not read export CSV: {export_path}")
+        last_exc = ValueError("required 'Frame' column is missing after legacy header")
+        print(f"WARN: legacy export CSV parse failed for {export_path}: {last_exc}")
+    except OSError as exc:
+        print(f"ERROR: cannot open export CSV {export_path}: {exc!r}")
+        last_exc = exc
+    except parse_errors as exc:
+        last_exc = exc
+        print(f"WARN: legacy export CSV parse failed for {export_path}: {exc!r}")
+    raise ExportReadError(
+        f"Could not read export CSV {export_path}; current and legacy formats failed"
+    ) from last_exc
 
 
 def _load_limb_rows(export_path):
@@ -118,7 +141,7 @@ def _compute_limb_metrics(rows):
     start_frame = None
     onset_count = 0
     current_zones = set()
-    start_zone = None
+    start_zones = None
 
     for entry in rows:
         frame = entry["Frame"]
@@ -132,7 +155,7 @@ def _compute_limb_metrics(rows):
                 start_frame = frame
                 onset_count = 1
                 current_zones = set(zones)
-                start_zone = zones[0] if zones else "NN"
+                start_zones = list(dict.fromkeys(zones)) if zones else ["NN"]
             else:
                 onset_count += 1
                 current_zones.update(zones)
@@ -147,13 +170,15 @@ def _compute_limb_metrics(rows):
                 onset_count_distribution[onset_count] += 1
                 for z in current_zones:
                     zone_touch_count[z] += 1
-                end_zone = zones[0] if zones else "NN"
-                transition_counts[start_zone][end_zone] += 1
+                end_zones = list(dict.fromkeys(zones)) if zones else ["NN"]
+                for start_zone in start_zones:
+                    for end_zone in end_zones:
+                        transition_counts[start_zone][end_zone] += 1
                 ongoing = False
                 start_frame = None
                 onset_count = 0
                 current_zones = set()
-                start_zone = None
+                start_zones = None
 
     if ongoing and rows:
         last_frame = rows[-1]["Frame"]
@@ -162,8 +187,10 @@ def _compute_limb_metrics(rows):
         onset_count_distribution[onset_count] += 1
         for z in current_zones:
             zone_touch_count[z] += 1
-        end_zone = start_zone if start_zone is not None else "NN"
-        transition_counts[start_zone][end_zone] += 1
+        print(
+            f"DEBUG: touch still open at last frame {last_frame}; "
+            "no transition recorded"
+        )
 
     return {
         "total_touches": total_touches,
@@ -199,7 +226,10 @@ def _plot_transition_heatmap(transition_df, zones, limb, output_folder):
         hovertemplate="Start Zone: %{y}<br>End Zone: %{x}<br>Number of Touches: %{z}<extra></extra>"
     )
     fig.update_layout(
-        title=f"Touch Transition Heatmap {limb}",
+        title=(
+            f"Touch Transition Heatmap {limb}<br>"
+            "<sup>Multi-zone start/end clicks contribute one count per zone pair.</sup>"
+        ),
         xaxis_title="End Zone",
         yaxis_title="Start Zone",
         coloraxis_colorbar=dict(title="Number of Touches"),
@@ -510,7 +540,8 @@ def _read_new_template_flag():
     try:
         cfg = load_config()
         return bool(cfg.get("new_template", False))
-    except Exception:
+    except Exception as exc:
+        print(f"WARN: analysis could not read new-template setting; using default: {exc!r}")
         return False
 
 
@@ -527,7 +558,8 @@ def _get_zone_list(new_template: bool):
         for filename in os.listdir(zones_dir):
             if filename.lower().endswith((".png", ".jpg", ".jpeg")):
                 zones.append(os.path.splitext(filename)[0])
-    except Exception:
+    except Exception as exc:
+        print(f"WARN: analysis could not list zones in {zones_dir!r}: {exc!r}")
         zones = []
     if "NN" not in zones:
         zones.append("NN")

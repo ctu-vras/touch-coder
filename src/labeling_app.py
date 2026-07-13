@@ -3269,7 +3269,17 @@ class LabelingApp(tk.Tk):
             data_dir = os.path.dirname(self.video.dataRH_path_to_csv)
             base_dir = os.path.dirname(data_dir)
             plots_path = os.path.join(base_dir, "plots")
-            analysis.do_analysis(data_dir, plots_path, self.video_name, debug=False, frame_rate=self.frame_rate)
+            try:
+                analysis.do_analysis(
+                    data_dir,
+                    plots_path,
+                    self.video_name,
+                    debug=False,
+                    frame_rate=self.frame_rate,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                messagebox.showerror("Analysis failed", f"Could not complete analysis:\n{exc}")
 
     def play_video(self):
         if self.video is None:
