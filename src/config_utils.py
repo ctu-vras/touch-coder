@@ -49,7 +49,7 @@ CONFIG_DEFAULTS = {
 def load_config():
     try:
         config_path = _ensure_config_file()
-        with open(config_path, 'r') as file:
+        with open(config_path, 'r', encoding="utf-8") as file:
             data = json.load(file)
         return data if isinstance(data, dict) else {}
     except Exception as e:

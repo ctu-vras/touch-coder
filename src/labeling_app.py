@@ -1,6 +1,5 @@
 import os
 import sys
-import csv
 import json
 import time
 import shutil
@@ -32,7 +31,7 @@ from config_utils import (
 from data_utils import (
     bundle_summary_str,
     csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
-    save_limb_parameters, load_limb_parameters, extract_zones_from_file,
+    save_limb_parameters, load_limb_parameters, load_notes_csv, extract_zones_from_file,
     FrameRecord,
 )
 from frame_utils import check_items_count, create_frames, FrameExtractionError
@@ -3564,13 +3563,7 @@ class LabelingApp(tk.Tk):
         self.video.notes = {}
         self.video.dataNotes_path_to_csv = os.path.join(data_dir, f"{video_name}_notes.csv")
         if os.path.exists(self.video.dataNotes_path_to_csv):
-            with open(self.video.dataNotes_path_to_csv, mode='r', newline='') as csv_file:
-                reader = csv.reader(csv_file)
-                next(reader, None)
-                for row in reader:
-                    if len(row) == 2:
-                        frame = int(row[0]); note = row[1]
-                        self.video.notes[frame] = note
+            self.video.notes = load_notes_csv(self.video.dataNotes_path_to_csv)
             print("INFO: Notes loaded successfully.")
         self.update_note_entry()
 
@@ -3582,7 +3575,7 @@ class LabelingApp(tk.Tk):
         # Clothes file presence => colorize button
         self.video.clothes_file_path = os.path.join(data_dir, f"{video_name}_clothes.txt")
         if (not self.is_pose_mode()) and self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
-            with open(self.video.clothes_file_path, 'r') as f:
+            with open(self.video.clothes_file_path, 'r', encoding="utf-8") as f:
                 if len(f.readlines()) > 1:
                     self.cloth_btn.config(bg="lightgreen")
 
@@ -3640,7 +3633,7 @@ class LabelingApp(tk.Tk):
             return []
         file_scale = None
         points = []
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line.lower().startswith("diagramscale:"):
@@ -3735,7 +3728,7 @@ class LabelingApp(tk.Tk):
         if not os.path.exists(path):
             return
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f) or {}
             frame = int(payload.get("frame", 0))
             frame = max(0, min(self.video.total_frames, frame))

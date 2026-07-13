@@ -632,7 +632,7 @@ def preview_lines_for_save(frames: Dict[int, FrameBundle],
 def csv_to_dict(csv_path) -> Dict[int, "FrameRecord"]:
     data: Dict[int, FrameRecord] = {}
     import csv, json
-    with open(csv_path, mode='r', newline='') as csvfile:
+    with open(csv_path, mode='r', newline='', encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             frame = int(row['Frame'])
@@ -666,7 +666,7 @@ def save_dataset(csv_path, total_frames, data, with_touch: bool = False):
     if not csv_path:
         return
     import csv, json
-    with open(csv_path, mode='w', newline='') as file:
+    with open(csv_path, mode='w', newline='', encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones', 'Touch'])
         for frame in range(total_frames + 1):
@@ -689,10 +689,29 @@ def save_dataset(csv_path, total_frames, data, with_touch: bool = False):
                 touch_val = rec['Touch']
             writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones, touch_val])
 
+def load_notes_csv(path) -> dict[int, str]:
+    """Load notes as UTF-8, falling back to legacy Windows cp1252 files."""
+    def _read(encoding: str) -> dict[int, str]:
+        notes = {}
+        with open(path, mode="r", newline="", encoding=encoding) as csv_file:
+            reader = csv.reader(csv_file)
+            next(reader, None)
+            for row in reader:
+                if len(row) == 2:
+                    notes[int(row[0])] = row[1]
+        return notes
+
+    try:
+        return _read("utf-8")
+    except UnicodeDecodeError:
+        print(f"WARN: {path} is not UTF-8; retrying as cp1252 (legacy notes file).")
+        return _read("cp1252")
+
+
 def save_parameter_to_csv(path, param_dict):
     if not path:
         return
-    with open(path, mode='w', newline='') as csv_file:
+    with open(path, mode='w', newline='', encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(['Frame', 'State'])
         for key, value in param_dict.items():
@@ -702,7 +721,7 @@ def load_parameter_from_csv(path):
     d = {}
     if not path or not os.path.exists(path):
         return d
-    with open(path, mode='r') as csv_file:
+    with open(path, mode='r', encoding="utf-8") as csv_file:
         reader = csv.reader(csv_file)
         next(reader, None)
         for row in reader:
@@ -717,7 +736,7 @@ def save_limb_parameters(csv_path, limb_param_dicts):
     limb_param_dicts: { 'Parameter_1': dict, 'Parameter_2': dict, 'Parameter_3': dict }
     dict keys are (limb, frame) tuples; values are 'ON'/'OFF'/None.
     """
-    with open(csv_path, 'w', newline='') as file:
+    with open(csv_path, 'w', newline='', encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(["Limb", "Frame", "Parameter", "State"])
         for param_name, param_dict in limb_param_dicts.items():
@@ -731,7 +750,7 @@ def load_limb_parameters(csv_path):
     p1, p2, p3 = {}, {}, {}
     if not os.path.exists(csv_path):
         return p1, p2, p3
-    with open(csv_path, 'r', newline='') as file:
+    with open(csv_path, 'r', newline='', encoding="utf-8") as file:
         reader = csv.reader(file)
         next(reader, None)
         for row in reader:
@@ -750,7 +769,7 @@ def extract_zones_from_file(file_path):
     if not file_path or not os.path.exists(file_path):
         return None
     zones = set()
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding="utf-8") as f:
         for line in f:
             if 'Zones=' in line:
                 zones.add(line.split('Zones=')[-1].strip())

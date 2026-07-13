@@ -23,7 +23,6 @@ Each gets a fix plan under `to_do/` before implementation. Move to `DONE.md` whe
 - **H3** "Incremental" saves are full re-read + full rewrite every time. — plan: [fix_H3.md](docs/reviews/2026-07-12/to_do/fix_H3.md)
 
 ### Medium
-- **M6** Missing `encoding="utf-8"` on builtin `open()` calls. — plan: [fix_M6.md](docs/reviews/2026-07-12/to_do/fix_M6.md)
 - **M7** Resource leaks + O(n²) polling in frame extraction.
 - **M8** `load_pose_dataset` uses the slow `iterrows()` path. — plan: [fix_M8.md](docs/reviews/2026-07-12/to_do/fix_M8.md)
 - **M9** `on_close` logic inverted; Cancel leaves a half-dead app. — plan: [fix_M9.md](docs/reviews/2026-07-12/to_do/fix_M9.md)

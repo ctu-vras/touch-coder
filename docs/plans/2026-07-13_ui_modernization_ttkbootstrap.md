@@ -1,7 +1,7 @@
 # TinyTouch UI Modernization — ttkbootstrap (cosmo, light only)
 
 **Date:** 2026-07-13
-**Status:** planned, not started — visual direction approved by Lucas via the throwaway `ui_preview.py` (v2). That file is the reference for the final look; keep it until the migration is done.
+**Status:** planned, not started — visual direction approved by Lucas via the throwaway `ui_preview.py` (v2.2: flat buttons + calm palette, antialiased sprite dots, non-overlapping timeline marks, hover-text fix). That file is the reference for the final look; keep it until the migration is done.
 
 **Approved style rules (from the v2 preview):**
 - ALL buttons share ONE flat neutral style (white face, thin grey border) — no primary/success/outline mix.
@@ -22,7 +22,7 @@ TinyTouch works, but the UI is a hand-rolled grey Tk look: ~100% plain `tk.*` wi
 
 ## Files
 
-- **NEW `src/theme.py`** — single source of truth: palette constants, fonts, `init_style(root)`, `set_button_state(btn, state)`, `set_label_state(lbl, state)`. No imports from app modules (avoids cycles with `config_utils`/`cloth_app`).
+- **NEW `src/theme.py`** — single source of truth: palette constants, fonts, `init_style(root)` (+ `_flat_button()` recipe), `set_button_state(btn, state)`, `StatusChip`, `dot_sprite()`. No imports from app modules (avoids cycles with `config_utils`/`cloth_app`).
 - `src/ui_components.py` — main window layout, toolbar, diagram panel
 - `src/labeling_app.py` — Style init, state-button sites, timelines, dialogs, slider builders
 - `src/config_utils.py` — `load_parameter_names_into` re-applies `bg='lightgrey'` at `:141-145` and `:150-155`
@@ -66,7 +66,7 @@ FONT_BASE = ("Segoe UI", 10); FONT_SMALL = ("Segoe UI", 9)
 FONT_BOLD = ("Segoe UI", 10, "bold"); FONT_TITLE = ("Segoe UI", 11)
 ```
 
-- `init_style(root)`: creates `ttkbootstrap.Style(theme=THEME_NAME)`, registers the flat button styles via the `_flat_button()` recipe **copied from `ui_preview.py`** (sets `background`/`bordercolor`/`lightcolor`/`darkcolor` + hover map — this is what kills cosmo's default blue button border), sets root bg. Styles: `Tool.TButton` (every normal button), `StateOn/StateOff/StateNeutral.TButton` (param states; Neutral is visually identical to Tool). **Keep the `import ttkbootstrap` inside `init_style`** so importing `labeling_app` stays side-effect-free for headless pytest stubs.
+- `init_style(root)`: creates `ttkbootstrap.Style(theme=THEME_NAME)`, registers the flat button styles via the `_flat_button()` recipe **copied from `ui_preview.py`** (sets `background`/`bordercolor`/`lightcolor`/`darkcolor` + hover map — this is what kills cosmo's default blue button border). **The recipe MUST also map `foreground` for `active`/`pressed`** — cosmo's stock TButton turns text white on hover (its buttons are blue-filled), which makes text invisible on our light buttons (bug found in preview: hovered buttons rendered blank). Sets root bg. Styles: `Tool.TButton` (every normal button), `StateOn/StateOff/StateNeutral.TButton` (param states; Neutral is visually identical to Tool). **Keep the `import ttkbootstrap` inside `init_style`** so importing `labeling_app` stays side-effect-free for headless pytest stubs.
 - `set_button_state(btn, state)`: maps `"ON"/"OFF"/None/"None"/""` → the three state styles (must handle the string `"None"` — see review M1).
 - `StatusChip` (small ttk.Frame: colored `●` label + text label) with `.set(color, text)` — replaces the old filled `bg=` mode/buffer labels. `mode_label` and `loading_label` become chips; see `status_chip()` in `ui_preview.py` for the approved look.
 
@@ -93,6 +93,11 @@ FONT_BOLD = ("Segoe UI", 10, "bold"); FONT_TITLE = ("Segoe UI", 11)
    - Clothes button ON `:3598, :3683` (+ its reset site)
    - `config_utils.load_parameter_names_into` `:141-145, :150-155` → `.config(text=...)` only + `set_button_state(btn, None)`
 3. `limb_parameter_colors_at_frame` (`:3104-3106`) returns timeline tick colors → `TL_ONSET_MARK`/`TL_OFF` (these are canvas fills, not widget styles).
+4. **Prettier dots (antialiased sprites).** Tk `create_oval` has no antialiasing → jagged dots (Lucas flagged this). Replace oval dots with **pre-rendered PIL sprites**: draw the circle 4× oversized on an RGBA image, downscale with LANCZOS, wrap in `ImageTk.PhotoImage`, cache per `(color, radius, hollow)` — helper `theme.dot_sprite()` (reference implementation in `ui_preview.py`; approved look: filled dot with a 2px white halo ring; hollow variant for the "last onset" marker).
+   - `_render_diagram_dots` (`labeling_app.py:1482-1496`): both `create_oval` calls → `create_image(x*scale, y*scale, image=theme.dot_sprite(...))`; radius = `dot_size` (config), hollow sprite replaces the `outline='green', fill=''` last-onset marker.
+   - `cloth_app.py:84` dot → same sprite helper.
+   - The cache must live at module level in theme.py (PhotoImages are garbage-collected if unreferenced). Cache stays tiny (a few color/size combos). `dot_size` changes via Settings → new cache key, old entries harmless.
+   - Click hit-testing is unaffected (dots are visual only; clicks map through `diagram_scale` math, not canvas items).
 
 ### Phase D — dialogs (7 Toplevels)
 Pattern: `win.configure(bg=theme.SURFACE)` + a `ttk.Frame(padding=16)` as sole child + ttk widgets.
@@ -102,15 +107,13 @@ Pattern: `win.configure(bg=theme.SURFACE)` + a `ttk.Frame(padding=16)` as sole c
 4. The 3 near-identical progress popups (`:2394-2400, 2439-2445, 2484-2490`): extract one `_open_progress_window(title, heading)` builder (bar `bootstyle="info-striped"` — blue, matches the single accent) — only structural refactor in the plan, removes ~80 duplicated lines.
 5. `ClothApp` (`cloth_app.py`): ttk frames, buttons `Tool.TButton`, `SURFACE` bg; dot stays red.
 
-### Phase C addendum — prettier dots (antialiased sprites)
-Tk `create_oval` has no antialiasing → jagged dots (Lucas flagged this). Replace oval dots with **pre-rendered PIL sprites**: draw the circle 4× oversized on an RGBA image, downscale with LANCZOS, wrap in `ImageTk.PhotoImage`, cache per `(color, radius, hollow)` — helper `theme.dot_sprite()` (reference implementation in `ui_preview.py`, approved look: filled dot with a 2px white halo ring; hollow variant for the "last onset" marker).
-- `_render_diagram_dots` (`labeling_app.py:1482-1496`): both `create_oval` calls → `create_image(x*scale, y*scale, image=theme.dot_sprite(...))`; radius = `dot_size` (config), hollow sprite replaces the `outline='green', fill=''` last-onset marker.
-- `cloth_app.py:84` dot → same sprite helper.
-- The cache must live at module level in theme.py (PhotoImages are garbage-collected if unreferenced). Cache stays tiny (a few color/size combos). Note: `dot_size` changes via Settings → new cache key, old entries harmless.
-- Click hit-testing is unaffected (dots are visual only; clicks map through `diagram_scale` math, not canvas items).
-
 ### Phase E — canvas polish + packaging
 1. Timeline colors already routed via theme.py in Phase A — confirm all flipped to new values: `draw_timeline` (`:2158`, `get_color` `:2189-2200`, outline `:2207`, playhead `:2248`), `draw_timeline2` (`:2318, :2330-2332, :2345`), `_draw_pose_timeline` (`:1942, :1967-1969, :1985, :2108`).
+   Approved drawing refinements (reference: `draw_mock_timelines` in `ui_preview.py`):
+   - **No overlapping marks**: in the scrub bar, the interval fill is inset ~3px from the onset/offset tick lines so ticks never sit on top of the fill.
+   - **Single-line grid**: zoomed-timeline cells are drawn as borderless fills with the grid (outer box + one line per cell boundary) drawn once on top — no doubled shared edges.
+   - **Inset edges**: all timeline drawing insets 1-2px from canvas edges so the right/bottom border isn't clipped.
+   - **Playhead cap**: playhead is a 2px line with a small triangle cap at the top.
 2. Spacing pass: consistent padx/pady in toolbar and right panel; `highlightthickness=0` on the 4 canvases; optional `app.minsize(1100, 800)`.
 3. `TinyTouch.spec`: after the `datas` list (line 13) add:
    ```python

@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 import math
 import os
@@ -641,13 +642,14 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate):
         "heatmap_RL.html",
     ]
 
+    escaped_name = html.escape(name)
     html_content = f"""
     <!DOCTYPE html>
     <html lang=\"en\">
     <head>
         <meta charset=\"UTF-8\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <title>{name}</title>
+        <title>{escaped_name}</title>
         <style>
             body {{
                 text-align: center;
@@ -681,7 +683,7 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate):
         </style>
     </head>
     <body>
-        <h1>{name}</h1>
+        <h1>{escaped_name}</h1>
     """
 
     for graph in graphs:
@@ -711,7 +713,7 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate):
     """
 
     file_path = os.path.join(output_folder, f"master_{name}.html")
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
     webbrowser.open(file_path)

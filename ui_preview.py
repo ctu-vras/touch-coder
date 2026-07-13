@@ -109,6 +109,8 @@ def _flat_button(name, bg, hover):
                     focusthickness=0, font=FONT_BASE, padding=(10, 5))
     style.map(name,
               background=[("active", hover), ("pressed", hover)],
+              foreground=[("active", TEXT), ("pressed", TEXT),
+                          ("disabled", TEXT_MUTED)],  # cosmo defaults hover text to WHITE
               bordercolor=[("active", BORDER)],
               lightcolor=[("active", hover)],
               darkcolor=[("active", hover)])
@@ -186,30 +188,41 @@ tl.pack(fill=tk.X, expand=True, padx=8, pady=(4, 8))
 
 def draw_mock_timelines(_event=None):
     w = max(tl.winfo_width(), 100)
+    right = w - 2  # inset so the right border isn't clipped off-canvas
 
     # --- scrub bar: full-video overview ---
     tl2.delete("all")
-    tl2.create_rectangle(0, 8, w, 22, fill=TL_EMPTY, outline=TL_OUTLINE)
-    tl2.create_rectangle(int(w * 0.30), 8, int(w * 0.36), 22, fill=TL_DURING, outline="")
-    tl2.create_rectangle(int(w * 0.62), 8, int(w * 0.66), 22, fill=TL_DURING, outline="")
-    for x, col in ((0.30, TL_ONSET_MARK), (0.36, TL_OFFSET_MARK),
-                   (0.62, TL_ONSET_MARK), (0.66, TL_OFFSET_MARK)):
-        tl2.create_line(int(w * x), 4, int(w * x), 26, fill=col, width=2)
-    tl2.create_line(int(w * 0.33), 2, int(w * 0.33), 28, fill=PLAYHEAD, width=2)
+    tl2.create_rectangle(1, 8, right, 22, fill=TL_EMPTY, outline=TL_OUTLINE)
+    for a, b in ((0.30, 0.36), (0.62, 0.66)):
+        x0, x1 = int(w * a), int(w * b)
+        # fill sits BETWEEN the tick lines (3px gap) — nothing overlaps
+        tl2.create_rectangle(x0 + 3, 9, x1 - 3, 21, fill=TL_DURING, outline="")
+        tl2.create_line(x0, 5, x0, 25, fill=TL_ONSET_MARK, width=2)
+        tl2.create_line(x1, 5, x1, 25, fill=TL_OFFSET_MARK, width=2)
+    px = int(w * 0.45)
+    tl2.create_line(px, 6, px, 27, fill=PLAYHEAD, width=2)
+    tl2.create_polygon(px - 4, 1, px + 4, 1, px, 8, fill=PLAYHEAD, outline="")
 
-    # --- zoomed timeline: per-frame cells ---
+    # --- zoomed timeline: per-frame cells, single-line grid ---
     tl.delete("all")
     n = 41
-    cell = w / n
+    cell = (w - 3) / n
     states = ([TL_EMPTY] * 8 + [TL_ON] + [TL_DURING] * 9 + [TL_OFF]
               + [TL_EMPTY] * 6 + [TL_ON] + [TL_DURING] * 4 + [TL_OFF] + [TL_EMPTY] * 11)
     for i, col in enumerate(states[:n]):
-        x0, x1 = i * cell, (i + 1) * cell
-        tl.create_rectangle(x0, 10, x1, 38, fill=col, outline=TL_OUTLINE)
+        if col != TL_EMPTY:
+            tl.create_rectangle(1 + i * cell, 10, 1 + (i + 1) * cell, 38,
+                                fill=col, outline="")
+    # grid drawn once on top: outer box + one line per boundary (no doubled edges)
+    tl.create_rectangle(1, 10, 1 + n * cell, 38, fill="", outline=TL_OUTLINE)
+    for i in range(1, n):
+        x = 1 + i * cell
+        tl.create_line(x, 10, x, 38, fill=TL_OUTLINE)
     for i, col in ((9, TL_ONSET_MARK), (10, TL_ONSET_MARK), (11, TL_OFFSET_MARK), (25, TL_ONSET_MARK)):
-        tl.create_rectangle(i * cell + 2, 42, (i + 1) * cell - 2, 50, fill=col, outline="")
-    px = (n // 2) * cell + cell / 2
-    tl.create_line(px, 4, px, 52, fill=PLAYHEAD, width=3)
+        tl.create_rectangle(1 + i * cell + 2, 42, 1 + (i + 1) * cell - 2, 50, fill=col, outline="")
+    px = 1 + (n // 2) * cell + cell / 2
+    tl.create_line(px, 8, px, 52, fill=PLAYHEAD, width=2)
+    tl.create_polygon(px - 4, 2, px + 4, 2, px, 9, fill=PLAYHEAD, outline="")
 
 
 tl.bind("<Configure>", draw_mock_timelines)
@@ -237,18 +250,6 @@ try:
 except Exception:
     ttk.Label(diagram_holder, text="(diagram.png not found)", font=FONT_SMALL).pack()
 
-# old-vs-new dot comparison strip
-cmp_row = ttk.Frame(diagram_frame)
-cmp_row.pack(pady=(0, 2))
-ttk.Label(cmp_row, text="dots  old:", font=FONT_SMALL, foreground=TEXT_MUTED).pack(side="left")
-cmp_canvas = tk.Canvas(cmp_row, bg=SURFACE, width=150, height=22, highlightthickness=0)
-cmp_canvas.pack(side="left")
-cmp_canvas.create_oval(6, 5, 18, 17, fill="green")               # old: aliased + black outline
-cmp_canvas.create_oval(26, 5, 38, 17, fill="red")
-cmp_canvas.create_text(58, 11, text="new:", fill=TEXT_MUTED, font=FONT_SMALL)
-cmp_canvas.create_image(84, 11, image=dot_sprite(DOT_ONSET, 6))  # new: smooth sprites
-cmp_canvas.create_image(104, 11, image=dot_sprite(DOT_OFFSET, 6))
-cmp_canvas.create_image(124, 11, image=dot_sprite(DOT_ONSET, 6, hollow=True))
 
 limb_row = ttk.Frame(diagram_frame)
 limb_row.pack(pady=(2, 4))
