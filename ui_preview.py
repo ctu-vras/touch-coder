@@ -19,7 +19,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import ttkbootstrap as tb
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 # =====================================================================
 # Palette v2
@@ -50,6 +50,9 @@ PLAYHEAD = ACCENT
 
 POSE_BODY_SCALE_COLOR = "#446a8a"
 
+DOT_ONSET = "#21a453"       # refined green (was pure 'green')
+DOT_OFFSET = "#e2483d"      # refined red (was pure 'red')
+
 FONT_BASE = ("Segoe UI", 10)
 FONT_SMALL = ("Segoe UI", 9)
 FONT_BOLD = ("Segoe UI", 10, "bold")
@@ -59,6 +62,35 @@ DIAGRAM_SCALE = 0.55
 
 def noop():
     pass
+
+
+# =====================================================================
+# Antialiased dot sprites (Tk canvas ovals have NO antialiasing —
+# render 4x oversized with PIL, downscale LANCZOS, cache per look)
+# =====================================================================
+_dot_cache = {}
+
+
+def dot_sprite(color, radius, ring="#ffffff", ring_px=2, hollow=False):
+    """Return a cached PhotoImage of a smooth dot for canvas.create_image."""
+    key = (color, radius, ring, ring_px, hollow)
+    if key not in _dot_cache:
+        ss = 4  # supersampling factor
+        d_out = (radius + ring_px) * 2
+        size = d_out * ss
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        if hollow:
+            draw.ellipse([ring_px * ss, ring_px * ss, size - 1 - ring_px * ss,
+                          size - 1 - ring_px * ss],
+                         outline=color, width=max(2, radius // 2) * ss)
+        else:
+            draw.ellipse([0, 0, size - 1, size - 1], fill=ring)       # white halo ring
+            draw.ellipse([ring_px * ss, ring_px * ss, size - 1 - ring_px * ss,
+                          size - 1 - ring_px * ss], fill=color)
+        img = img.resize((d_out, d_out), Image.LANCZOS)
+        _dot_cache[key] = ImageTk.PhotoImage(img)
+    return _dot_cache[key]
 
 
 # =====================================================================
@@ -191,17 +223,32 @@ diagram_holder = ttk.Frame(diagram_frame)
 diagram_holder.pack(side="top", pady=(10, 4), **pad)
 _diagram_img = None
 try:
-    img = Image.open(os.path.join(os.path.dirname(__file__), "icons", "diagram0.png"))
+    img = Image.open(os.path.join(os.path.dirname(__file__), "icons", "diagram.png"))
     w, h = int(450 * DIAGRAM_SCALE), int(696 * DIAGRAM_SCALE)
     img = img.resize((w, h), Image.LANCZOS)
     _diagram_img = ImageTk.PhotoImage(img)
     canvas = tk.Canvas(diagram_holder, bg=SURFACE, width=w, height=h, highlightthickness=0)
     canvas.pack()
     canvas.create_image(0, 0, anchor="nw", image=_diagram_img)
-    canvas.create_oval(w * 0.42 - 5, h * 0.35 - 5, w * 0.42 + 5, h * 0.35 + 5, fill="green", outline="")
-    canvas.create_oval(w * 0.58 - 5, h * 0.47 - 5, w * 0.58 + 5, h * 0.47 + 5, fill="red", outline="")
+    # NEW smooth sprite dots (onset / offset / hollow "last onset" marker)
+    canvas.create_image(w * 0.42, h * 0.35, image=dot_sprite(DOT_ONSET, 6))
+    canvas.create_image(w * 0.58, h * 0.47, image=dot_sprite(DOT_OFFSET, 6))
+    canvas.create_image(w * 0.35, h * 0.55, image=dot_sprite(DOT_ONSET, 6, hollow=True))
 except Exception:
-    ttk.Label(diagram_holder, text="(diagram0.png not found)", font=FONT_SMALL).pack()
+    ttk.Label(diagram_holder, text="(diagram.png not found)", font=FONT_SMALL).pack()
+
+# old-vs-new dot comparison strip
+cmp_row = ttk.Frame(diagram_frame)
+cmp_row.pack(pady=(0, 2))
+ttk.Label(cmp_row, text="dots  old:", font=FONT_SMALL, foreground=TEXT_MUTED).pack(side="left")
+cmp_canvas = tk.Canvas(cmp_row, bg=SURFACE, width=150, height=22, highlightthickness=0)
+cmp_canvas.pack(side="left")
+cmp_canvas.create_oval(6, 5, 18, 17, fill="green")               # old: aliased + black outline
+cmp_canvas.create_oval(26, 5, 38, 17, fill="red")
+cmp_canvas.create_text(58, 11, text="new:", fill=TEXT_MUTED, font=FONT_SMALL)
+cmp_canvas.create_image(84, 11, image=dot_sprite(DOT_ONSET, 6))  # new: smooth sprites
+cmp_canvas.create_image(104, 11, image=dot_sprite(DOT_OFFSET, 6))
+cmp_canvas.create_image(124, 11, image=dot_sprite(DOT_ONSET, 6, hollow=True))
 
 limb_row = ttk.Frame(diagram_frame)
 limb_row.pack(pady=(2, 4))

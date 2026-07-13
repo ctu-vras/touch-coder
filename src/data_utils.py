@@ -23,7 +23,6 @@ class FrameRecord(TypedDict):
     Y: List[int]                 # 0+ points in Y (aligned with X)
     Onset: str                   # "ON" | "OFF" | ""
     Bodypart: str                # "LH"|"RH"|"LL"|"RL"|"" (for the owning limb CSV this is redundant, but present)
-    Look: str                    # "Yes"|"No"|""
     Zones: List[str]             # always list, may be []
     Touch: Optional[int]          # Parameter_1..3 states ("ON"/"OFF"/None)
     LimbParams: NotRequired[Dict[str, Optional[str]]]        # same, but limb-specific
@@ -67,14 +66,13 @@ def write_export_metadata(meta_path: str,
 def bundle_summary_dict(b):
     """
     Return a compact, readable dict of everything we care about in a FrameBundle,
-    including Look/Onset/Touch/Zones per limb + top-level Note/Params.
+    including Onset/Touch/Zones per limb + top-level Note/Params.
     """
     def limb_view(rec, label):
         if not rec:
             return {"_missing": True}
         return {
             "Onset": rec.get("Onset"),
-            "Look": rec.get("Look"),
             "Touch": rec.get("Touch"),
             "Zones": rec.get("Zones") or [],
             "Points": len(rec.get("X") or []),  # quick sanity check of clic
@@ -99,8 +97,13 @@ def bundle_summary_str(b, frame_index=None):
 
 def empty_record(limb: str) -> FrameRecord:
     return FrameRecord(
-        X=[], Y=[], Onset="", Bodypart=limb, Look="", Zones=[], Touch=None
+        X=[], Y=[], Onset="", Bodypart=limb, Zones=[], Touch=None
     )
+
+
+def _normalize_param_state(v):
+    # Legacy artifact: toggle_limb_parameter used to store the string "None" (M1).
+    return None if v in (None, "", "None") else v
 
 def empty_bundle() -> FrameBundle:
     return {
@@ -262,7 +265,7 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
             except Exception:
                 return default
 
-        frames[f] = {
+        bundle: FrameBundle = {
             "Note": (None if note_v is None else str(note_v)),
             "Params": _json_at(params_i, {}),
             "LH": _json_at(limb_i["LH"], None) or empty_record("LH"),
@@ -270,6 +273,13 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
             "LL": _json_at(limb_i["LL"], None) or empty_record("LL"),
             "RL": _json_at(limb_i["RL"], None) or empty_record("RL"),
         }
+        for limb in ("LH", "RH", "LL", "RL"):
+            rec = bundle[limb]
+            limb_params = rec.get("LimbParams") if isinstance(rec, dict) else None
+            if isinstance(limb_params, dict):
+                for key, value in limb_params.items():
+                    limb_params[key] = _normalize_param_state(value)
+        frames[f] = bundle
 
         if (row_idx + 1) % log_every == 0 or (time.time() - last_log_t) >= 0.25:
             elapsed = time.time() - iter_start
@@ -312,17 +322,56 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
                 skip = 6
         print(f"DEBUG: import_unified_from_export: skiprows={skip}, calling pd.read_csv...", flush=True)
         t0 = time.time()
-        df = pd.read_csv(export_csv_path, skiprows=skip)
+        df = pd.read_csv(export_csv_path, skiprows=skip, keep_default_na=False)
         print(f"DEBUG: import_unified_from_export: pd.read_csv done in {time.time() - t0:.2f}s "
               f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
     except Exception as e:
         print(f"ERROR: import_unified_from_export read failed: {e}", flush=True)
         return frames
 
-    def parse_xy(s) -> list[int]:
-        if not isinstance(s, str) or not s.strip():
+    dropped_pairs = 0
+
+    def _xy_tokens(v) -> list[str]:
+        if isinstance(v, float) and v != v:
             return []
-        return [int(x) for x in s.split(",") if x.strip().isdigit()]
+        if isinstance(v, (int, float)):
+            return [str(v)]
+        if not isinstance(v, str) or not v.strip():
+            return []
+        return [token for token in v.split(",") if token.strip()]
+
+    def parse_xy_pairs(x_cell, y_cell, zones, frame, limb):
+        nonlocal dropped_pairs
+        x_tokens = _xy_tokens(x_cell)
+        y_tokens = _xy_tokens(y_cell)
+        pair_count = min(len(x_tokens), len(y_tokens))
+        if len(x_tokens) != len(y_tokens):
+            unmatched = abs(len(x_tokens) - len(y_tokens))
+            dropped_pairs += unmatched
+            print(
+                f"WARNING: import_unified_from_export: frame={frame} {limb}: "
+                f"{len(x_tokens)} X vs {len(y_tokens)} Y tokens — "
+                f"keeping first {pair_count} pairs",
+                flush=True,
+            )
+
+        xs, ys, aligned_zones = [], [], []
+        for i in range(pair_count):
+            try:
+                x = int(float(x_tokens[i]))
+                y = int(float(y_tokens[i]))
+            except (ValueError, TypeError):
+                dropped_pairs += 1
+                print(
+                    f"WARNING: import_unified_from_export: frame={frame} {limb}: "
+                    f"dropping click {i} (X={x_tokens[i]!r}, Y={y_tokens[i]!r})",
+                    flush=True,
+                )
+                continue
+            xs.append(x)
+            ys.append(y)
+            aligned_zones.append(zones[i] if i < len(zones) else [])
+        return xs, ys, aligned_zones
 
     def _clean(v):
         # Normalize NaN / empty-string to None.
@@ -348,7 +397,6 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
             "X":     col_idx.get(f"{limb}_X", -1),
             "Y":     col_idx.get(f"{limb}_Y", -1),
             "Onset": col_idx.get(f"{limb}_Onset", -1),
-            "Look":  col_idx.get(f"{limb}_Look", -1),
             "Zones": col_idx.get(f"{limb}_Zones", -1),
             "P1":    col_idx.get(f"{limb}_Parameter_1", -1),
             "P2":    col_idx.get(f"{limb}_Parameter_2", -1),
@@ -397,14 +445,9 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
         # Limbs
         for limb in ("LH", "LL", "RH", "RL"):
             li = limb_field_i[limb]
-            xr = parse_xy(_at(row, li["X"], ""))
-            yr = parse_xy(_at(row, li["Y"], ""))
             onset = _at(row, li["Onset"], "") or ""
-            look  = _at(row, li["Look"], "") or ""
             if isinstance(onset, float) and onset != onset:
                 onset = ""
-            if isinstance(look, float) and look != look:
-                look = ""
             zones_raw = _at(row, li["Zones"], "[]")
             try:
                 if isinstance(zones_raw, str):
@@ -415,18 +458,29 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
                     zones = zones_raw or []
             except Exception:
                 zones = []
+            xr, yr, zones = parse_xy_pairs(
+                _at(row, li["X"], ""),
+                _at(row, li["Y"], ""),
+                zones,
+                f,
+                limb,
+            )
 
             rec: FrameRecord = {
-                "X": xr, "Y": yr, "Onset": onset, "Bodypart": limb, "Look": look,
+                "X": xr, "Y": yr, "Onset": onset, "Bodypart": limb,
                 "Zones": zones, "Touch": None,
             }
 
-            lp: Dict[str, Optional[str]] = {
-                "Par1": _clean(_at(row, li["P1"])),
-                "Par2": _clean(_at(row, li["P2"])),
-                "Par3": _clean(_at(row, li["P3"])),
+            raw_lp = {
+                "Par1": _at(row, li["P1"]),
+                "Par2": _at(row, li["P2"]),
+                "Par3": _at(row, li["P3"]),
             }
-            if any(v is not None for v in lp.values()):
+            lp: Dict[str, Optional[str]] = {
+                key: _normalize_param_state(_clean(value))
+                for key, value in raw_lp.items()
+            }
+            if any(v is not None for v in lp.values()) or "None" in raw_lp.values():
                 rec["LimbParams"] = lp
 
             b[limb] = rec
@@ -451,6 +505,12 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
             progress_cb(total_rows, total_rows, "Importing labels from export", time.time() - iter_start)
         except Exception:
             pass
+    if dropped_pairs:
+        print(
+            "WARNING: import_unified_from_export: "
+            f"total coordinate pairs dropped={dropped_pairs}",
+            flush=True,
+        )
     print(f"DEBUG: import_unified_from_export → frames={len(frames)} "
           f"from {export_csv_path} in {time.time() - iter_start:.1f}s", flush=True)
     return frames
@@ -499,7 +559,7 @@ def export_from_unified(frames: Dict[int, FrameBundle],
             rec = b.get(limb, {}) if isinstance(b, dict) else {}
             lp = rec.get("LimbParams", {}) if isinstance(rec, dict) else {}
             for i in (1, 2, 3):
-                val = lp.get(f"Par{i}")
+                val = _normalize_param_state(lp.get(f"Par{i}"))
                 row[f"{limb}_Parameter_{i}"] = "" if (val is None or val == "") else val
 
         row["Note"] = b.get("Note", "") if isinstance(b, dict) else ""
@@ -580,7 +640,6 @@ def csv_to_dict(csv_path) -> Dict[int, "FrameRecord"]:
             ys = [int(y) for y in row['Y'].split(',')] if row['Y'] else []
             onset = row.get('Onset', '') or ''
             bodypart = row.get('Bodypart', '') or ''
-            look = row.get('Look', '') or ''
             # Normalize Zones => list[str]
             try:
                 z_parsed = json.loads(row.get('Zones', '[]') or '[]')
@@ -597,7 +656,7 @@ def csv_to_dict(csv_path) -> Dict[int, "FrameRecord"]:
                     touch = None
             data[frame] = {
                 'X': xs, 'Y': ys,
-                'Onset': onset, 'Bodypart': bodypart, 'Look': look,
+                'Onset': onset, 'Bodypart': bodypart,
                 'Zones': zones, 'Touch': touch,
                 'changed': False,
             }
@@ -678,6 +737,7 @@ def load_limb_parameters(csv_path):
         for row in reader:
             limb, frame, param_name, state = row
             frame = int(frame)
+            state = _normalize_param_state(state)
             if param_name == "Parameter_1":
                 p1[(limb, frame)] = state
             elif param_name == "Parameter_2":

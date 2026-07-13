@@ -1068,10 +1068,10 @@ class LabelingApp(tk.Tk):
             b = {
                 "Note": None,
                 "Params": {},
-                "LH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "RH": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "LL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "RL": {"Onset": None, "Look": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "LH": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "RH": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "LL": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
+                "RL": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
                 # no "Changed" by default
             }
             self.video.frames[idx] = b
@@ -1426,7 +1426,6 @@ class LabelingApp(tk.Tk):
                     "Y": [],
                     "Onset": "",          # important: clear onset
                     "Bodypart": option,   # keep limb name for consistency if needed
-                    "Look": "No",
                     "Zones": [],
                     "Touch": None,
                 }
@@ -1434,7 +1433,6 @@ class LabelingApp(tk.Tk):
                 rec['X'] = xs
                 rec['Y'] = ys
                 rec['Zones'] = zones
-                rec['Look'] = "No"  # or keep existing
                 # keep Onset as-is for remaining points; you can also coerce if you prefer:
                 # rec['Onset'] = "ON" if any remaining were added with ON else ""
 
@@ -1589,7 +1587,6 @@ class LabelingApp(tk.Tk):
                 "Y": [int(y_pos)],
                 "Onset": onset,
                 "Bodypart": option,
-                "Look": "No",
                 # IMPORTANT: store zones per point (list-of-lists)
                 "Zones": [zone_results],   # <- one entry per point
                 "Touch": None,
@@ -1610,7 +1607,6 @@ class LabelingApp(tk.Tk):
 
             rec['Bodypart'] = option
             rec['Onset'] = onset
-            rec['Look'] = "No"
 
         self.mark_bundle_changed()
         # Repaint immediately so the dot appears without waiting for the
@@ -3038,21 +3034,14 @@ class LabelingApp(tk.Tk):
 
         # ensure bundle & this limb's record exist
         b = self._ensure_bundle(frame)
-        rec = b.get(limb) or {"X": [], "Y": [], "Onset": "", "Bodypart": limb, "Look": "", "Zones": [], "Touch": None}
+        rec = b.get(limb) or {"X": [], "Y": [], "Onset": "", "Bodypart": limb, "Zones": [], "Touch": None}
         b[limb] = rec
 
         limb_params = self._ensure_limb_params(rec)
         key = self._limb_param_key_for_index(param_number)
         prev = limb_params.get(key)
         # None -> ON -> OFF -> None
-        if prev is None or prev == "":
-            new_state = "ON"
-        elif prev == "ON":
-            new_state = "OFF"
-        elif prev == "OFF":
-            new_state = "None"
-        else:
-            new_state = None
+        new_state = self._param_next_state(prev)
         limb_params[key] = new_state
 
         # reflect on button color

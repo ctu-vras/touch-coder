@@ -137,12 +137,16 @@ A truncated config (see C1) raises `JSONDecodeError` on startup → hard crash w
 ## MEDIUM
 
 ### M1 — `toggle_limb_parameter` stores the string `"None"` instead of `None`
+> **Fix plan:** [fix_M1.md](done/fix_M1.md)
+
 **File:** `labeling_app.py:2969`. The OFF→clear transition sets `new_state = "None"` (a string), whereas global params use real `None` (`_param_next_state`). The literal `"None"` is then persisted into `LimbParams` JSON and round-trips forever. Inconsistent and pollutes research data.
 
 ### M2 — `mark_bundle_changed(index=None)` ignores its argument
 **File:** `labeling_app.py:1075-1088`. Always marks `self.video.current_frame`, though many callers pass a specific `idx`/`frame`. Currently benign (callers pass the current frame) but a latent trap: any future call that marks a *non-current* frame will silently mark the wrong one. Either honor the argument or drop it.
 
 ### M3 — `_Look` / gaze data is never exported
+> **Fix plan:** [fix_M3.md](done/fix_M3.md)
+
 **Files:** `data_utils.py:523-528` (export writes only `_X/_Y/_Onset/_Zones` — no `_Look`) vs `:390` (recovery reads `{limb}_Look`). The export schema has no Look column, so export→unified recovery always yields `Look=""`. `Look` also appears hardcoded to `"No"` in the click handlers, so it looks vestigial — but the mismatch is confusing and, if gaze was ever meant to live here, it's silently dropped. **Confirm whether gaze is intentionally captured only via the global "Looking" parameter**, and if so remove the dead `_Look` handling.
 
 ### M4 — Division by zero when FPS probe returns 0
@@ -166,6 +170,8 @@ A truncated config (see C1) raises `JSONDecodeError` on startup → hard crash w
 **File:** `labeling_app.py:3626-3637` + `custom_confirm_close`. It saves, shuts down the loader pool (`cancel_futures=True`), then asks "Do you want to close?". Clicking **Cancel** keeps the window open but the loader pool is already dead → buffering silently stops working for the rest of the session. Ask first, then tear down.
 
 ### M10 — `parse_xy` silently drops non-digit coordinates → X/Y/Zones desync
+> **Fix plan:** [fix_M10.md](done/fix_M10.md)
+
 **File:** `data_utils.py:361-364`. `... if x.strip().isdigit()` discards negatives/floats/whitespace-mangled tokens, so a bad X can survive in Y (or vice-versa), misaligning the paired click lists during export→unified recovery.
 
 ### M11 — Pose `ScaleFactor` not clamped on load
