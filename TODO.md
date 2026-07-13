@@ -18,12 +18,5 @@ Each gets a fix plan under `to_do/` before implementation. Move to `DONE.md` whe
 > "Export schema impact: none". Locked by `tests/test_export_schema.py`. See
 > [docs/HANDOFF.md](docs/HANDOFF.md).
 
-### High
-- **H2** Per-edit O(N) timeline rebuild stalls long videos in 3D mode. — plan: [fix_H2.md](docs/reviews/2026-07-12/to_do/fix_H2.md)
-- **H3** "Incremental" saves are full re-read + full rewrite every time. — plan: [fix_H3.md](docs/reviews/2026-07-12/to_do/fix_H3.md)
-
-### Medium
-- **M9** `on_close` logic inverted; Cancel leaves a half-dead app. — plan: [fix_M9.md](docs/reviews/2026-07-12/to_do/fix_M9.md)
-
 ### Low / cleanup
 - **L1–L12** See review.md (binding scope, dead branches, encodings, dup imports, hardcoded version, etc.).

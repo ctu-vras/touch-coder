@@ -85,7 +85,7 @@ When re-reading the existing unified pose CSV to upsert, a parse failure is caug
 **Fix:** All widget access must be marshalled to the UI thread via `self.after(0, …)`. Let the playback thread only *advance state* and schedule the redraw.
 
 ### H2 — Per-edit O(N) timeline rebuild stalls long videos in 3D mode
-> **Fix plan:** [fix_H2.md](to_do/fix_H2.md)
+> **Fix plan:** [fix_H2.md](done/fix_H2.md)
 
 **File:** `labeling_app.py:1075-1088` (`mark_bundle_changed` clears `_pose_timeline_state_cache`), `:1835-1884` (`_build_pose_timeline_state`), `:2013-2075` (`_draw_pose_timeline2`).
 
@@ -94,7 +94,7 @@ Every pose edit sets `_pose_timeline_state_cache = None`. The next timeline draw
 **Fix:** Maintain the timeline state incrementally (update only the edited frame's contribution), or debounce rebuilds, or cache the rasterized overview and only invalidate affected columns.
 
 ### H3 — "Incremental" saves are full re-read + full rewrite every time
-> **Fix plan:** [fix_H3.md](to_do/fix_H3.md)
+> **Fix plan:** [fix_H3.md](done/fix_H3.md)
 
 **Files:** `data_utils.py:200-234`, `pose_mismatch_data.py:169-237`, and `export_from_unified` / `export_pose_dataset` (build a dict for every frame `0..total`).
 
@@ -171,6 +171,8 @@ A truncated config (see C1) raises `JSONDecodeError` on startup → hard crash w
 **File:** `pose_mismatch_data.py:113`. The touch loaders were explicitly moved to `itertuples` to fix a "4 rows in 20s" freeze; the pose loader (the active mode) still uses `iterrows` and will reproduce that freeze on large datasets.
 
 ### M9 — `on_close` logic is inverted; Cancel leaves a half-dead app
+> **Fix plan:** [fix_M9.md](done/fix_M9.md)
+
 **File:** `labeling_app.py:3626-3637` + `custom_confirm_close`. It saves, shuts down the loader pool (`cancel_futures=True`), then asks "Do you want to close?". Clicking **Cancel** keeps the window open but the loader pool is already dead → buffering silently stops working for the rest of the session. Ask first, then tear down.
 
 ### M10 — `parse_xy` silently drops non-digit coordinates → X/Y/Zones desync

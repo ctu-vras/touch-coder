@@ -5,13 +5,14 @@ CSV loader. Pure functions where possible; controller passes what’s needed.
 """
 
 import csv
+import io
 import json
 import os
 import time
 import pandas as pd
 from typing import TypedDict, NotRequired, List, Optional, Dict
 
-from atomic_io import atomic_write
+from atomic_io import atomic_write, durable_append
 # --- ADD to data_utils.py (near the top with other imports) ---
 from typing import TypedDict, Dict, Optional
 import json
@@ -115,27 +116,74 @@ def empty_bundle() -> FrameBundle:
         "Params": {},
     }
 
+
+UNIFIED_COLUMNS = ["Frame", "Note", "Params", "LH", "RH", "LL", "RL"]
+UNIFIED_COMPACT_FACTOR = 2
+
+
+def _unified_row(frame: int, bundle: FrameBundle) -> dict:
+    return {
+        "Frame": frame,
+        "Note": bundle.get("Note"),
+        "Params": json.dumps(bundle.get("Params", {})),
+        "LH": json.dumps(bundle["LH"]),
+        "RH": json.dumps(bundle["RH"]),
+        "LL": json.dumps(bundle["LL"]),
+        "RL": json.dumps(bundle["RL"]),
+    }
+
+
+def _read_unified_journal(csv_path: str):
+    try:
+        return pd.read_csv(csv_path), False
+    except pd.errors.ParserError:
+        with open(csv_path, "rb") as f:
+            data = f.read()
+        if data.endswith(b"\n"):
+            raise
+        last_newline = data.rfind(b"\n")
+        if last_newline < 0:
+            raise
+        print(
+            f"WARNING: Ignoring crash-torn final unified row and repairing journal → {csv_path}",
+            flush=True,
+        )
+        return pd.read_csv(io.BytesIO(data[: last_newline + 1])), True
+
+
+def _compact_unified_dataset(
+    csv_path: str,
+    frames: Dict[int, FrameBundle],
+    rows_on_disk: int,
+    *,
+    force: bool = False,
+) -> None:
+    distinct_frames = len(frames)
+    if not distinct_frames or (
+        not force and rows_on_disk <= distinct_frames * UNIFIED_COMPACT_FACTOR
+    ):
+        return
+    rows = [_unified_row(frame, frames[frame]) for frame in sorted(frames)]
+    df = pd.DataFrame(rows, columns=UNIFIED_COLUMNS)
+    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
+    print(
+        f"INFO: Unified compacted {rows_on_disk} journal rows to "
+        f"{distinct_frames} distinct frames → {csv_path}"
+    )
+
 def save_unified_dataset(csv_path: str, total_frames: int, frames: Dict[int, FrameBundle], changed_only: bool = True) -> None:
     """
-    Incremental save of unified CSV.
-    - If no changed frames: do NOT overwrite the file (keep previous rows).
-    - If there are changed frames: merge them into the on-disk file (by Frame) and write the union.
-    Always keeps columns stable, and prints clear debug info.
+    Append changed frames to the unified CSV journal.
+
+    Duplicate frame rows intentionally resolve last-writer-wins in the loader;
+    load-time compaction bounds journal growth without making each save depend
+    on the amount of previously persisted data.
     """
     if not csv_path:
         return
 
     # 1) collect rows for changed frames
     changed_rows = []
-    changed_frames = []
-
-    def bundle_is_changed(b: FrameBundle) -> bool:
-        # NEW: if the frame's bundle-level flag is set, it's dirty
-        if b.get("Changed"):
-            return True
-        # existing per-limb flags still count
-        return any(isinstance(b.get(limb), dict) and b[limb].get("changed")
-                   for limb in ("LH", "RH", "LL", "RL"))
 
     for f in range(total_frames + 1):
         b = frames.get(f)
@@ -146,56 +194,24 @@ def save_unified_dataset(csv_path: str, total_frames: int, frames: Dict[int, Fra
             # Full write: ensure we always have a bundle to serialize
             if not isinstance(b, dict):
                 b = empty_bundle()
-        changed_frames.append(f)
-        changed_rows.append({
-            "Frame": f,
-            "Note": b.get("Note"),
-            "Params": json.dumps(b.get("Params", {})),
-            "LH": json.dumps(b["LH"]),
-            "RH": json.dumps(b["RH"]),
-            "LL": json.dumps(b["LL"]),
-            "RL": json.dumps(b["RL"]),
-        })
+        changed_rows.append(_unified_row(f, b))
 
     if changed_only and not changed_rows:
         print(f"DEBUG: Unified → {csv_path}")
         print(f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, rows_written=0 (skipped writing; kept previous file)")
         return
 
-    # 2) load existing on-disk rows (if any), then upsert changed_rows by Frame
-    existing_map: Dict[int, dict] = {}
-    if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
-        try:
-            existing_df = pd.read_csv(csv_path)
-            for _, r in existing_df.iterrows():
-                try:
-                    fr = int(r["Frame"])
-                except Exception:
-                    continue
-                existing_map[fr] = {
-                    "Frame": fr,
-                    "Note": (None if pd.isna(r.get("Note")) else r.get("Note")),
-                    "Params": r.get("Params"),
-                    "LH": r.get("LH"),
-                    "RH": r.get("RH"),
-                    "LL": r.get("LL"),
-                    "RL": r.get("RL"),
-                }
-        except pd.errors.EmptyDataError:
-            pass  # treat as no existing rows
-
-    # upsert
-    for row in changed_rows:
-        existing_map[row["Frame"]] = row
-
-    # 3) write union (sorted by Frame); ensure header even if union empty
-    union_rows = [existing_map[k] for k in sorted(existing_map.keys())]
-    cols = ["Frame", "Note", "Params", "LH", "RH", "LL", "RL"]
-    df = pd.DataFrame(union_rows, columns=cols)
-    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
+    df = pd.DataFrame(changed_rows, columns=UNIFIED_COLUMNS)
+    durable_append(
+        csv_path,
+        lambda f, is_new_file: df.to_csv(f, index=False, header=is_new_file),
+    )
 
     print(f"DEBUG: Unified → {csv_path}")
-    print(f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, rows_written={len(changed_rows)}, union_rows={len(union_rows)}")
+    print(
+        f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, "
+        f"rows_appended={len(changed_rows)}"
+    )
 
 def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBundle]:
     frames: Dict[int, FrameBundle] = {}
@@ -210,7 +226,7 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
             return frames
         t0 = time.time()
         print("DEBUG: load_unified_dataset: pd.read_csv starting...", flush=True)
-        df = pd.read_csv(csv_path)
+        df, recovered_torn_tail = _read_unified_journal(csv_path)
         print(f"DEBUG: load_unified_dataset: pd.read_csv done in {time.time() - t0:.2f}s "
               f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
     except pd.errors.EmptyDataError:
@@ -299,6 +315,7 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
         except Exception:
             pass
     print(f"DEBUG: Unified loaded rows={len(frames)} in {time.time() - iter_start:.1f}s", flush=True)
+    _compact_unified_dataset(csv_path, frames, total_rows, force=recovered_torn_tail)
     return frames
 
 def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[int, FrameBundle]:

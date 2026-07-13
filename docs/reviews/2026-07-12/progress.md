@@ -10,20 +10,20 @@ This page tracks whether each review finding has an implementation plan and whet
 
 | Metric | Progress |
 |---|---:|
-| Actionable findings fixed | 🟢 **8 / 33 (24%)** |
-| Actionable findings still open | **25 / 33 (76%)** |
+| Actionable findings fixed | 🟢 **11 / 33 (33%)** |
+| Actionable findings still open | **22 / 33 (67%)** |
 | Findings with a written plan | **20 / 33 (61%)** |
-| Open findings with a plan | 🟣 **12** |
+| Open findings with a plan | 🟣 **9** |
 | Open findings without a plan | ⚪ **13** |
 | Superseded findings | ⚫ **1** |
 
 | Severity | Total | 🟢 Fixed | 🟣 Planned | ⚪ No plan | ⚫ Superseded |
 |---|---:|---:|---:|---:|---:|
 | 🔴 Critical | 4 | 3 | 0 | 0 | 1 |
-| 🟠 High | 6 | 4 | 2 | 0 | 0 |
-| 🟡 Medium | 12 | 1 | 10 | 1 | 0 |
+| 🟠 High | 6 | 6 | 0 | 0 | 0 |
+| 🟡 Medium | 12 | 2 | 9 | 1 | 0 |
 | 🔵 Low / cleanup | 12 | 0 | 0 | 12 | 0 |
-| **Total** | **34** | **8** | **12** | **13** | **1** |
+| **Total** | **34** | **11** | **9** | **13** | **1** |
 
 ## Legend
 
@@ -40,8 +40,8 @@ This page tracks whether each review finding has an implementation plan and whet
 | C3 | Sort Frames is broken | 🔴 Critical | ➖ Superseded | ⚫ No fix required; feature is being removed |
 | C4 | Pose save can discard all prior rows after a read error | 🔴 Critical | [✅ Plan](done/fix_C4.md) | 🟢 Fixed |
 | H1 | Tkinter is called from background threads | 🟠 High | [✅ Plan](done/fix_H1.md) | 🟢 Fixed |
-| H2 | Per-edit O(N) timeline rebuild | 🟠 High | [✅ Plan](to_do/fix_H2.md) | 🟣 Not fixed |
-| H3 | Incremental saves perform a full read and rewrite | 🟠 High | [✅ Plan](to_do/fix_H3.md) | 🟣 Not fixed |
+| H2 | Per-edit O(N) timeline rebuild | 🟠 High | [✅ Plan](done/fix_H2.md) | 🟢 Fixed |
+| H3 | Incremental saves perform a full read and rewrite | 🟠 High | [✅ Plan](done/fix_H3.md) | 🟢 Fixed |
 | H4 | Config loaders crash on corrupt JSON | 🟠 High | [✅ Plan](done/fix_H4.md) | 🟢 Fixed |
 | H5 | OpenCV extraction fallback has no failure signal | 🟠 High | [✅ Plan](done/fix_H5.md) | 🟢 Fixed |
 | H6 | `LimbView` mutates on read and has a dead backing store | 🟠 High | [✅ Plan](done/fix_H6.md) | 🟢 Fixed |
@@ -53,7 +53,7 @@ This page tracks whether each review finding has an implementation plan and whet
 | M6 | Missing UTF-8 encoding on text file operations | 🟡 Medium | [✅ Plan](to_do/fix_M6.md) | 🟣 Not fixed |
 | M7 | Resource leaks and O(n²) frame-extraction polling | 🟡 Medium | ❌ No plan | ⚪ Not fixed |
 | M8 | Pose loader uses slow `iterrows()` | 🟡 Medium | [✅ Plan](to_do/fix_M8.md) | 🟣 Not fixed |
-| M9 | Canceling close leaves the app half shut down | 🟡 Medium | [✅ Plan](to_do/fix_M9.md) | 🟣 Not fixed |
+| M9 | Canceling close leaves the app half shut down | 🟡 Medium | [✅ Plan](done/fix_M9.md) | 🟢 Fixed |
 | M10 | `parse_xy` can desynchronize X/Y/Zones | 🟡 Medium | [✅ Plan](to_do/fix_M10.md) | 🟣 Not fixed |
 | M11 | Pose `ScaleFactor` is not clamped on load | 🟡 Medium | [✅ Plan](to_do/fix_M11.md) | 🟣 Not fixed |
 | M12 | Analysis hides read errors and loses transition data | 🟡 Medium | [✅ Plan](to_do/fix_M12.md) | 🟣 Not fixed |

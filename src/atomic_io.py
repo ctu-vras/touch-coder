@@ -54,3 +54,37 @@ def atomic_write(path, write_fn, *, encoding="utf-8", newline="", keep_backup=Fa
         except OSError as cleanup_err:
             print(f"WARN: atomic_write temp cleanup failed for {tmp}: {cleanup_err}")
         raise
+
+
+def durable_append(path, write_fn, *, encoding="utf-8", newline=""):
+    """Append to `path`, flush to disk, and roll back caught write failures.
+
+    A process or OS crash can still leave a partial final row, but all bytes that
+    existed before the append remain untouched. For exceptions raised in this
+    process, truncate back to the original length so callers can safely retry.
+    `write_fn(file, is_new_file)` receives whether it must emit a header.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    original_size = os.path.getsize(path) if os.path.exists(path) else 0
+    is_new_file = original_size == 0
+    mode = "w" if is_new_file else "a"
+
+    try:
+        with open(path, mode, encoding=encoding, newline=newline) as f:
+            write_fn(f, is_new_file)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        try:
+            if original_size == 0:
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                with open(path, "r+b") as f:
+                    f.truncate(original_size)
+                    f.flush()
+                    os.fsync(f.fileno())
+        except OSError as rollback_err:
+            print(f"ERROR: durable_append rollback failed for {path}: {rollback_err}")
+        raise

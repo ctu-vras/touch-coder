@@ -71,7 +71,7 @@ User input (clicks / keys)
          ├─► mutates Video.frames[frame] (the in-memory FrameBundle)
          ├─► marks bundle "Changed" = True
          └─► repaints diagram canvas + timelines
-                                              ┌─► save_unified_dataset (changed-only upsert)
+                                              ┌─► save_unified_dataset (changed-only journal append)
 On Save / Close ─► LabelingApp.save_data ─────┼─► export_from_unified  (full legacy schema)
                                               └─► write_export_metadata (JSON sidecar)
                                                      └ pose mode uses save_pose_dataset / export_pose_dataset
@@ -159,7 +159,7 @@ Each labeled video produces a self-contained folder:
 Labeled_data/<video_name>/
 ├── data/                             # Working state (load/save round-trips here)
 │   ├── <video>_unified.csv           # Touch mode: in-memory FrameBundle dict serialized
-│   │                                 #             (one row per CHANGED frame; upsert by Frame)
+│   │                                 #             (changed-row journal; last Frame row wins)
 │   │   OR (in 3D mode) the unified pose CSV with ScaleRaw/Factor/Set + Joints JSON
 │   ├── <video>_clothes.txt           # Coordinates + auto-detected zones from Clothes dialog
 │   ├── <video>_notes.csv             # Per-frame freeform notes
@@ -176,7 +176,7 @@ Labeled_data/<video_name>/
 
 The split between `data/<video>_unified.csv` and `export/<video>_export.csv` is deliberate:
 
-- **Unified CSV** is the source of truth for round-trips. Saves are *incremental* -- only frames whose `Changed` flag is set are upserted into the on-disk file (preserving previous rows if no edits exist this session).
+- **Unified CSV** is the source of truth for round-trips. Saves are *incremental* -- only frames whose `Changed` flag is set are appended. Re-edited frames produce duplicate `Frame` rows; loaders resolve them last-writer-wins and atomically compact the journal when its row count exceeds twice the number of distinct frames.
 - **Export CSV** is rewritten from scratch each save with one row per frame in the canonical legacy column order. Downstream consumers (Analysis, external tooling) read this file.
 
 If a unified CSV is missing on load, the app first tries to recover from the export CSV (`import_unified_from_export`), falling back to legacy per-limb CSVs (`csv_to_dict`) if needed.

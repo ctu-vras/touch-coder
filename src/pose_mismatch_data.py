@@ -1,17 +1,12 @@
 import json
+import io
 import os
 import time
 from typing import Dict, Optional
 
 import pandas as pd
 
-from atomic_io import atomic_write
-
-
-class PoseUnifiedReadError(RuntimeError):
-    """Existing 3D unified CSV exists but is unparseable, so the incremental save
-    cannot safely merge prior rows. Raised (instead of overwriting) to protect the
-    already-saved history from being replaced with only this session's changes."""
+from atomic_io import atomic_write, durable_append
 
 
 POSE_JOINTS = [
@@ -29,6 +24,20 @@ POSE_JOINTS = [
     "R_SHOULDER",
     "NECK",
 ]
+
+POSE_UNIFIED_COLUMNS = [
+    "Frame",
+    "Note",
+    "Params",
+    "ScaleRaw",
+    "ScaleFactor",
+    "ScaleSet",
+    "HeadScaleRaw",
+    "HeadScaleFactor",
+    "HeadScaleSet",
+    "Joints",
+]
+UNIFIED_COMPACT_FACTOR = 2
 
 
 def empty_pose_joint_map() -> Dict[str, dict]:
@@ -149,6 +158,65 @@ def ensure_pose_bundle(bundle: Optional[dict]) -> dict:
     return bundle
 
 
+def _pose_unified_row(frame: int, bundle: dict) -> dict:
+    bundle = ensure_pose_bundle(bundle)
+    return {
+        "Frame": frame,
+        "Note": bundle.get("Note"),
+        "Params": json.dumps(bundle.get("Params") or {}),
+        "ScaleRaw": bundle.get("ScaleRaw", 0.0),
+        "ScaleFactor": bundle.get(
+            "ScaleFactor", scale_raw_to_factor(bundle.get("ScaleRaw", 0.0))
+        ),
+        "ScaleSet": bool(bundle.get("ScaleSet", False)),
+        "HeadScaleRaw": bundle.get("HeadScaleRaw", 1.0),
+        "HeadScaleFactor": bundle.get(
+            "HeadScaleFactor", scale_raw_to_factor(bundle.get("HeadScaleRaw", 1.0))
+        ),
+        "HeadScaleSet": bool(bundle.get("HeadScaleSet", False)),
+        "Joints": json.dumps(bundle.get("Joints") or {}),
+    }
+
+
+def _read_pose_journal(csv_path: str):
+    try:
+        return pd.read_csv(csv_path), False
+    except pd.errors.ParserError:
+        with open(csv_path, "rb") as f:
+            data = f.read()
+        if data.endswith(b"\n"):
+            raise
+        last_newline = data.rfind(b"\n")
+        if last_newline < 0:
+            raise
+        print(
+            f"WARNING: Ignoring crash-torn final 3D unified row and repairing journal → {csv_path}",
+            flush=True,
+        )
+        return pd.read_csv(io.BytesIO(data[: last_newline + 1])), True
+
+
+def _compact_pose_dataset(
+    csv_path: str,
+    frames: Dict[int, dict],
+    rows_on_disk: int,
+    *,
+    force: bool = False,
+) -> None:
+    distinct_frames = len(frames)
+    if not distinct_frames or (
+        not force and rows_on_disk <= distinct_frames * UNIFIED_COMPACT_FACTOR
+    ):
+        return
+    rows = [_pose_unified_row(frame, frames[frame]) for frame in sorted(frames)]
+    df = pd.DataFrame(rows, columns=POSE_UNIFIED_COLUMNS)
+    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
+    print(
+        f"INFO: 3D unified compacted {rows_on_disk} journal rows to "
+        f"{distinct_frames} distinct frames → {csv_path}"
+    )
+
+
 def load_pose_dataset(csv_path: str) -> Dict[int, dict]:
     frames: Dict[int, dict] = {}
     if not (csv_path and os.path.exists(csv_path)):
@@ -156,7 +224,7 @@ def load_pose_dataset(csv_path: str) -> Dict[int, dict]:
     try:
         if os.path.getsize(csv_path) == 0:
             return frames
-        df = pd.read_csv(csv_path)
+        df, recovered_torn_tail = _read_pose_journal(csv_path)
     except Exception as e:
         print(f"ERROR: Failed to read 3D unified CSV: {e}")
         return frames
@@ -222,6 +290,7 @@ def load_pose_dataset(csv_path: str) -> Dict[int, dict]:
         f"via itertuples in {time.perf_counter() - iter_start:.2f}s",
         flush=True,
     )
+    _compact_pose_dataset(csv_path, frames, len(df), force=recovered_torn_tail)
     return frames
 
 
@@ -230,38 +299,6 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
         return
 
     changed_rows = []
-    existing_map: Dict[int, dict] = {}
-
-    if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
-        try:
-            existing_df = pd.read_csv(csv_path)
-            for _, row in existing_df.iterrows():
-                try:
-                    frame = int(row["Frame"])
-                except Exception:
-                    continue
-                existing_map[frame] = {
-                    "Frame": frame,
-                    "Note": None if pd.isna(row.get("Note")) else row.get("Note"),
-                    "Params": row.get("Params"),
-                    "ScaleRaw": row.get("ScaleRaw"),
-                    "ScaleFactor": row.get("ScaleFactor"),
-                    "ScaleSet": row.get("ScaleSet"),
-                    "HeadScaleRaw": row.get("HeadScaleRaw") if "HeadScaleRaw" in row else 1.0,
-                    "HeadScaleFactor": row.get("HeadScaleFactor") if "HeadScaleFactor" in row else 1.0,
-                    "HeadScaleSet": row.get("HeadScaleSet") if "HeadScaleSet" in row else False,
-                    "Joints": row.get("Joints"),
-                }
-        except pd.errors.EmptyDataError:
-            # Header-only / no data rows: genuinely nothing to preserve. Safe to proceed.
-            print(f"DEBUG: 3D unified has no data rows (EmptyDataError) → {csv_path}; "
-                  f"treating existing as empty.")
-        except Exception as e:
-            # Genuine parse failure (e.g. a truncated file from an interrupted save, C1).
-            # Do NOT overwrite: writing now would drop every prior frame.
-            print(f"ERROR: Failed to read existing 3D unified CSV → {csv_path}: {e}. "
-                  f"Aborting save to avoid overwriting previously-saved rows.")
-            raise PoseUnifiedReadError(csv_path) from e
 
     for frame in range(total_frames + 1):
         bundle = frames.get(frame)
@@ -269,45 +306,20 @@ def save_pose_dataset(csv_path: str, total_frames: int, frames: Dict[int, dict],
             continue
         if not isinstance(bundle, dict):
             bundle = empty_pose_bundle()
-        bundle = ensure_pose_bundle(bundle)
-        changed_rows.append(
-            {
-                "Frame": frame,
-                "Note": bundle.get("Note"),
-                "Params": json.dumps(bundle.get("Params") or {}),
-                "ScaleRaw": bundle.get("ScaleRaw", 0.0),
-                "ScaleFactor": bundle.get("ScaleFactor", scale_raw_to_factor(bundle.get("ScaleRaw", 0.0))),
-                "ScaleSet": bool(bundle.get("ScaleSet", False)),
-                "HeadScaleRaw": bundle.get("HeadScaleRaw", 1.0),
-                "HeadScaleFactor": bundle.get(
-                    "HeadScaleFactor", scale_raw_to_factor(bundle.get("HeadScaleRaw", 1.0))
-                ),
-                "HeadScaleSet": bool(bundle.get("HeadScaleSet", False)),
-                "Joints": json.dumps(bundle.get("Joints") or {}),
-            }
-        )
+        changed_rows.append(_pose_unified_row(frame, bundle))
 
     if changed_only and not changed_rows:
         return
 
-    for row in changed_rows:
-        existing_map[row["Frame"]] = row
-
-    cols = [
-        "Frame",
-        "Note",
-        "Params",
-        "ScaleRaw",
-        "ScaleFactor",
-        "ScaleSet",
-        "HeadScaleRaw",
-        "HeadScaleFactor",
-        "HeadScaleSet",
-        "Joints",
-    ]
-    out_rows = [existing_map[k] for k in sorted(existing_map.keys())]
-    df = pd.DataFrame(out_rows, columns=cols)
-    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
+    df = pd.DataFrame(changed_rows, columns=POSE_UNIFIED_COLUMNS)
+    durable_append(
+        csv_path,
+        lambda f, is_new_file: df.to_csv(f, index=False, header=is_new_file),
+    )
+    print(
+        f"DEBUG: 3D unified → {csv_path}; changed_only={changed_only}, "
+        f"rows_appended={len(changed_rows)}"
+    )
 
 
 def export_pose_dataset(

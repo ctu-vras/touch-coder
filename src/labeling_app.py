@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import copy
 import shutil
 import re
 import traceback
@@ -36,9 +37,9 @@ from data_utils import (
 )
 from frame_utils import check_items_count, create_frames, FrameExtractionError
 from perf_utils import PerfLogger
+from pose_timeline import build_pose_timeline_state, update_pose_timeline_state
 from pose_mismatch_data import (
     POSE_JOINTS,
-    PoseUnifiedReadError,
     empty_pose_bundle,
     ensure_pose_bundle,
     export_pose_dataset,
@@ -92,16 +93,18 @@ POSE_QUALITY_COLOR = "#3a9d5d"
 # =============================================================================
 # Standalone helpers
 # =============================================================================
-def custom_confirm_close(root, saved: bool):
+def custom_confirm_close(root) -> bool:
     win = tk.Toplevel(root)
     win.title("Close Application")
     win.geometry("600x300")
     win.resizable(True, True)
     win.grab_set()  # makes it modal
 
+    confirmed = False
+
     msg = tk.Label(
         win,
-        text="Do you want to close the application?\n\nProgress was saved." if saved else "Do you want to close the application?\n\n",
+        text="Do you want to close the application?\n\nYour progress will be saved.",
         font=("Segoe UI", 11),
         justify="center",
         wraplength=350
@@ -112,12 +115,15 @@ def custom_confirm_close(root, saved: bool):
     btn_frame.pack(pady=10)
 
     def on_yes():
-        
+        nonlocal confirmed
+        confirmed = True
         win.destroy()
-        root.destroy()
 
     ttk.Button(btn_frame, text="OK", command=on_yes).pack(side="left", padx=10)
     ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side="left", padx=10)
+    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    win.wait_window()
+    return confirmed
 
 
 # =============================================================================
@@ -141,6 +147,7 @@ class LabelingApp(tk.Tk):
         self._zone_centroids = {}
         self._zone_dir = None
         self._pose_timeline_state_cache = None
+        self._pose_state_dirty_from = None
         self._base_diagram_image = None
         self._outline_image = None
         self._pose_canvas_dirty = False
@@ -261,10 +268,6 @@ class LabelingApp(tk.Tk):
         "body": ("ScaleRaw", "ScaleFactor", "ScaleSet", "ScaleAutoCarry"),
         "head": ("HeadScaleRaw", "HeadScaleFactor", "HeadScaleSet", "HeadScaleAutoCarry"),
     }
-    _POSE_SCALE_CACHE_KEYS = {
-        "body": ("scale_raw", "scale_factor"),
-        "head": ("head_scale_raw", "head_scale_factor"),
-    }
 
     def _pose_carry_attr(self, kind: str) -> str:
         return "current_pose_head_scale" if kind == "head" else "current_pose_scale"
@@ -303,7 +306,6 @@ class LabelingApp(tk.Tk):
         if not self.video:
             return False
         raw_key, factor_key, set_key, auto_key = self._POSE_SCALE_KEYS[kind]
-        cache_raw_key, cache_factor_key = self._POSE_SCALE_CACHE_KEYS[kind]
         bundle = self._ensure_bundle(frame)
         raw = float(raw)
         factor = scale_raw_to_factor(raw)
@@ -319,11 +321,7 @@ class LabelingApp(tk.Tk):
         bundle[set_key] = True
         bundle[auto_key] = bool(auto_carried)
         bundle["Changed"] = True
-        if self._pose_timeline_state_cache is not None:
-            cached = self._pose_timeline_state_cache.get(frame)
-            if isinstance(cached, dict):
-                cached[cache_raw_key] = raw
-                cached[cache_factor_key] = factor
+        self._mark_pose_state_dirty(frame)
         self._timeline_dirty = True
         if redraw_overview:
             self._timeline2_dirty = True
@@ -511,6 +509,7 @@ class LabelingApp(tk.Tk):
         self._zone_centroids = {}
         self._zone_dir = None
         self._pose_timeline_state_cache = None
+        self._pose_state_dirty_from = None
         self._last_pose_render_signature = None
 
     def _clear_frame_children(self, frame):
@@ -1080,6 +1079,13 @@ class LabelingApp(tk.Tk):
         if "Params" not in b or not isinstance(b["Params"], dict):
             b["Params"] = {}
         return b["Params"]
+
+    def _mark_pose_state_dirty(self, frame):
+        dirty_from = getattr(self, "_pose_state_dirty_from", None)
+        self._pose_state_dirty_from = (
+            int(frame) if dirty_from is None else min(int(dirty_from), int(frame))
+        )
+
     def mark_bundle_changed(self, index=None):
         if self.video is None:
             return
@@ -1090,7 +1096,8 @@ class LabelingApp(tk.Tk):
             b["Changed"] = True
             self._timeline_dirty = True
             self._timeline2_dirty = True
-            self._pose_timeline_state_cache = None
+            if LabelingApp.is_pose_mode(self):
+                LabelingApp._mark_pose_state_dirty(self, idx)
             # optional: keep your terminal print
             if hasattr(self, "notify_bundle_changed"):
                 self.notify_bundle_changed(idx)
@@ -1850,53 +1857,23 @@ class LabelingApp(tk.Tk):
 
     def _build_pose_timeline_state(self):
         with self.perf.time("pose_build_timeline_state"):
-            if self._pose_timeline_state_cache is not None:
-                return self._pose_timeline_state_cache
-            active_joints = set()
-            state = {}
-            active_scale_raw = 1.0
-            active_scale_factor = 1.0
-            active_head_scale_raw = 1.0
-            active_head_scale_factor = 1.0
-            for frame in range(self.video.total_frames + 1):
-                bundle = ensure_pose_bundle(self.video.frames.get(frame))
-                joints = bundle.get("Joints") or {}
-                events = {}
-                for joint in POSE_JOINTS:
-                    rec = joints.get(joint, {})
-                    event = rec.get("Event") if isinstance(rec, dict) else None
-                    if event == "ON":
-                        active_joints.add(joint)
-                        events[joint] = "ON"
-                    elif event == "OFF":
-                        active_joints.discard(joint)
-                        events[joint] = "OFF"
-                if bundle.get("ScaleSet"):
-                    active_scale_raw = float(bundle.get("ScaleRaw", 1.0) or 1.0)
-                    active_scale_factor = float(
-                        bundle.get("ScaleFactor", scale_raw_to_factor(active_scale_raw)) or 1.0
-                    )
-                else:
-                    active_scale_raw = 1.0
-                    active_scale_factor = 1.0
-                if bundle.get("HeadScaleSet"):
-                    active_head_scale_raw = float(bundle.get("HeadScaleRaw", 1.0) or 1.0)
-                    active_head_scale_factor = float(
-                        bundle.get("HeadScaleFactor", scale_raw_to_factor(active_head_scale_raw)) or 1.0
-                    )
-                else:
-                    active_head_scale_raw = 1.0
-                    active_head_scale_factor = 1.0
-                state[frame] = {
-                    "events": events,
-                    "active": set(active_joints),
-                    "active_count": len(active_joints),
-                    "scale_raw": active_scale_raw,
-                    "scale_factor": active_scale_factor,
-                    "head_scale_raw": active_head_scale_raw,
-                    "head_scale_factor": active_head_scale_factor,
-                }
+            state = self._pose_timeline_state_cache
+            dirty_from = self._pose_state_dirty_from
+            if state is None:
+                state = build_pose_timeline_state(
+                    self.video.frames, self.video.total_frames
+                )
+            elif dirty_from is not None:
+                state = update_pose_timeline_state(
+                    state,
+                    self.video.frames,
+                    self.video.total_frames,
+                    dirty_from,
+                )
+            else:
+                return state
             self._pose_timeline_state_cache = state
+            self._pose_state_dirty_from = None
             return state
 
     def _draw_pose_timeline(self):
@@ -2513,6 +2490,57 @@ class LabelingApp(tk.Tk):
                 win.destroy()
 
         return update, close
+
+    def _run_export_with_progress(self, export_fn):
+        """Run a full export off the Tk thread while a modal stays responsive."""
+        self._assert_ui_thread()
+        win = tk.Toplevel(self)
+        win.title("Saving Data")
+        win.geometry("520x160")
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        tk.Label(win, text="Building full export...", font=("Segoe UI", 11)).pack(
+            pady=(18, 8)
+        )
+        status = tk.Label(win, text="Writing export snapshot", font=("Segoe UI", 10))
+        status.pack()
+        bar = ttk.Progressbar(win, mode="indeterminate", length=460)
+        bar.pack(pady=10)
+        bar.start(12)
+        win.update_idletasks()
+
+        started = time.perf_counter()
+        result = {}
+        done = Event()
+
+        def worker():
+            try:
+                export_fn()
+            except Exception as exc:
+                print("ERROR: Full export failed on worker thread:", flush=True)
+                traceback.print_exc()
+                result["error"] = exc
+            finally:
+                done.set()
+
+        Thread(target=worker, name="data-export", daemon=True).start()
+
+        def poll_worker():
+            if done.is_set():
+                bar.stop()
+                win.destroy()
+                return
+            elapsed = time.perf_counter() - started
+            status.config(text=f"Writing export snapshot - elapsed {self._format_duration(elapsed)}")
+            win.after(100, poll_worker)
+
+        win.after(100, poll_worker)
+        win.wait_window()
+        if "error" in result:
+            raise result["error"]
 
     def _copy_file_with_progress(self, src_path, dest_path, progress_cb, chunk_size=8 * 1024 * 1024):
         total_bytes = os.path.getsize(src_path)
@@ -3166,7 +3194,7 @@ class LabelingApp(tk.Tk):
     def save_data(self):
         if not self.video or not self.video.frames_dir:
             print("INFO: Save skipped (no video loaded).")
-            return
+            return True
         self._persist_video_time()
         self.preview_before_save(changed_only=True)
         print("INFO: Saving (unified & export)...")
@@ -3185,16 +3213,7 @@ class LabelingApp(tk.Tk):
 
         from data_utils import save_unified_dataset, export_from_unified, extract_zones_from_file
         if self.is_pose_mode():
-            try:
-                save_pose_dataset(unified_path, self.video.total_frames, self.video.frames)
-            except PoseUnifiedReadError:
-                traceback.print_exc()
-                messagebox.showerror(
-                    "Save aborted",
-                    "The existing 3D data file could not be read and was NOT overwritten, "
-                    "so no annotations were lost. Please check the file, then save again.",
-                )
-                return  # abort save_data â†’ Changed flags stay set; export not rewritten
+            save_pose_dataset(unified_path, self.video.total_frames, self.video.frames)
             clothes_list = None
         else:
             save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
@@ -3233,31 +3252,47 @@ class LabelingApp(tk.Tk):
             labeling_time_seconds=self._current_video_time_s(),
         )
 
+        export_frames = copy.deepcopy(self.video.frames)
+        total_frames = self.video.total_frames
+        frame_rate = self.frame_rate
+
         if self.is_pose_mode():
-            export_pose_dataset(
-                self.video.frames,
-                export_path,
-                total_frames=self.video.total_frames,
-                frame_rate=self.frame_rate,
+            self._run_export_with_progress(
+                lambda: export_pose_dataset(
+                    export_frames,
+                    export_path,
+                    total_frames=total_frames,
+                    frame_rate=frame_rate,
+                )
             )
         else:
-            export_from_unified(
-                self.video.frames,
-                export_path,
-                self.video.program_version,
-                self.video_name,
-                self.labeling_mode,
-                self.frame_rate,
-                clothes_list,
-                total_frames=self.video.total_frames,
-                param_labels=param_labels,
-                limb_param_labels=limb_param_labels,
+            program_version = self.video.program_version
+            video_name = self.video_name
+            labeling_mode = self.labeling_mode
+            self._run_export_with_progress(
+                lambda: export_from_unified(
+                    export_frames,
+                    export_path,
+                    program_version,
+                    video_name,
+                    labeling_mode,
+                    frame_rate,
+                    clothes_list,
+                    total_frames=total_frames,
+                    param_labels=param_labels,
+                    limb_param_labels=limb_param_labels,
+                )
             )
         print("INFO: Save completed successfully.")
         for f, b in self.video.frames.items():
-            if isinstance(b, dict) and b.get("Changed"):
+            if (
+                isinstance(b, dict)
+                and b.get("Changed")
+                and b == export_frames.get(f)
+            ):
                 b["Changed"] = False
         print("DEBUG: Cleared bundle 'Changed' flags after save.")
+        return True
 
     # === Analysis / Sort / Playback ============================================
     def analysis(self):
@@ -3702,17 +3737,27 @@ class LabelingApp(tk.Tk):
 
     # === App Lifecycle (close, position) =======================================
     def on_close(self):
-        saved = False
+        if not custom_confirm_close(self):
+            return
         if self.video is not None:
-            self.save_data()
+            try:
+                ok = self.save_data()
+            except Exception:
+                traceback.print_exc()
+                ok = False
+            if not ok and not messagebox.askyesno(
+                "Save failed",
+                "Saving failed - your latest changes are NOT on disk (see the console).\n"
+                "Close anyway and lose them?",
+            ):
+                return
             self.save_last_position()
             self._finalize_video_time()
-            saved = True
         try:
             self._loader_pool.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             print(f"WARN: loader pool shutdown failed: {e}")
-        custom_confirm_close(self, saved)
+        self.destroy()
 
     def _last_position_path(self, data_dir: str, video_name: str) -> str:
         return os.path.join(data_dir, f"{video_name}_last_position.json")
