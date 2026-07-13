@@ -1,7 +1,9 @@
 import tkinter as tk
+from tkinter import ttk
 from PIL import Image, ImageTk
 
 from resource_utils import resource_path
+import theme
 
 DEFAULT_CLOTH_DIAGRAM_SCALE = 1.0
 DEFAULT_CLOTH_DOT_RADIUS = 7
@@ -17,28 +19,45 @@ class ClothApp:
         diagram_scale=DEFAULT_CLOTH_DIAGRAM_SCALE,
         dot_radius=DEFAULT_CLOTH_DOT_RADIUS,
     ):
-        # Vytvoření nového okna pomocí Toplevel
         self.top_level = tk.Toplevel(master)
         self.top_level.title("Clothes App")
+        self.top_level.configure(bg=theme.SURFACE)
         self.on_save_callback = on_save_callback
         self.on_close_callback = on_close_callback
         self.diagram_scale = float(diagram_scale)
         self.dot_radius = int(dot_radius)
 
-        self.controls = tk.Frame(self.top_level, bg='lightgrey')
-        self.controls.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        self.content = ttk.Frame(self.top_level, padding=16)
+        self.content.grid(row=0, column=0, sticky="nsew")
+        self.top_level.columnconfigure(0, weight=1)
+        self.top_level.rowconfigure(0, weight=1)
+        self.content.columnconfigure(0, weight=1)
+        self.content.rowconfigure(1, weight=1)
+
+        self.controls = ttk.Frame(self.content)
+        self.controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.controls.columnconfigure(0, weight=1)
 
-        save_btn = tk.Button(self.controls, text="Save", command=self.on_save)
+        save_btn = ttk.Button(
+            self.controls,
+            text="Save",
+            command=self.on_save,
+            style="Tool.TButton",
+            takefocus=0,
+        )
         save_btn.pack(side="left", padx=5)
 
-        save_close_btn = tk.Button(self.controls, text="Save & Close", command=self.on_close)
+        save_close_btn = ttk.Button(
+            self.controls,
+            text="Save & Close",
+            command=self.on_close,
+            style="Tool.TButton",
+            takefocus=0,
+        )
         save_close_btn.pack(side="left", padx=5)
 
-        self.f = tk.Frame(self.top_level, bg='lightgrey')
+        self.f = ttk.Frame(self.content)
         self.f.grid(row=1, column=0, sticky="nsew")
-        self.top_level.columnconfigure(0, weight=1)
-        self.top_level.rowconfigure(1, weight=1)
 
         self.dots = {}
         self.img = Image.open(resource_path("icons/diagram.png"))
@@ -47,7 +66,13 @@ class ClothApp:
             Image.LANCZOS,
         )
         self.photo2 = ImageTk.PhotoImage(self.img)
-        self.canvas2 = tk.Canvas(self.f, width=self.img.width, height=self.img.height, bg='lightgrey')
+        self.canvas2 = tk.Canvas(
+            self.f,
+            width=self.img.width,
+            height=self.img.height,
+            bg=theme.SURFACE,
+            highlightthickness=0,
+        )
 
         self.canvas2.pack(padx=10, pady=10)
         self.canvas2.create_image(0, 0, anchor="nw", image=self.photo2)
@@ -60,9 +85,8 @@ class ClothApp:
                 self._create_dot(x, y)
 
         self.top_level.update_idletasks()
-        controls_h = self.controls.winfo_reqheight()
-        win_w = self.img.width + 20
-        win_h = self.img.height + 20 + controls_h + 10
+        win_w = self.content.winfo_reqwidth()
+        win_h = self.content.winfo_reqheight()
         self.top_level.geometry(f"{win_w}x{win_h}")
 
     def on_save(self):
@@ -76,12 +100,10 @@ class ClothApp:
         self.top_level.destroy()
 
     def _create_dot(self, x, y):
-        dot_id = self.canvas2.create_oval(
-            x - self.dot_radius,
-            y - self.dot_radius,
-            x + self.dot_radius,
-            y + self.dot_radius,
-            fill="red",
+        dot_id = self.canvas2.create_image(
+            x,
+            y,
+            image=theme.dot_sprite(theme.CLOTH_DOT, self.dot_radius),
         )
         self.dots[dot_id] = (x, y)
         return dot_id

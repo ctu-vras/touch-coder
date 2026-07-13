@@ -6,11 +6,13 @@ implements the callback methods (e.g., load_video, on_timeline_click, etc.).
 """
 
 import tkinter as tk
+from tkinter import ttk
 from PIL import Image, ImageTk
 import sys
 
 from config_utils import load_config
 from resource_utils import resource_path
+import theme
 
 def _load_diagram_scale():
     """Read a numeric diagram_scale from config.json; default to 1.0 if missing."""
@@ -37,6 +39,7 @@ def build_ui(app):
     # === Root window basics ===
     app.title('TinyTouch')
     app.geometry('1200x1000')
+    app.minsize(1100, 800)
     app.protocol("WM_DELETE_WINDOW", app.on_close)
 
     # === Top-level state used by the GUI ===
@@ -45,9 +48,9 @@ def build_ui(app):
     app.current_dot_item_id = [None]
     app.touch = False
     app.is_touch_timeline = False
-    app.color_start = "blue"
-    app.color_during = "yellow"
-    app.color_end = "red"
+    app.color_start = theme.TOUCH_START
+    app.color_during = theme.TL_DURING
+    app.color_end = theme.TOUCH_END
     app.frame_cache = {}
     app.image = None
     app.img_buffer = {}
@@ -70,10 +73,10 @@ def build_ui(app):
     app.dot_size = dot_size
 
     # === Containers ===
-    app.video_frame = tk.Frame(app, bg='#bcbcbc')
-    app.timeline_frame = tk.Frame(app, bg='grey', height=50)
-    app.control_frame = tk.Frame(app, bg='lightgrey', height=100)
-    app.diagram_frame = tk.Frame(app, bg='lightgrey')
+    app.video_frame = tk.Frame(app, bg=theme.VIDEO_BG, bd=0)
+    app.timeline_frame = tk.Frame(app, bg=theme.SURFACE_ALT, height=50)
+    app.control_frame = tk.Frame(app, bg=theme.SURFACE, height=100)
+    app.diagram_frame = ttk.Frame(app)
 
     # Match original grid positions exactly
     app.video_frame.grid(row=1, column=0, sticky="nsew")
@@ -86,12 +89,22 @@ def build_ui(app):
     app.rowconfigure(2, weight=0)
 
     # === Timeline canvases ===
-    app.timeline2_canvas = tk.Canvas(app.timeline_frame, bg='lightgrey', height=30)
-    app.timeline2_canvas.pack(fill=tk.X, expand=True, pady=(0, 5))
+    app.timeline2_canvas = tk.Canvas(
+        app.timeline_frame,
+        bg=theme.SURFACE,
+        height=30,
+        highlightthickness=0,
+    )
+    app.timeline2_canvas.pack(fill=tk.X, expand=True, padx=8, pady=(6, 4))
     app.timeline2_canvas.bind("<Button-1>", app.on_timeline2_click)
 
-    app.timeline_canvas = tk.Canvas(app.timeline_frame, bg='grey', height=50)
-    app.timeline_canvas.pack(fill=tk.X, expand=True, pady=(10, 0))
+    app.timeline_canvas = tk.Canvas(
+        app.timeline_frame,
+        bg=theme.SURFACE_ALT,
+        height=50,
+        highlightthickness=0,
+    )
+    app.timeline_canvas.pack(fill=tk.X, expand=True, padx=8, pady=(4, 8))
     app.timeline_canvas.bind("<Button-1>", app.on_timeline_click)
     if sys.platform.startswith("linux"):
         app.bind("<Button-1>", app.global_click, add="+")   # safer on Linux
@@ -113,85 +126,164 @@ def build_ui(app):
 
 def _build_controls(app):
     # Use pack-based rows to keep layout stable as buttons change
-    top_row = tk.Frame(app.control_frame, bg='lightgrey')
+    top_row = ttk.Frame(app.control_frame)
     top_row.pack(fill="x", padx=5, pady=5)
 
-    bottom_row = tk.Frame(app.control_frame, bg='lightgrey')
+    bottom_row = ttk.Frame(app.control_frame)
     bottom_row.pack(fill="x", padx=5, pady=(0, 5))
 
-    left_top = tk.Frame(top_row, bg='lightgrey')
+    left_top = ttk.Frame(top_row)
     left_top.pack(side="left")
 
-    right_top = tk.Frame(top_row, bg='lightgrey')
+    right_top = ttk.Frame(top_row)
     right_top.pack(side="right")
 
-    right_top_buttons = tk.Frame(right_top, bg='lightgrey')
+    right_top_buttons = ttk.Frame(right_top)
     right_top_buttons.pack(side="top", anchor="e")
 
-    right_top_status = tk.Frame(right_top, bg='lightgrey')
+    right_top_status = ttk.Frame(right_top)
     right_top_status.pack(side="top", anchor="e")
 
-    app.load_video_btn = tk.Button(left_top, text="Load Video", command=app.load_video)
+    app.load_video_btn = ttk.Button(
+        left_top,
+        text="Load Video",
+        command=app.load_video,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     app.load_video_btn.pack(side="left", padx=5)
 
-    save_btn = tk.Button(left_top, text="Save", command=app.save_data)
+    save_btn = ttk.Button(
+        left_top,
+        text="Save",
+        command=app.save_data,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     save_btn.pack(side="left", padx=5)
 
-    settings_btn = tk.Button(left_top, text="Settings", command=app.open_settings)
+    settings_btn = ttk.Button(
+        left_top,
+        text="Settings",
+        command=app.open_settings,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     settings_btn.pack(side="left", padx=5)
 
-    app.analysis_btn = tk.Button(left_top, text="Analysis", command=app.analysis)
+    app.analysis_btn = ttk.Button(
+        left_top,
+        text="Analysis",
+        command=app.analysis,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     app.analysis_btn.pack(side="left", padx=5)
 
-    app.cloth_btn = tk.Button(left_top, text="Clothes", command=app.open_cloth_app)
+    app.cloth_btn = ttk.Button(
+        left_top,
+        text="Clothes",
+        command=app.open_cloth_app,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     app.cloth_btn.pack(side="left", padx=5)
 
-    back_10_frame_btn = tk.Button(right_top_buttons, text="<<", command=lambda: app.next_frame(-app.jump_frame_count))
+    back_10_frame_btn = ttk.Button(
+        right_top_buttons,
+        text="<<",
+        command=lambda: app.next_frame(-app.jump_frame_count),
+        style="Tool.TButton",
+        takefocus=0,
+    )
     back_10_frame_btn.pack(side="left", padx=5)
 
-    back_frame_btn = tk.Button(right_top_buttons, text="<", command=lambda: app.next_frame(-1))
+    back_frame_btn = ttk.Button(
+        right_top_buttons,
+        text="<",
+        command=lambda: app.next_frame(-1),
+        style="Tool.TButton",
+        takefocus=0,
+    )
     back_frame_btn.pack(side="left", padx=5)
 
-    next_frame_btn = tk.Button(right_top_buttons, text=">", command=lambda: app.next_frame(1))
+    next_frame_btn = ttk.Button(
+        right_top_buttons,
+        text=">",
+        command=lambda: app.next_frame(1),
+        style="Tool.TButton",
+        takefocus=0,
+    )
     next_frame_btn.pack(side="left", padx=5)
 
-    next_10_frame_btn = tk.Button(right_top_buttons, text=">>", command=lambda: app.next_frame(app.jump_frame_count))
+    next_10_frame_btn = ttk.Button(
+        right_top_buttons,
+        text=">>",
+        command=lambda: app.next_frame(app.jump_frame_count),
+        style="Tool.TButton",
+        takefocus=0,
+    )
     next_10_frame_btn.pack(side="left", padx=5)
 
-    play_btn = tk.Button(right_top_buttons, text="Play", command=app.play_video)
+    play_btn = ttk.Button(
+        right_top_buttons,
+        text="Play",
+        command=app.play_video,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     play_btn.pack(side="left", padx=5)
 
-    stop_btn = tk.Button(right_top_buttons, text="Stop", command=app.stop_video)
+    stop_btn = ttk.Button(
+        right_top_buttons,
+        text="Stop",
+        command=app.stop_video,
+        style="Tool.TButton",
+        takefocus=0,
+    )
     stop_btn.pack(side="left", padx=5)
 
-    app.frame_counter_label = tk.Label(right_top_status, text="0 / 0", bg='lightgrey')
+    app.frame_counter_label = ttk.Label(right_top_status, text="0 / 0")
     app.frame_counter_label.pack(side="left", padx=5)
 
-    app.time_counter_label = tk.Label(right_top_status, text="0 / 0", bg='lightgrey')
+    app.time_counter_label = ttk.Label(right_top_status, text="0 / 0")
     app.time_counter_label.pack(side="left", padx=10)
 
-    left_bottom = tk.Frame(bottom_row, bg='lightgrey')
+    left_bottom = ttk.Frame(bottom_row)
     left_bottom.pack(side="left")
 
-    right_bottom = tk.Frame(bottom_row, bg='lightgrey')
+    right_bottom = ttk.Frame(bottom_row)
     right_bottom.pack(side="right")
 
-    app.mode_label = tk.Label(left_bottom, text="Mode: -----", bg='lightgrey')
+    app.mode_label = theme.StatusChip(
+        left_bottom,
+        label="Mode:",
+        color=theme.STATUS_OK,
+        text="-----",
+    )
     app.mode_label.pack(side="left", padx=5)
 
-    app.loading_label = tk.Label(left_bottom, text="Buffer Loaded", bg='lightgrey')
+    app.loading_label = theme.StatusChip(
+        left_bottom,
+        label="Buffer:",
+        color=theme.STATUS_OK,
+        text="Loaded",
+    )
     app.loading_label.pack(side="left", padx=10)
 
     # Keep the label for updates, but do not show it in the UI.
-    app.framerate_label = tk.Label(left_bottom, text="Frame Rate: -----", bg='lightgrey')
+    app.framerate_label = ttk.Label(left_bottom, text="Frame Rate: -----")
 
-    app.min_touch_length_label = tk.Label(left_bottom, text="Minimal Touch Length: -----", bg='lightgrey')
+    app.min_touch_length_label = ttk.Label(
+        left_bottom,
+        text="Minimal Touch Length: -----",
+    )
     app.min_touch_length_label.pack(side="left", padx=10)
 
-    app.jump_label = tk.Label(left_bottom, text="Jump: -----", bg='lightgrey')
+    app.jump_label = ttk.Label(left_bottom, text="Jump: -----")
     app.jump_label.pack(side="left", padx=10)
 
-    app.name_label = tk.Label(right_bottom, text="Video Name: -----", bg='lightgrey')
+    app.name_label = ttk.Label(right_bottom, text="Video Name: -----")
     app.name_label.pack(side="left", padx=10)
 
 
@@ -203,7 +295,13 @@ def _build_diagram_panel(app, scale):
     base_w, base_h = 450, 696
     w, h = int(base_w * scale), int(base_h * scale)
 
-    app.diagram_canvas = tk.Canvas(app.diagram_frame, bg='lightgrey', width=w, height=h)
+    app.diagram_canvas = tk.Canvas(
+        app.diagram_frame,
+        bg=theme.SURFACE,
+        width=w,
+        height=h,
+        highlightthickness=0,
+    )
     app.diagram_canvas.pack(padx=10, pady=10, side="top", anchor="n")
 
     try:
@@ -221,54 +319,114 @@ def _build_diagram_panel(app, scale):
     app.diagram_canvas.bind("<Button-1>", lambda event: app.on_diagram_click(event, is_onset=True))
     app.diagram_canvas.bind("<Button-2>", app.on_middle_click)
 
-    app.mode_controls_frame = tk.Frame(app.diagram_frame, bg="lightgrey")
+    app.mode_controls_frame = ttk.Frame(app.diagram_frame)
     app.mode_controls_frame.pack(fill="x", anchor="n")
 
-    separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
-    separator.pack(fill="x", padx=5, pady=5)
+    separator = ttk.Separator(app.diagram_frame, orient="horizontal")
+    separator.pack(fill="x", padx=10, pady=5)
 
-    app.mode_param_label = tk.Label(app.diagram_frame, text="Parameters", font=("Arial", 10, "bold"), bg='lightgrey')
+    app.mode_param_label = ttk.Label(
+        app.diagram_frame,
+        text="Parameters",
+        font=theme.FONT_BOLD,
+    )
     app.mode_param_label.pack(anchor="n", pady=(5, 0))
-    app.mode_param_subtitle = tk.Label(app.diagram_frame, text="(Limb-Specific)", font=("Arial", 8), bg='lightgrey')
+    app.mode_param_subtitle = ttk.Label(
+        app.diagram_frame,
+        text="(Limb-Specific)",
+        font=theme.FONT_SUBTITLE,
+    )
     app.mode_param_subtitle.pack(anchor="n", pady=(0, 5))
 
-    app.limb_parameter_frame = tk.Frame(app.diagram_frame, bg="lightgrey")
+    app.limb_parameter_frame = ttk.Frame(app.diagram_frame)
     app.limb_parameter_frame.pack(fill="x", anchor="n")
     app.limb_par1_btn = None
     app.limb_par2_btn = None
     app.limb_par3_btn = None
 
-    separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
-    separator.pack(fill="x", padx=5, pady=5)
+    separator = ttk.Separator(app.diagram_frame, orient="horizontal")
+    separator.pack(fill="x", padx=10, pady=5)
 
-    label_after_separator3 = tk.Label(app.diagram_frame, text="Parameters", font=("Arial", 10, "bold"), bg='lightgrey')
+    label_after_separator3 = ttk.Label(
+        app.diagram_frame,
+        text="Parameters",
+        font=theme.FONT_BOLD,
+    )
     label_after_separator3.pack(anchor="n", pady=(5, 2))
-    app.par1_btn = tk.Button(app.diagram_frame, text="Parameter 1",
-                             command=lambda: app.parameter_dic_insert(1), width=15, height=1)
-    app.par1_btn.pack(anchor="n")
-    app.par2_btn = tk.Button(app.diagram_frame, text="Parameter 2",
-                             command=lambda: app.parameter_dic_insert(2), width=15, height=1)
-    app.par2_btn.pack(anchor="n")
-    app.par3_btn = tk.Button(app.diagram_frame, text="Parameter 3",
-                             command=lambda: app.parameter_dic_insert(3), width=15, height=1)
-    app.par3_btn.pack(anchor="n")
-
-    separator = tk.Frame(app.diagram_frame, height=2, bd=1, relief="sunken")
-    separator.pack(fill="x", padx=5, pady=5)
-
-    app.select_frame_button = tk.Button(
-        app.diagram_frame, text="Select Frame", command=app.select_frame, width=15, height=1
+    app.par1_btn = ttk.Button(
+        app.diagram_frame,
+        text="Parameter 1",
+        command=lambda: app.parameter_dic_insert(1),
+        width=15,
+        style="StateNeutral.TButton",
+        takefocus=0,
     )
-    app.select_frame_button.pack(side="bottom", padx=5, pady=5)
-
-    app.save_note_button = tk.Button(
-        app.diagram_frame, text="Save Note", command=app.save_note, width=15, height=1
+    app.par1_btn.pack(anchor="n", pady=4)
+    app.par2_btn = ttk.Button(
+        app.diagram_frame,
+        text="Parameter 2",
+        command=lambda: app.parameter_dic_insert(2),
+        width=15,
+        style="StateNeutral.TButton",
+        takefocus=0,
     )
-    app.save_note_button.pack(side="bottom",padx=5, pady=5)
+    app.par2_btn.pack(anchor="n", pady=4)
+    app.par3_btn = ttk.Button(
+        app.diagram_frame,
+        text="Parameter 3",
+        command=lambda: app.parameter_dic_insert(3),
+        width=15,
+        style="StateNeutral.TButton",
+        takefocus=0,
+    )
+    app.par3_btn.pack(anchor="n", pady=4)
 
-    # Note entry & helpers (kept on root to mirror original placement)
-    app.note_entry = tk.Entry(app.diagram_frame, width=40)
-    app.note_entry.pack(side="bottom", fill="x", padx=5, pady=5)
+    separator = ttk.Separator(app.diagram_frame, orient="horizontal")
+    separator.pack(fill="x", padx=10, pady=5)
+
+    note_controls = ttk.Frame(app.diagram_frame)
+    note_controls.pack(side="bottom", anchor="center", pady=(6, 10))
+
+    app.note_entry = tk.Text(
+        note_controls,
+        width=30,
+        height=2,
+        wrap="word",
+        font=theme.FONT_BASE,
+        bg=theme.NEUTRAL,
+        fg=theme.TEXT,
+        insertbackground=theme.TEXT,
+        bd=0,
+        padx=6,
+        pady=4,
+        highlightbackground=theme.BORDER,
+        highlightcolor=theme.ACCENT,
+        highlightthickness=1,
+    )
+    app.note_entry.pack(anchor="center")
+
+    note_button_row = ttk.Frame(note_controls)
+    note_button_row.pack(fill="x", pady=(6, 0))
+    note_button_row.columnconfigure(0, weight=1, uniform="note_actions")
+    note_button_row.columnconfigure(1, weight=1, uniform="note_actions")
+
+    app.save_note_button = ttk.Button(
+        note_button_row,
+        text="Save Note",
+        command=app.save_note,
+        style="Tool.TButton",
+        takefocus=0,
+    )
+    app.save_note_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+    app.select_frame_button = ttk.Button(
+        note_button_row,
+        text="Select Frame",
+        command=app.select_frame,
+        style="Tool.TButton",
+        takefocus=0,
+    )
+    app.select_frame_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
     if hasattr(app, "rebuild_annotation_controls"):
         app.rebuild_annotation_controls()

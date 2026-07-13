@@ -10,6 +10,7 @@ from PIL import Image, ImageTk
 
 from atomic_io import atomic_write
 from resource_utils import get_app_dir, resource_path
+import theme
 
 
 def get_config_path() -> str:
@@ -138,18 +139,24 @@ def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
     video_obj.parameter2_name = p2
     video_obj.parameter3_name = p3
     if par_buttons.get(1):
-        par_buttons[1].config(text=f"{p1}", bg='lightgrey')
+        par_buttons[1].config(text=f"{p1}")
+        theme.set_button_state(par_buttons[1], None)
     if par_buttons.get(2):
-        par_buttons[2].config(text=f"{p2}", bg='lightgrey')
+        par_buttons[2].config(text=f"{p2}")
+        theme.set_button_state(par_buttons[2], None)
     if par_buttons.get(3):
-        par_buttons[3].config(text=f"{p3}", bg='lightgrey')
+        par_buttons[3].config(text=f"{p3}")
+        theme.set_button_state(par_buttons[3], None)
 
     video_obj.limb_parameter1_name = config.get('limb_parameter1', CONFIG_DEFAULTS['limb_parameter1'])
     video_obj.limb_parameter2_name = config.get('limb_parameter2', CONFIG_DEFAULTS['limb_parameter2'])
     video_obj.limb_parameter3_name = config.get('limb_parameter3', CONFIG_DEFAULTS['limb_parameter3'])
     if limb_par_buttons.get(1):
-        limb_par_buttons[1].config(text=f"{video_obj.limb_parameter1_name}", bg='lightgrey')
+        limb_par_buttons[1].config(text=f"{video_obj.limb_parameter1_name}")
+        theme.set_button_state(limb_par_buttons[1], None)
     if limb_par_buttons.get(2):
-        limb_par_buttons[2].config(text=f"{video_obj.limb_parameter2_name}", bg='lightgrey')
+        limb_par_buttons[2].config(text=f"{video_obj.limb_parameter2_name}")
+        theme.set_button_state(limb_par_buttons[2], None)
     if limb_par_buttons.get(3):
-        limb_par_buttons[3].config(text=f"{video_obj.limb_parameter3_name}", bg='lightgrey')
+        limb_par_buttons[3].config(text=f"{video_obj.limb_parameter3_name}")
+        theme.set_button_state(limb_par_buttons[3], None)

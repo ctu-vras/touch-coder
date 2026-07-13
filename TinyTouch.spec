@@ -3,6 +3,8 @@
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_data_files
+
 spec_path = os.path.abspath(sys.argv[0]) if sys.argv else os.path.abspath("TinyTouch.spec")
 project_root = os.path.abspath(os.path.dirname(spec_path))
 src_root = os.path.join(project_root, "src")
@@ -11,6 +13,7 @@ datas = [
     (os.path.join(project_root, "config.json"), "."),
     (os.path.join(project_root, "icons"), "icons"),
 ]
+datas += collect_data_files("ttkbootstrap")  # localization .msg files
 
 a = Analysis(
     ["src/main.py"],

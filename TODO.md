@@ -7,6 +7,8 @@
 - Make the app dynamic in terms of size of the UI parts
 - make the timeline blue indicator smoother
 - make UI pretty?
+- timeline moving sootmhhly not per 100 frames
+- new release
 
 ## Code Review — 2026-07-12
 

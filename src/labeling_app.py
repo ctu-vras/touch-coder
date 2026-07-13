@@ -50,6 +50,14 @@ from pose_mismatch_data import (
 from resource_utils import resource_path
 from ui_components import build_ui
 from video_model import Video
+import theme
+from theme import (
+    POSE_BODY_SCALE_COLOR,
+    POSE_BODY_SCALE_OVERLAY_COLOR,
+    POSE_HEAD_SCALE_COLOR,
+    POSE_HEAD_SCALE_OVERLAY_COLOR,
+    POSE_QUALITY_COLOR,
+)
 
 
 # =============================================================================
@@ -82,12 +90,7 @@ POSE_OUTLINE_ALPHA = 90
 
 # Timeline + swatch colors for the two mismatch sliders.
 # Body keeps the original blue palette; head uses a distinct orange.
-POSE_BODY_SCALE_COLOR = "#446a8a"
-POSE_BODY_SCALE_OVERLAY_COLOR = "#113a5c"
-POSE_HEAD_SCALE_COLOR = "#d18a3a"
-POSE_HEAD_SCALE_OVERLAY_COLOR = "#8a4413"
 # Quality (per-joint opacity) slider â€” used only in 3D mismatch mode.
-POSE_QUALITY_COLOR = "#3a9d5d"
 
 
 # =============================================================================
@@ -96,31 +99,48 @@ POSE_QUALITY_COLOR = "#3a9d5d"
 def custom_confirm_close(root) -> bool:
     win = tk.Toplevel(root)
     win.title("Close Application")
-    win.geometry("600x300")
-    win.resizable(True, True)
+    win.geometry("420x180")
+    win.resizable(False, False)
+    win.transient(root)
+    win.configure(bg=theme.SURFACE)
     win.grab_set()  # makes it modal
 
     confirmed = False
 
-    msg = tk.Label(
-        win,
+    content = ttk.Frame(win, padding=16)
+    content.pack(fill="both", expand=True)
+
+    msg = ttk.Label(
+        content,
         text="Do you want to close the application?\n\nYour progress will be saved.",
-        font=("Segoe UI", 11),
+        font=theme.FONT_TITLE,
         justify="center",
         wraplength=350
     )
-    msg.pack(expand=True, fill="both", padx=20, pady=20)
+    msg.pack(expand=True, fill="both")
 
-    btn_frame = tk.Frame(win)
-    btn_frame.pack(pady=10)
+    btn_frame = ttk.Frame(content)
+    btn_frame.pack(pady=(12, 0))
 
     def on_yes():
         nonlocal confirmed
         confirmed = True
         win.destroy()
 
-    ttk.Button(btn_frame, text="OK", command=on_yes).pack(side="left", padx=10)
-    ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side="left", padx=10)
+    ttk.Button(
+        btn_frame,
+        text="OK",
+        command=on_yes,
+        style="Tool.TButton",
+        takefocus=0,
+    ).pack(side="left", padx=5)
+    ttk.Button(
+        btn_frame,
+        text="Cancel",
+        command=win.destroy,
+        style="Tool.TButton",
+        takefocus=0,
+    ).pack(side="left", padx=5)
     win.protocol("WM_DELETE_WINDOW", win.destroy)
     win.wait_window()
     return confirmed
@@ -132,6 +152,7 @@ def custom_confirm_close(root) -> bool:
 class LabelingApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.style = theme.init_style(self)
 
         # Core state (was previously in __init__)
         self.video = None
@@ -528,18 +549,21 @@ class LabelingApp(tk.Tk):
     ):
         var = self._pose_scale_var(kind)
 
-        header = tk.Frame(self.limb_parameter_frame, bg="lightgrey")
+        header = ttk.Frame(self.limb_parameter_frame)
         header.pack(anchor="n", pady=(6, 0))
         # color swatch acts as the legend tying this slider to its timeline line
         tk.Frame(header, bg=swatch_color, width=12, height=12, bd=1, relief="solid").pack(
             side="left", padx=(0, 6)
         )
-        tk.Label(header, text=title, font=("Arial", 10, "bold"), bg="lightgrey").pack(side="left")
+        ttk.Label(header, text=title, font=theme.FONT_BOLD).pack(side="left")
 
-        value_label = tk.Label(self.limb_parameter_frame, text=f"{title.split()[0]}: 1.00x", bg="lightgrey")
+        value_label = ttk.Label(
+            self.limb_parameter_frame,
+            text=f"{title.split()[0]}: 1.00x",
+        )
         value_label.pack(anchor="n")
 
-        controls = tk.Frame(self.limb_parameter_frame, bg="lightgrey")
+        controls = ttk.Frame(self.limb_parameter_frame)
         controls.pack(anchor="n", pady=(2, 2))
 
         widget = tk.Scale(
@@ -551,8 +575,8 @@ class LabelingApp(tk.Tk):
             length=180,
             variable=var,
             command=command,
-            bg="lightgrey",
-            troughcolor=swatch_color,
+            bg=theme.SURFACE,
+            troughcolor=theme.SURFACE_ALT,
             highlightthickness=0,
             takefocus=0,
         )
@@ -564,7 +588,14 @@ class LabelingApp(tk.Tk):
         widget.bind("<Button-4>", lambda _event: "break")
         widget.bind("<Button-5>", lambda _event: "break")
 
-        tk.Button(controls, text="1.00", command=reset_command, width=5, height=1).pack(
+        ttk.Button(
+            controls,
+            text="1.00",
+            command=reset_command,
+            width=5,
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(
             side="left", padx=(6, 0)
         )
 
@@ -583,21 +614,20 @@ class LabelingApp(tk.Tk):
             parent = self.limb_parameter_frame
         var = self.pose_quality_var
 
-        header = tk.Frame(parent, bg="lightgrey")
+        header = ttk.Frame(parent)
         header.pack(anchor="n", pady=(6, 0))
         tk.Frame(header, bg=POSE_QUALITY_COLOR, width=12, height=12, bd=1, relief="solid").pack(
             side="left", padx=(0, 6)
         )
-        tk.Label(header, text="Quality", font=("Arial", 10, "bold"), bg="lightgrey").pack(side="left")
+        ttk.Label(header, text="Quality", font=theme.FONT_BOLD).pack(side="left")
 
-        value_label = tk.Label(
+        value_label = ttk.Label(
             parent,
             text="Quality (click a joint)",
-            bg="lightgrey",
         )
         value_label.pack(anchor="n")
 
-        controls = tk.Frame(parent, bg="lightgrey")
+        controls = ttk.Frame(parent)
         controls.pack(anchor="n", pady=(2, 2))
 
         widget = tk.Scale(
@@ -609,8 +639,8 @@ class LabelingApp(tk.Tk):
             length=180,
             variable=var,
             command=self.on_pose_quality_changed,
-            bg="lightgrey",
-            troughcolor=POSE_QUALITY_COLOR,
+            bg=theme.SURFACE,
+            troughcolor=theme.SURFACE_ALT,
             highlightthickness=0,
             takefocus=0,
         )
@@ -622,7 +652,14 @@ class LabelingApp(tk.Tk):
         widget.bind("<Button-4>", lambda _event: "break")
         widget.bind("<Button-5>", lambda _event: "break")
 
-        tk.Button(controls, text="1.00", command=self.reset_pose_quality, width=5, height=1).pack(
+        ttk.Button(
+            controls,
+            text="1.00",
+            command=self.reset_pose_quality,
+            width=5,
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(
             side="left", padx=(6, 0)
         )
 
@@ -673,10 +710,9 @@ class LabelingApp(tk.Tk):
 
             self._sync_quality_slider_to_selection()
 
-            self.pose_events_label = tk.Label(
+            self.pose_events_label = ttk.Label(
                 self.limb_parameter_frame,
                 text="No joint events",
-                bg="lightgrey",
                 justify="left",
                 wraplength=220,
             )
@@ -686,52 +722,57 @@ class LabelingApp(tk.Tk):
                 self.mode_param_label.config(text="Parameters")
             if getattr(self, "mode_param_subtitle", None):
                 self.mode_param_subtitle.config(text="(Limb-Specific)")
-            tk.Label(
+            ttk.Label(
                 self.mode_controls_frame,
                 text="Limb Selector",
-                font=("Arial", 10, "bold"),
-                bg="lightgrey",
+                font=theme.FONT_BOLD,
             ).pack(anchor="n", pady=(5, 2))
 
+            # Center the selector as one group while keeping labels easy to scan.
+            limb_selector_frame = ttk.Frame(self.mode_controls_frame)
+            limb_selector_frame.pack(anchor="n")
             for text, value in (
                 ("Right Hand", "RH"),
                 ("Left Hand", "LH"),
                 ("Right Leg", "RL"),
                 ("Left Leg", "LL"),
             ):
-                tk.Radiobutton(
-                    self.mode_controls_frame,
+                ttk.Radiobutton(
+                    limb_selector_frame,
                     text=text,
                     variable=self.option_var_1,
                     value=value,
-                    bg="lightgrey",
                     command=self.on_radio_click,
-                ).pack(anchor="n")
+                    takefocus=0,
+                ).pack(anchor="w")
 
-            self.limb_par1_btn = tk.Button(
+            self.limb_par1_btn = ttk.Button(
                 self.limb_parameter_frame,
                 text="Limb Parameter 1",
                 command=lambda: self.toggle_limb_parameter(1),
                 width=15,
-                height=1,
+                style="StateNeutral.TButton",
+                takefocus=0,
             )
-            self.limb_par1_btn.pack(anchor="n")
-            self.limb_par2_btn = tk.Button(
+            self.limb_par1_btn.pack(anchor="n", pady=4)
+            self.limb_par2_btn = ttk.Button(
                 self.limb_parameter_frame,
                 text="Limb Parameter 2",
                 command=lambda: self.toggle_limb_parameter(2),
                 width=15,
-                height=1,
+                style="StateNeutral.TButton",
+                takefocus=0,
             )
-            self.limb_par2_btn.pack(anchor="n")
-            self.limb_par3_btn = tk.Button(
+            self.limb_par2_btn.pack(anchor="n", pady=4)
+            self.limb_par3_btn = ttk.Button(
                 self.limb_parameter_frame,
                 text="Limb Parameter 3",
                 command=lambda: self.toggle_limb_parameter(3),
                 width=15,
-                height=1,
+                style="StateNeutral.TButton",
+                takefocus=0,
             )
-            self.limb_par3_btn.pack(anchor="n")
+            self.limb_par3_btn.pack(anchor="n", pady=4)
 
         self._set_mode_button_states()
 
@@ -1146,16 +1187,16 @@ class LabelingApp(tk.Tk):
         except Exception:
             return False
 
-    def _set_loading_label_async(self, text: str, bg: str):
+    def _set_loading_label_async(self, text: str, color: str):
         current = getattr(self, "_loading_label_state", None)
-        new_state = (text, bg)
+        new_state = (text, color)
         if current == new_state:
             return
         self._loading_label_state = new_state
 
         def _apply():
             if getattr(self, "loading_label", None):
-                self.loading_label.config(text=text, bg=bg)
+                self.loading_label.set(color, text)
 
         self.after(0, _apply)
 
@@ -1486,19 +1527,19 @@ class LabelingApp(tk.Tk):
             ys = frame_data.get('Y', []) if frame_data else []
             onset = frame_data.get('Onset', "OFF") if frame_data else "OFF"
             for x, y in zip(xs, ys):
-                color = 'green' if onset == "ON" else 'red'
-                self.diagram_canvas.create_oval(
-                    x * scale - dot_size, y * scale - dot_size,
-                    x * scale + dot_size, y * scale + dot_size,
-                    fill=color,
+                color = theme.DOT_ONSET if onset == "ON" else theme.DOT_OFFSET
+                self.diagram_canvas.create_image(
+                    x * scale,
+                    y * scale,
+                    image=theme.dot_sprite(color, dot_size),
                 )
             array_xy = getattr(self.video, "last_green", [(None, None)])
             for (x_last, y_last) in array_xy:
                 if x_last is not None:
-                    self.diagram_canvas.create_oval(
-                        x_last * scale - dot_size, y_last * scale - dot_size,
-                        x_last * scale + dot_size, y_last * scale + dot_size,
-                        outline='green', fill='',
+                    self.diagram_canvas.create_image(
+                        x_last * scale,
+                        y_last * scale,
+                        image=theme.dot_sprite(theme.DOT_ONSET, dot_size, hollow=True),
                     )
 
     def periodic_print_dot(self):
@@ -1841,8 +1882,8 @@ class LabelingApp(tk.Tk):
         b = self.video.frames.get(frame, {}) if self.video else {}
         params = (b.get("Params") or {})
         # If any param ON => green; else if any OFF => red; else None
-        if any(v == "ON" for v in params.values()): return "green"
-        if any(v == "OFF" for v in params.values()): return "red"
+        if any(v == "ON" for v in params.values()): return theme.TL_ONSET_MARK
+        if any(v == "OFF" for v in params.values()): return theme.TL_OFFSET_MARK
         return None
 
     def _pose_event_color_at_frame(self, frame):
@@ -1850,9 +1891,9 @@ class LabelingApp(tk.Tk):
         joints = bundle.get("Joints") or {}
         events = [rec.get("Event") for rec in joints.values() if isinstance(rec, dict)]
         if any(event == "ON" for event in events):
-            return "green"
+            return theme.TL_ONSET_MARK
         if any(event == "OFF" for event in events):
-            return "#E57373"
+            return theme.OFF_RED
         return None
 
     def _build_pose_timeline_state(self):
@@ -1876,6 +1917,33 @@ class LabelingApp(tk.Tk):
             self._pose_state_dirty_from = None
             return state
 
+    @staticmethod
+    def _update_timeline_playhead(canvas, item_ids, x, top, bottom):
+        """Create or move the shared 2 px playhead stem and triangle cap."""
+        cap_height = 7
+        stem_top = min(bottom, top + cap_height)
+        line_coords = (x, stem_top, x, bottom)
+        cap_coords = (x - 4, top, x + 4, top, x, stem_top)
+        if item_ids is None:
+            line_id = canvas.create_line(
+                *line_coords,
+                fill=theme.PLAYHEAD,
+                width=2,
+            )
+            cap_id = canvas.create_polygon(
+                *cap_coords,
+                fill=theme.PLAYHEAD,
+                outline="",
+            )
+            return line_id, cap_id
+
+        line_id, cap_id = item_ids
+        canvas.coords(line_id, *line_coords)
+        canvas.coords(cap_id, *cap_coords)
+        canvas.tag_raise(line_id)
+        canvas.tag_raise(cap_id)
+        return item_ids
+
     def _draw_pose_timeline(self):
         canvas_width = self.timeline_canvas.winfo_width()
         canvas_height = self.timeline_canvas.winfo_height()
@@ -1886,10 +1954,13 @@ class LabelingApp(tk.Tk):
             or self._timeline_last_limb != "POSE_3D"
             or self._timeline_canvas_size != (canvas_width, canvas_height)
         )
-        sector_width = canvas_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
+        left_edge = 1
+        right_edge = max(left_edge + 1, canvas_width - 2)
+        top = 1
+        bottom = max(top + 1, canvas_height - 2)
+        drawable_width = right_edge - left_edge
+        sector_width = drawable_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
         offset = self.video.number_frames_in_zone * zone
-        top = 0
-        bottom = canvas_height
         scale_min = 0.7
         scale_max = 1.3
         scale_top = 8
@@ -1899,9 +1970,27 @@ class LabelingApp(tk.Tk):
             pose_state = self._build_pose_timeline_state()
             active_strip_h = 8
 
-            for frame_offset in range(offset, min(offset + self.video.number_frames_in_zone, self.video.total_frames + 1)):
-                left = (frame_offset - offset) * sector_width
+            for frame_offset in range(offset, offset + self.video.number_frames_in_zone):
+                left = left_edge + (frame_offset - offset) * sector_width
                 right = left + sector_width
+                if frame_offset > self.video.total_frames:
+                    self.timeline_canvas.create_rectangle(
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        fill=theme.TL_UNAVAILABLE,
+                        outline="",
+                    )
+                    self.timeline_canvas.create_line(
+                        left + 2,
+                        bottom - 2,
+                        right - 2,
+                        top + 2,
+                        fill=theme.TL_UNAVAILABLE_MARK,
+                        width=1,
+                    )
+                    continue
                 frame_state = pose_state.get(frame_offset, {})
                 scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
                 scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
@@ -1911,7 +2000,11 @@ class LabelingApp(tk.Tk):
                 head_scale_ratio = (head_scale_factor - scale_min) / (scale_max - scale_min)
                 head_scale_ratio = max(0.0, min(1.0, head_scale_ratio))
                 y_head_scale = scale_bottom - (scale_bottom - scale_top) * head_scale_ratio
-                self.timeline_canvas.create_rectangle(left, top, right, bottom, fill="#f1f1f1", outline="#d4d4d4")
+                self.timeline_canvas.create_rectangle(
+                    left, top, right, bottom,
+                    fill=theme.POSE_CELL,
+                    outline="",
+                )
                 self.timeline_canvas.create_line(
                     left + 1, y_scale, right - 1, y_scale, fill=POSE_BODY_SCALE_COLOR, width=2
                 )
@@ -1936,12 +2029,32 @@ class LabelingApp(tk.Tk):
                 on_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "ON")
                 off_count = sum(1 for ev in frame_state.get("events", {}).values() if ev == "OFF")
                 if on_count:
-                    self.timeline_canvas.create_line(mid_x - 1, top + 2, mid_x - 1, bottom - active_strip_h - 2, fill="#2f8f57", width=1)
+                    self.timeline_canvas.create_line(mid_x - 1, top + 2, mid_x - 1, bottom - active_strip_h - 2, fill=theme.POSE_TICK_ON, width=1)
                 if off_count:
-                    self.timeline_canvas.create_line(mid_x + 1, top + 2, mid_x + 1, bottom - active_strip_h - 2, fill="#c56262", width=1)
+                    self.timeline_canvas.create_line(mid_x + 1, top + 2, mid_x + 1, bottom - active_strip_h - 2, fill=theme.POSE_TICK_OFF, width=1)
                 param_color = self.parameter_color_at_frame(frame_offset)
                 if param_color:
                     self.timeline_canvas.create_line(mid_x + 3, top + 2, mid_x + 3, bottom - active_strip_h - 2, fill=param_color, width=2)
+
+            # Draw the grid once over borderless cells so shared edges stay 1 px.
+            self.timeline_canvas.create_rectangle(
+                left_edge,
+                top,
+                right_edge,
+                bottom,
+                fill="",
+                outline=theme.POSE_CELL_BORDER,
+            )
+            for frame in range(1, self.video.number_frames_in_zone):
+                x = left_edge + frame * sector_width
+                self.timeline_canvas.create_line(
+                    x,
+                    top,
+                    x,
+                    bottom,
+                    fill=theme.POSE_CELL_BORDER,
+                    width=1,
+                )
 
             self._timeline_dirty = False
             self._timeline_last_zone = zone
@@ -1951,12 +2064,17 @@ class LabelingApp(tk.Tk):
             self._pose_timeline_scale_overlay_id = None
             self._pose_timeline_head_scale_overlay_id = None
 
-        current_pos = ((self.video.current_frame - offset) / self.video.number_frames_in_zone) * canvas_width
-        left = max(0, min(canvas_width - 4, current_pos))
-        if self._timeline_playhead_id is None:
-            self._timeline_playhead_id = self.timeline_canvas.create_rectangle(left, top, left + 4, bottom, fill="dodgerblue", outline="")
-        else:
-            self.timeline_canvas.coords(self._timeline_playhead_id, left, top, left + 4, bottom)
+        current_pos = left_edge + (
+            (self.video.current_frame - offset + 0.5) / self.video.number_frames_in_zone
+        ) * drawable_width
+        current_pos = min(max(current_pos, left_edge + 4), right_edge - 4)
+        self._timeline_playhead_id = self._update_timeline_playhead(
+            self.timeline_canvas,
+            self._timeline_playhead_id,
+            current_pos,
+            top,
+            bottom,
+        )
 
         current_scale = float(self._get_effective_pose_scale(self.video.current_frame, kind="body")[1] or 1.0)
         scale_ratio = (current_scale - scale_min) / (scale_max - scale_min)
@@ -1966,8 +2084,11 @@ class LabelingApp(tk.Tk):
         head_scale_ratio = (current_head_scale - scale_min) / (scale_max - scale_min)
         head_scale_ratio = max(0.0, min(1.0, head_scale_ratio))
         y_head_scale = scale_bottom - (scale_bottom - scale_top) * head_scale_ratio
-        sector_left = max(0.0, min(canvas_width, (self.video.current_frame - offset) * sector_width))
-        sector_right = max(sector_left + 1.0, min(canvas_width, sector_left + sector_width))
+        sector_left = max(
+            float(left_edge),
+            min(float(right_edge), left_edge + (self.video.current_frame - offset) * sector_width),
+        )
+        sector_right = max(sector_left + 1.0, min(float(right_edge), sector_left + sector_width))
         if self._pose_timeline_scale_overlay_id is None:
             self._pose_timeline_scale_overlay_id = self.timeline_canvas.create_line(
                 sector_left + 1,
@@ -2018,49 +2139,64 @@ class LabelingApp(tk.Tk):
             scale_max = 1.3
 
             with self.perf.time("pose_draw_timeline2_raster"):
-                img = Image.new("RGBA", (max(1, canvas_width), max(1, canvas_height)), (211, 211, 211, 255))
+                img = Image.new(
+                    "RGBA",
+                    (max(1, canvas_width), max(1, canvas_height)),
+                    theme.POSE_OVERVIEW_BG_RGBA,
+                )
                 draw = ImageDraw.Draw(img)
                 total_frames = max(1, self.video.total_frames)
+                left_edge = 1
+                right_edge = max(left_edge + 1, canvas_width - 2)
+                top = 1
+                bottom = max(top + 1, canvas_height - 2)
+                drawable_width = right_edge - left_edge
 
                 for frame in range(self.video.total_frames + 1):
-                    x = int(round((frame / total_frames) * (canvas_width - 1))) if canvas_width > 1 else 0
+                    x = int(round(left_edge + (frame / total_frames) * drawable_width))
                     frame_state = pose_state.get(frame, {})
                     active_count = int(frame_state.get("active_count", 0) or 0)
                     if active_count > 0:
                         shade = max(185, 235 - (active_count * 8))
                         color = (shade, min(255, shade + 12), min(255, shade + 20), 255)
-                        draw.line((x, canvas_height - 8, x, canvas_height), fill=color, width=2)
+                        draw.line((x, bottom - 7, x, bottom - 1), fill=color, width=2)
 
                     scale_factor = float(frame_state.get("scale_factor", 1.0) or 1.0)
                     scale_ratio = (scale_factor - scale_min) / (scale_max - scale_min)
                     scale_ratio = max(0.0, min(1.0, scale_ratio))
                     y_scale = int(round((canvas_height - 10) - ((canvas_height - 14) * scale_ratio)))
-                    draw.point((x, y_scale), fill=(68, 106, 138, 255))
+                    draw.point((x, y_scale), fill=theme.POSE_BODY_SCALE_RGBA)
 
                     head_scale_factor = float(frame_state.get("head_scale_factor", 1.0) or 1.0)
                     head_scale_ratio = (head_scale_factor - scale_min) / (scale_max - scale_min)
                     head_scale_ratio = max(0.0, min(1.0, head_scale_ratio))
                     y_head_scale = int(round((canvas_height - 10) - ((canvas_height - 14) * head_scale_ratio)))
-                    draw.point((x, y_head_scale), fill=(209, 138, 58, 255))
+                    draw.point((x, y_head_scale), fill=theme.POSE_HEAD_SCALE_RGBA)
 
                     events = frame_state.get("events", {})
                     has_on = any(ev == "ON" for ev in events.values())
                     has_off = any(ev == "OFF" for ev in events.values())
-                    if has_on and x - 1 >= 0:
-                        draw.line((x - 1, 0, x - 1, canvas_height - 10), fill=(47, 143, 87, 255), width=1)
-                    if has_off and x + 1 < canvas_width:
-                        draw.line((x + 1, 0, x + 1, canvas_height - 10), fill=(197, 98, 98, 255), width=1)
+                    if has_on and x - 1 >= left_edge:
+                        draw.line((x - 1, top + 1, x - 1, bottom - 9), fill=theme.POSE_TICK_ON_RGBA, width=1)
+                    if has_off and x + 1 <= right_edge:
+                        draw.line((x + 1, top + 1, x + 1, bottom - 9), fill=theme.POSE_TICK_OFF_RGBA, width=1)
 
                     param_color = self.parameter_color_at_frame(frame)
                     if param_color:
                         color_map = {
-                            "green": (0, 128, 0, 255),
-                            "#E57373": (229, 115, 115, 255),
-                            "red": (255, 0, 0, 255),
+                            theme.TL_ONSET_MARK: theme.GLOBAL_PARAM_ON_RGBA,
+                            theme.OFF_RED: theme.POSE_PARAM_OFF_RGBA,
+                            theme.TL_OFFSET_MARK: theme.GLOBAL_PARAM_OFF_RGBA,
                         }
-                        rgba = color_map.get(param_color, (90, 90, 90, 255))
-                        if x + 2 < canvas_width:
-                            draw.line((x + 2, 0, x + 2, canvas_height - 10), fill=rgba, width=1)
+                        rgba = color_map.get(param_color, theme.GLOBAL_PARAM_FALLBACK_RGBA)
+                        if x + 2 <= right_edge:
+                            draw.line((x + 2, top + 1, x + 2, bottom - 9), fill=rgba, width=1)
+
+                draw.rectangle(
+                    (left_edge, top, right_edge, bottom),
+                    outline=theme.POSE_CELL_BORDER,
+                    width=1,
+                )
 
                 self._pose_timeline2_photo = ImageTk.PhotoImage(img)
                 self._pose_timeline2_image_id = self.timeline2_canvas.create_image(
@@ -2074,13 +2210,20 @@ class LabelingApp(tk.Tk):
             self._pose_timeline2_scale_overlay_id = None
             self._pose_timeline2_head_scale_overlay_id = None
 
-        current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width if self.video.total_frames else 0
-        if self._timeline2_playhead_id is None:
-            self._timeline2_playhead_id = self.timeline2_canvas.create_line(
-                current_pos, 0, current_pos, canvas_height, fill="dodgerblue", width=2
-            )
-        else:
-            self.timeline2_canvas.coords(self._timeline2_playhead_id, current_pos, 0, current_pos, canvas_height)
+        left_edge = 1
+        right_edge = max(left_edge + 1, canvas_width - 2)
+        current_pos = left_edge + (
+            (self.video.current_frame / self.video.total_frames) * (right_edge - left_edge)
+            if self.video.total_frames else 0
+        )
+        current_pos = min(max(current_pos, left_edge + 4), right_edge - 4)
+        self._timeline2_playhead_id = self._update_timeline_playhead(
+            self.timeline2_canvas,
+            self._timeline2_playhead_id,
+            current_pos,
+            1,
+            max(2, canvas_height - 2),
+        )
 
         scale_min = 0.7
         scale_max = 1.3
@@ -2146,9 +2289,13 @@ class LabelingApp(tk.Tk):
                 or self._timeline_canvas_size != (canvas_width, canvas_height)
             )
 
-            sector_width = canvas_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
+            left_edge = 1
+            right_edge = max(left_edge + 1, canvas_width - 2)
+            top = 1
+            bottom = max(top + 1, canvas_height - 2)
+            drawable_width = right_edge - left_edge
+            sector_width = drawable_width / self.video.number_frames_in_zone if self.video.number_frames_in_zone else 1
             offset = self.video.number_frames_in_zone * zone
-            top = 0; bottom = canvas_height
 
             if needs_full:
                 self.timeline_canvas.delete("all")
@@ -2159,24 +2306,35 @@ class LabelingApp(tk.Tk):
                 self.is_touch_timeline = False if zone == 0 else self.video.touch_to_next_zone[zone]
 
                 def get_color(frame_idx, data):
-                    if frame_idx > self.video.total_frames: return 'black'
+                    if frame_idx > self.video.total_frames: return theme.TL_UNAVAILABLE
                     details = data.get(frame_idx, {})
                     xs = details.get('X', [])
                     if not xs:
-                        return self.color_during if self.is_touch_timeline else 'lightgrey'
+                        return self.color_during if self.is_touch_timeline else theme.TL_EMPTY
                     if len(xs) >= 1 and xs[0] is not None:
                         if details.get('Onset') == 'ON':
-                            self.is_touch_timeline = True; return 'lightgreen'
+                            self.is_touch_timeline = True; return theme.TL_ON
                         else:
-                            self.is_touch_timeline = False; return '#E57373'
-                    return self.color_during if self.is_touch_timeline else 'lightgrey'
+                            self.is_touch_timeline = False; return theme.TL_OFF
+                    return self.color_during if self.is_touch_timeline else theme.TL_EMPTY
 
                 for frame in range(self.video.number_frames_in_zone):
-                    left = frame * sector_width
+                    left = left_edge + frame * sector_width
                     right = left + sector_width
                     frame_offset = frame + offset
                     color = get_color(frame_offset, data)
-                    self.timeline_canvas.create_rectangle(left, top, right, bottom, fill=color, outline='black')
+                    self.timeline_canvas.create_rectangle(
+                        left, top, right, bottom, fill=color, outline=""
+                    )
+                    if color == theme.TL_UNAVAILABLE:
+                        self.timeline_canvas.create_line(
+                            left + 2,
+                            bottom - 2,
+                            right - 2,
+                            top + 2,
+                            fill=theme.TL_UNAVAILABLE_MARK,
+                            width=1,
+                        )
                     param_color = self.parameter_color_at_frame(frame_offset)
                     if param_color is not None:
                         mid_x = (left + right) / 2
@@ -2204,6 +2362,26 @@ class LabelingApp(tk.Tk):
                     if col:
                         self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
 
+                # Draw one shared grid over borderless fills; shared edges stay 1 px.
+                self.timeline_canvas.create_rectangle(
+                    left_edge,
+                    top,
+                    right_edge,
+                    bottom,
+                    fill="",
+                    outline=theme.TL_OUTLINE,
+                )
+                for frame in range(1, self.video.number_frames_in_zone):
+                    x = left_edge + frame * sector_width
+                    self.timeline_canvas.create_line(
+                        x,
+                        top,
+                        x,
+                        bottom,
+                        fill=theme.TL_OUTLINE,
+                        width=1,
+                    )
+
                 self._timeline_dirty = False
                 self._timeline_last_zone = zone
                 self._timeline_last_limb = limb
@@ -2213,14 +2391,15 @@ class LabelingApp(tk.Tk):
             # Update playhead only
             frame_in_zone = self.video.current_frame - offset
             if 0 <= frame_in_zone < self.video.number_frames_in_zone:
-                left = frame_in_zone * sector_width
-                right = left + sector_width
-                if self._timeline_playhead_id is None:
-                    self._timeline_playhead_id = self.timeline_canvas.create_rectangle(
-                        left, top, right, bottom, fill='dodgerblue', outline='black'
-                    )
-                else:
-                    self.timeline_canvas.coords(self._timeline_playhead_id, left, top, right, bottom)
+                current_pos = left_edge + (frame_in_zone + 0.5) * sector_width
+                current_pos = min(max(current_pos, left_edge + 4), right_edge - 4)
+                self._timeline_playhead_id = self._update_timeline_playhead(
+                    self.timeline_canvas,
+                    self._timeline_playhead_id,
+                    current_pos,
+                    top,
+                    bottom,
+                )
 
     def draw_timeline2(self):
         self._assert_ui_thread()
@@ -2233,6 +2412,11 @@ class LabelingApp(tk.Tk):
 
             canvas_width  = self.timeline2_canvas.winfo_width()
             canvas_height = self.timeline2_canvas.winfo_height()
+            left_edge = 1
+            right_edge = max(left_edge + 1, canvas_width - 2)
+            top = 1
+            bottom = max(top + 1, canvas_height - 2)
+            drawable_width = right_edge - left_edge
             limb = self.option_var_1.get()  # currently selected limb ("LH","RH","LL","RL")
             needs_full = (
                 self._timeline2_dirty
@@ -2242,7 +2426,15 @@ class LabelingApp(tk.Tk):
 
             if needs_full:
                 self.timeline2_canvas.delete("all")
-                # --- First pass: collect intervals (for yellow fill) and all lines to draw later ---
+                self.timeline2_canvas.create_rectangle(
+                    left_edge,
+                    top,
+                    right_edge,
+                    bottom,
+                    fill=theme.TL_EMPTY,
+                    outline=theme.TL_OUTLINE,
+                )
+                # --- First pass: collect touch intervals and all lines to draw later ---
                 on_lines   = []      # x positions of On (green)
                 off_lines  = []      # x positions of Off (red)
                 intervals  = []      # [(x_on, x_off), ...]
@@ -2255,7 +2447,7 @@ class LabelingApp(tk.Tk):
                     bundle = self.video.frames.get(frame, {})
                     details = bundle.get(limb, {}) if isinstance(bundle, dict) else {}
 
-                    x = (frame / self.video.total_frames) * canvas_width
+                    x = left_edge + (frame / self.video.total_frames) * drawable_width
 
                     # --- Onset/Offset collection for intervals + edge markers (SELECTED LIMB ONLY) ---
                     onset_val = details.get('Onset')
@@ -2285,23 +2477,36 @@ class LabelingApp(tk.Tk):
                                 limb_param_lines.append((x + dx, c))
 
                 # --- Draw order: 1) fills, 2) global & limb param lines, 3) On/Off edges, 4) playhead ---
-                # 1) Yellow fills
+                # 1) Pale-green touch interval fills
                 for x1, x2 in intervals:
-                    self.timeline2_canvas.create_rectangle(x1, 0, x2, canvas_height, fill='yellow', outline='')
+                    # Leave a visible gap between the fill and semantic edge ticks.
+                    if x2 - x1 > 6:
+                        self.timeline2_canvas.create_rectangle(
+                            x1 + 3,
+                            top + 1,
+                            x2 - 3,
+                            bottom - 1,
+                            fill=theme.TL_DURING,
+                            outline="",
+                        )
 
                 # 2) Global parameter lines
                 for x, c in param_lines:
-                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+                    self.timeline2_canvas.create_line(x, top, x, bottom, fill=c, width=2)
 
                 #    Limb-specific parameter ticks for the selected limb
                 for x, c in limb_param_lines:
-                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill=c, width=2)
+                    self.timeline2_canvas.create_line(x, top, x, bottom, fill=c, width=2)
 
                 # 3) On/Off edge markers
                 for x in on_lines:
-                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='green', width=1)
+                    self.timeline2_canvas.create_line(
+                        x, top, x, bottom, fill=theme.TL_ONSET_MARK, width=2
+                    )
                 for x in off_lines:
-                    self.timeline2_canvas.create_line(x, 0, x, canvas_height, fill='red', width=1)
+                    self.timeline2_canvas.create_line(
+                        x, top, x, bottom, fill=theme.TL_OFFSET_MARK, width=2
+                    )
 
                 self._timeline2_dirty = False
                 self._timeline2_last_limb = limb
@@ -2309,15 +2514,17 @@ class LabelingApp(tk.Tk):
                 self._timeline2_playhead_id = None
 
             # Current frame indicator only
-            current_pos = (self.video.current_frame / self.video.total_frames) * canvas_width
-            margin = 2
-            current_pos = min(max(current_pos, margin), canvas_width - margin)
-            if self._timeline2_playhead_id is None:
-                self._timeline2_playhead_id = self.timeline2_canvas.create_line(
-                    current_pos, 0, current_pos, canvas_height, fill='dodgerblue', width=2
-                )
-            else:
-                self.timeline2_canvas.coords(self._timeline2_playhead_id, current_pos, 0, current_pos, canvas_height)
+            current_pos = left_edge + (
+                self.video.current_frame / self.video.total_frames
+            ) * drawable_width
+            current_pos = min(max(current_pos, left_edge + 4), right_edge - 4)
+            self._timeline2_playhead_id = self._update_timeline_playhead(
+                self.timeline2_canvas,
+                self._timeline2_playhead_id,
+                current_pos,
+                top,
+                bottom,
+            )
     
     def update_frame_counter(self):
         if self.video:
@@ -2357,109 +2564,39 @@ class LabelingApp(tk.Tk):
         return f"{minutes}:{secs:02}"
 
     def _open_frame_progress_window(self):
-        win = tk.Toplevel(self)
-        win.title("Preparing Frames")
-        win.geometry("520x170")
-        win.resizable(False, False)
-        win.transient(self)
-
-        title = tk.Label(win, text="Preparing frames...", font=("Segoe UI", 11))
-        title.pack(pady=(12, 6))
-        status = tk.Label(win, text="Starting...", font=("Segoe UI", 10))
-        status.pack()
-        bar = ttk.Progressbar(win, mode="determinate", length=460)
-        bar.pack(pady=8)
-        time_label = tk.Label(win, text="Elapsed: 0:00 | ETA: --:--", font=("Segoe UI", 9))
-        time_label.pack()
-        win.update_idletasks()
-
-        def update(count, total, stage, elapsed_s):
-            if not win.winfo_exists():
-                return
-            try:
-                total = max(1, int(total))
-                count = min(int(count), total)
-                bar["maximum"] = total
-                bar["value"] = count
-                pct = (count / total) * 100 if total else 0
-                status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
-                eta_s = None
-                if count > 0:
-                    rate = elapsed_s / count
-                    eta_s = max(0.0, (total - count) * rate)
-                time_label.config(
-                    text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
-                )
-                win.update_idletasks()
-                win.update()
-            except tk.TclError:
-                pass
-
-        def close():
-            if win.winfo_exists():
-                win.destroy()
-
-        return update, close
+        return self._open_progress_window("Preparing Frames", "Preparing frames...")
 
     def _open_video_copy_progress_window(self):
-        win = tk.Toplevel(self)
-        win.title("Copying Video")
-        win.geometry("520x170")
-        win.resizable(False, False)
-        win.transient(self)
-
-        title = tk.Label(win, text="Copying video to project...", font=("Segoe UI", 11))
-        title.pack(pady=(12, 6))
-        status = tk.Label(win, text="Starting...", font=("Segoe UI", 10))
-        status.pack()
-        bar = ttk.Progressbar(win, mode="determinate", length=460)
-        bar.pack(pady=8)
-        time_label = tk.Label(win, text="Elapsed: 0:00 | ETA: --:--", font=("Segoe UI", 9))
-        time_label.pack()
-        win.update_idletasks()
-
-        def update(count, total, stage, elapsed_s):
-            if not win.winfo_exists():
-                return
-            try:
-                total = max(1, int(total))
-                count = min(int(count), total)
-                bar["maximum"] = total
-                bar["value"] = count
-                pct = (count / total) * 100 if total else 0
-                status.config(text=f"{stage}: {count} / {total} ({pct:.1f}%)")
-                eta_s = None
-                if count > 0:
-                    rate = elapsed_s / count
-                    eta_s = max(0.0, (total - count) * rate)
-                time_label.config(
-                    text=f"Elapsed: {self._format_duration(elapsed_s)} | ETA: {self._format_duration(eta_s)}"
-                )
-                win.update_idletasks()
-                win.update()
-            except tk.TclError:
-                pass
-
-        def close():
-            if win.winfo_exists():
-                win.destroy()
-
-        return update, close
+        return self._open_progress_window("Copying Video", "Copying video to project...")
 
     def _open_data_progress_window(self):
+        return self._open_progress_window("Loading Data", "Loading labeled data...")
+
+    def _open_progress_window(self, title, heading):
         win = tk.Toplevel(self)
-        win.title("Loading Data")
-        win.geometry("520x170")
+        win.title(title)
+        win.geometry("520x180")
         win.resizable(False, False)
         win.transient(self)
+        win.configure(bg=theme.SURFACE)
 
-        title = tk.Label(win, text="Loading labeled data...", font=("Segoe UI", 11))
-        title.pack(pady=(12, 6))
-        status = tk.Label(win, text="Starting...", font=("Segoe UI", 10))
+        content = ttk.Frame(win, padding=16)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text=heading, font=theme.FONT_TITLE).pack(pady=(0, 6))
+        status = ttk.Label(content, text="Starting...", font=theme.FONT_BASE)
         status.pack()
-        bar = ttk.Progressbar(win, mode="determinate", length=460)
+        bar = ttk.Progressbar(
+            content,
+            mode="determinate",
+            length=460,
+            bootstyle="success-striped",
+        )
         bar.pack(pady=8)
-        time_label = tk.Label(win, text="Elapsed: 0:00 | ETA: --:--", font=("Segoe UI", 9))
+        time_label = ttk.Label(
+            content,
+            text="Elapsed: 0:00 | ETA: --:--",
+            font=theme.FONT_SMALL,
+        )
         time_label.pack()
         win.update_idletasks()
 
@@ -2499,15 +2636,23 @@ class LabelingApp(tk.Tk):
         win.geometry("520x160")
         win.resizable(False, False)
         win.transient(self)
+        win.configure(bg=theme.SURFACE)
         win.grab_set()
         win.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        tk.Label(win, text="Building full export...", font=("Segoe UI", 11)).pack(
-            pady=(18, 8)
+        content = ttk.Frame(win, padding=16)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text="Building full export...", font=theme.FONT_TITLE).pack(
+            pady=(2, 8)
         )
-        status = tk.Label(win, text="Writing export snapshot", font=("Segoe UI", 10))
+        status = ttk.Label(content, text="Writing export snapshot", font=theme.FONT_BASE)
         status.pack()
-        bar = ttk.Progressbar(win, mode="indeterminate", length=460)
+        bar = ttk.Progressbar(
+            content,
+            mode="indeterminate",
+            length=460,
+            bootstyle="success-striped",
+        )
         bar.pack(pady=10)
         bar.start(12)
         win.update_idletasks()
@@ -2682,9 +2827,9 @@ class LabelingApp(tk.Tk):
 
                 # 6) Update the status pill.
                 if current_frame_loaded:
-                    self._set_loading_label_async("Buffer Loaded", "lightgreen")
+                    self._set_loading_label_async("Loaded", theme.STATUS_OK)
                 else:
-                    self._set_loading_label_async("Buffer Loading", "#E57373")
+                    self._set_loading_label_async("Loading", theme.STATUS_BAD)
 
                 # 7) buffer_ready gates the playback thread.
                 buffer_ready = current_frame_loaded
@@ -2880,13 +3025,21 @@ class LabelingApp(tk.Tk):
                 if hasattr(self, 'frame_label') and self.frame_label:
                     self.frame_label.configure(image=photo_img)
                 else:
-                    self.frame_label = tk.Label(self.video_frame, image=photo_img)
+                    self.frame_label = tk.Label(
+                        self.video_frame,
+                        image=photo_img,
+                        bg=theme.VIDEO_BG,
+                        bd=0,
+                        highlightbackground=theme.BORDER,
+                        highlightcolor=theme.BORDER,
+                        highlightthickness=2,
+                    )
                     self.frame_label.pack(expand=True)
-                self.loading_label.config(text="Buffer Loaded", bg='lightgreen')
+                self.loading_label.set(theme.STATUS_OK, "Loaded")
                 self.image = photo_img
             else:
                 print("INFO: Frame not in buffer.")
-                self.loading_label.config(text="Buffer Loading", bg='#E57373')
+                self.loading_label.set(theme.STATUS_BAD, "Loading")
 
             self.update_note_entry()
             self.update_frame_counter()
@@ -3019,12 +3172,7 @@ class LabelingApp(tk.Tk):
         for i, btn in ((1, self.par1_btn), (2, self.par2_btn), (3, self.par3_btn)):
             key = self._param_key_for_index(i)
             state = params.get(key)
-            if state == "ON":
-                btn.config(bg="lightgreen")
-            elif state == "OFF":
-                btn.config(bg="#E57373")
-            else:
-                btn.config(bg="lightgrey")
+            theme.set_button_state(btn, state)
 
     def parameter_dic_insert(self, parameter_index: int):
         """Toggle Param_i (1..3) for the CURRENT frame directly on the bundle."""
@@ -3042,12 +3190,7 @@ class LabelingApp(tk.Tk):
 
         # color the right button immediately
         button = {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn}[parameter_index]
-        if new_state == "ON":
-            button.config(bg="lightgreen")
-        elif new_state == "OFF":
-            button.config(bg="#E57373")
-        else:
-            button.config(bg="lightgrey")
+        theme.set_button_state(button, new_state)
 
         # mark frame dirty, print, and refresh timeline
         self.mark_bundle_changed(idx)
@@ -3073,12 +3216,7 @@ class LabelingApp(tk.Tk):
 
         # reflect on button color
         btn = {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn}[param_number]
-        if new_state == "ON":
-            btn.config(bg="lightgreen")
-        elif new_state == "OFF":
-            btn.config(bg="#E57373")
-        else:
-            btn.config(bg="lightgray")
+        theme.set_button_state(btn, new_state)
 
         # mark & redraw (so timeline updates)
         self.mark_bundle_changed(frame)
@@ -3096,12 +3234,7 @@ class LabelingApp(tk.Tk):
         for i, btn in ((1, self.limb_par1_btn), (2, self.limb_par2_btn), (3, self.limb_par3_btn)):
             key = self._limb_param_key_for_index(i)
             state = limb_params.get(key)
-            if state == "ON":
-                btn.config(bg="lightgreen")
-            elif state == "OFF":
-                btn.config(bg="#E57373")
-            else:
-                btn.config(bg="lightgray")
+            theme.set_button_state(btn, state)
     
     def limb_parameter_colors_at_frame(self, frame):
         """Return Param1..3 colors for the SELECTED limb at a given frame."""
@@ -3117,37 +3250,47 @@ class LabelingApp(tk.Tk):
             key = self._limb_param_key_for_index(i)
             val = limb_params.get(key)
             if val == "ON":
-                colors.append("green")
+                colors.append(theme.TL_ONSET_MARK)
             elif val == "OFF":
-                colors.append("#E57373")
+                colors.append(theme.TL_OFF)
             else:
                 colors.append(None)
         return colors
 
     # === Notes & Frame Selection ===============================================
+    def _get_note_entry_text(self):
+        return self.note_entry.get("1.0", "end-1c")
+
+    def _clear_note_entry(self):
+        self.note_entry.delete("1.0", tk.END)
+
+    def _set_note_entry_text(self, text):
+        self._clear_note_entry()
+        self.note_entry.insert("1.0", text)
+
     def select_frame(self):
-        frame = self.note_entry.get()
+        frame = self._get_note_entry_text().strip()
         try:
             frame_int = int(frame)
         except ValueError:
             print("Error selecting frame: The frame number must be a valid integer.")
-            self.note_entry.delete(0, 'end'); return
+            self._clear_note_entry(); return
         if self.video is not None:
             if frame_int < 0 or frame_int > self.video.total_frames:
                 print("Error selecting frame: Out of range!")
-                self.note_entry.delete(0, 'end'); return
+                self._clear_note_entry(); return
             self.video.current_frame = frame_int
             self.update_frame_counter()
             self.display_first_frame()
         else:
             print("Error selecting frame: No video loaded!")
-        self.note_entry.delete(0, 'end')
+        self._clear_note_entry()
 
     def save_note(self):
         print("INFO: Saving note...")
 
         idx = self.video.current_frame
-        note_text = (self.note_entry.get() or "").strip()
+        note_text = self._get_note_entry_text().strip()
 
         # ensure bundle exists, then update Note
         b = self._ensure_bundle(idx)
@@ -3187,8 +3330,7 @@ class LabelingApp(tk.Tk):
         if not note_text and hasattr(self.video, "notes"):
             note_text = self.video.notes.get(idx, "") or ""
 
-        self.note_entry.delete(0, tk.END)
-        self.note_entry.insert(0, note_text)
+        self._set_note_entry_text(note_text)
 
     # === Save / Export =========================================================
     def save_data(self):
@@ -3344,29 +3486,63 @@ class LabelingApp(tk.Tk):
     def ask_labeling_mode(self):
         mode_window = tk.Toplevel(self)
         mode_window.title("Select Modes")
-        mode_window.geometry("520x320")
+        mode_window.geometry("420x300")
+        mode_window.resizable(False, False)
+        mode_window.transient(self)
+        mode_window.configure(bg=theme.SURFACE)
         mode_window.grab_set()
-        label = tk.Label(mode_window, text="Choose startup modes:", font=("Arial", 12))
-        label.pack(pady=10)
+
+        content = ttk.Frame(mode_window, padding=16)
+        content.pack(fill="both", expand=True)
+        label = ttk.Label(
+            content,
+            text="Choose startup modes:",
+            font=theme.FONT_DIALOG_TITLE,
+        )
+        label.pack(pady=(0, 10))
         cfg = load_config()
         labeling_var = tk.StringVar(value=getattr(self, "labeling_mode", cfg.get("last_labeling_mode", "Normal")))
         annotation_var = tk.StringVar(value=getattr(self, "annotation_mode", cfg.get("annotation_mode", "touch")))
 
-        tk.Label(mode_window, text="Labeling mode", font=("Arial", 10, "bold")).pack(pady=(5, 2))
-        tk.Radiobutton(mode_window, text="Normal", variable=labeling_var, value="Normal").pack()
-        tk.Radiobutton(mode_window, text="Reliability", variable=labeling_var, value="Reliability").pack()
+        ttk.Label(content, text="Labeling mode", font=theme.FONT_BOLD).pack(pady=(5, 2))
+        ttk.Radiobutton(
+            content,
+            text="Normal",
+            variable=labeling_var,
+            value="Normal",
+            takefocus=0,
+        ).pack()
+        ttk.Radiobutton(
+            content,
+            text="Reliability",
+            variable=labeling_var,
+            value="Reliability",
+            takefocus=0,
+        ).pack()
 
-        tk.Label(mode_window, text="Annotation mode", font=("Arial", 10, "bold")).pack(pady=(12, 2))
-        tk.Radiobutton(mode_window, text="Touch", variable=annotation_var, value="touch").pack()
-        tk.Radiobutton(mode_window, text=THREE_D_MODE, variable=annotation_var, value="pose_3d").pack()
+        ttk.Label(content, text="Annotation mode", font=theme.FONT_BOLD).pack(pady=(12, 2))
+        ttk.Radiobutton(
+            content,
+            text="Touch",
+            variable=annotation_var,
+            value="touch",
+            takefocus=0,
+        ).pack()
+        ttk.Radiobutton(
+            content,
+            text=THREE_D_MODE,
+            variable=annotation_var,
+            value="pose_3d",
+            takefocus=0,
+        ).pack()
 
         def set_mode():
             self.labeling_mode = labeling_var.get()
             self.annotation_mode = annotation_var.get()
             self._reset_zone_cache()
-            bg = 'yellow' if self.labeling_mode == 'Reliability' else 'lightgreen'
+            color = theme.STATUS_WARN if self.labeling_mode == 'Reliability' else theme.STATUS_OK
             display_annotation = "3D" if self.is_pose_mode() else "Touch"
-            self.mode_label.config(text=f"Mode: {self.labeling_mode} | {display_annotation}", bg=bg)
+            self.mode_label.set(color, f"{self.labeling_mode} | {display_annotation}")
             cfg["last_labeling_mode"] = self.labeling_mode
             cfg["annotation_mode"] = self.annotation_mode
             save_config(cfg)
@@ -3374,7 +3550,14 @@ class LabelingApp(tk.Tk):
             self._set_mode_button_states()
             mode_window.destroy()
 
-        tk.Button(mode_window, text="Continue", command=set_mode, width=18).pack(pady=16)
+        ttk.Button(
+            content,
+            text="Continue",
+            command=set_mode,
+            width=18,
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(pady=(16, 0))
         mode_window.wait_window()
 
     def load_video(self):
@@ -3619,12 +3802,13 @@ class LabelingApp(tk.Tk):
 
         # Clothes file presence => colorize button
         self.video.clothes_file_path = os.path.join(data_dir, f"{video_name}_clothes.txt")
+        theme.set_button_state(self.cloth_btn, None)
         if (not self.is_pose_mode()) and self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
             with open(self.video.clothes_file_path, 'r', encoding="utf-8") as f:
                 if len(f.readlines()) > 1:
-                    self.cloth_btn.config(bg="lightgreen")
+                    theme.set_button_state(self.cloth_btn, "ON")
 
-        self.load_video_btn.config(state=tk.DISABLED, bg="gray", fg='lightgray')
+        self.load_video_btn.config(state=tk.DISABLED)
         for b in self.video.frames.values():
             if isinstance(b, dict):
                 b["Changed"] = False
@@ -3707,7 +3891,7 @@ class LabelingApp(tk.Tk):
             self.clothes_diagram_scale = float(diagram_scale)
         print("Data clothes updated:", self.data_clothes)
         self.save_clothes_to_text()
-        self.cloth_btn.config(bg="lightgreen")
+        theme.set_button_state(self.cloth_btn, "ON")
 
     def save_clothes_to_text(self):
         print("INFO: Saving clothes...")
@@ -3803,7 +3987,13 @@ class LabelingApp(tk.Tk):
         win = tk.Toplevel(self)
         win.title("Settings")
         win.resizable(False, False)
+        win.transient(self)
+        win.configure(bg=theme.SURFACE)
         self._settings_win = win
+
+        content = ttk.Frame(win, padding=16)
+        content.pack(fill="both", expand=True)
+        content.columnconfigure(1, weight=1)
 
         def _v(key, default):
             return cfg.get(key, default)
@@ -3823,37 +4013,53 @@ class LabelingApp(tk.Tk):
         }
 
         row = 0
-        tk.Label(win, text="Display").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 4))
-        row += 1
-        tk.Label(win, text="Video downscale (1 = full, 2 = half)").grid(
-            row=row, column=0, sticky="w", padx=8, pady=2
-        )
-        tk.Entry(win, textvariable=vars_map["video_downscale"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
-        )
-        row += 1
-        tk.Label(win, text="Diagram scale").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["diagram_scale"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Display", font=theme.FONT_BOLD).grid(
+            row=row,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            padx=8,
+            pady=(0, 6),
         )
         row += 1
-        tk.Label(win, text="Dot size").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["dot_size"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Video downscale (1 = full, 2 = half)").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["video_downscale"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
-        tk.Label(win, text="Fast-jump seconds (>> / Shift+Arrow)").grid(
-            row=row, column=0, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Diagram scale").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
         )
-        tk.Entry(win, textvariable=vars_map["jump_seconds"], width=10).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Entry(content, textvariable=vars_map["diagram_scale"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
-        tk.Label(win, text="Realtime hold (arrow keys play at video framerate)").grid(
-            row=row, column=0, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Dot size").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
         )
-        tk.Checkbutton(win, variable=vars_map["realtime_arrow_hold"]).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Entry(content, textvariable=vars_map["dot_size"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
+        )
+        row += 1
+        ttk.Label(content, text="Fast-jump seconds (>> / Shift+Arrow)").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["jump_seconds"], width=10).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
+        )
+        row += 1
+        ttk.Label(content, text="Realtime hold (arrow keys play at video framerate)").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Checkbutton(
+            content,
+            variable=vars_map["realtime_arrow_hold"],
+            bootstyle="round-toggle",
+            takefocus=0,
+        ).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
 
@@ -3868,36 +4074,64 @@ class LabelingApp(tk.Tk):
             except Exception:
                 raise ValueError(f"{key} must be a number")
 
-        tk.Label(win, text="Parameter Labels").grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 4))
-        row += 1
-        tk.Label(win, text="Limb Parameter 1").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["limb_parameter1"], width=18).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Separator(content, orient="horizontal").grid(
+            row=row,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=8,
+            pady=(10, 8),
         )
         row += 1
-        tk.Label(win, text="Limb Parameter 2").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["limb_parameter2"], width=18).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Parameter Labels", font=theme.FONT_BOLD).grid(
+            row=row,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            padx=8,
+            pady=(0, 6),
         )
         row += 1
-        tk.Label(win, text="Limb Parameter 3").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["limb_parameter3"], width=18).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Limb Parameter 1").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["limb_parameter1"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
-        tk.Label(win, text="Parameter 1").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["parameter1"], width=18).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Limb Parameter 2").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["limb_parameter2"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
-        tk.Label(win, text="Parameter 2").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["parameter2"], width=18).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Limb Parameter 3").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["limb_parameter3"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
-        tk.Label(win, text="Parameter 3").grid(row=row, column=0, sticky="w", padx=8, pady=2)
-        tk.Entry(win, textvariable=vars_map["parameter3"], width=18).grid(
-            row=row, column=1, sticky="w", padx=8, pady=2
+        ttk.Label(content, text="Parameter 1").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["parameter1"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
+        )
+        row += 1
+        ttk.Label(content, text="Parameter 2").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["parameter2"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
+        )
+        row += 1
+        ttk.Label(content, text="Parameter 3").grid(
+            row=row, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(content, textvariable=vars_map["parameter3"], width=18).grid(
+            row=row, column=1, sticky="w", padx=8, pady=4
         )
         row += 1
 
@@ -3936,11 +4170,29 @@ class LabelingApp(tk.Tk):
             if close:
                 win.destroy()
 
-        btn_frame = tk.Frame(win)
+        btn_frame = ttk.Frame(content)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=(10, 8))
-        tk.Button(btn_frame, text="Apply", command=lambda: apply_settings(close=False)).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Apply & Close", command=lambda: apply_settings(close=True)).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Close", command=win.destroy).pack(side="left", padx=5)
+        ttk.Button(
+            btn_frame,
+            text="Apply",
+            command=lambda: apply_settings(close=False),
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            btn_frame,
+            text="Apply & Close",
+            command=lambda: apply_settings(close=True),
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            btn_frame,
+            text="Close",
+            command=win.destroy,
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(side="left", padx=5)
 
     def apply_runtime_settings(self, cfg: dict):
         self.perf.enabled = bool(cfg.get("perf_enabled", False))
