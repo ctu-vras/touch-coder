@@ -76,7 +76,7 @@ When re-reading the existing unified pose CSV to upsert, a parse failure is caug
 ## HIGH
 
 ### H1 — Tkinter is called from background (non-UI) threads
-> **Fix plan:** [fix_H1.md](to_do/fix_H1.md)
+> **Fix plan:** [fix_H1.md](done/fix_H1.md)
 
 **File:** `labeling_app.py:2649-2682` (`background_update_play`), `:2550-2647` (`background_update`).
 

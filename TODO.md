@@ -19,22 +19,21 @@ Each gets a fix plan under `to_do/` before implementation. Move to `DONE.md` whe
 > [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ### High
-- **H1** Tkinter called from background threads (playback/buffer) → sporadic crashes. — plan: [fix_H1.md](docs/reviews/2026-07-12/to_do/fix_H1.md)
 - **H2** Per-edit O(N) timeline rebuild stalls long videos in 3D mode. — plan: [fix_H2.md](docs/reviews/2026-07-12/to_do/fix_H2.md)
 - **H3** "Incremental" saves are full re-read + full rewrite every time. — plan: [fix_H3.md](docs/reviews/2026-07-12/to_do/fix_H3.md)
 
 ### Medium
-- **M1** `toggle_limb_parameter` stores the string `"None"` instead of `None`.
-- **M2** `mark_bundle_changed(index=None)` ignores its argument.
-- **M3** `_Look`/gaze data is never exported (schema mismatch).
-- **M5** `_swap_lr_in_string` corrupts free text (dead-but-dangerous).
-- **M6** Missing `encoding="utf-8"` on builtin `open()` calls.
+- **M1** `toggle_limb_parameter` stores the string `"None"` instead of `None`. — plan: [fix_M1.md](docs/reviews/2026-07-12/to_do/fix_M1.md)
+- **M2** `mark_bundle_changed(index=None)` ignores its argument. — plan: [fix_M2.md](docs/reviews/2026-07-12/to_do/fix_M2.md) — land **before H2**
+- **M3** `_Look`/gaze data is never exported (schema mismatch). — plan: [fix_M3.md](docs/reviews/2026-07-12/to_do/fix_M3.md) — decided: vestigial, remove + coworker notice in `docs/EXPORT_NOTES.md`
+- **M5** `_swap_lr_in_string` corrupts free text (dead-but-dangerous). — plan: [fix_M5.md](docs/reviews/2026-07-12/to_do/fix_M5.md) — land **before M6**
+- **M6** Missing `encoding="utf-8"` on builtin `open()` calls. — plan: [fix_M6.md](docs/reviews/2026-07-12/to_do/fix_M6.md)
 - **M7** Resource leaks + O(n²) polling in frame extraction.
-- **M8** `load_pose_dataset` uses the slow `iterrows()` path.
-- **M9** `on_close` logic inverted; Cancel leaves a half-dead app.
-- **M10** `parse_xy` silently drops non-digit coordinates → X/Y/Zones desync.
-- **M11** Pose `ScaleFactor` not clamped on load.
-- **M12** Analysis: error-swallowing reader + lossy transition metrics.
+- **M8** `load_pose_dataset` uses the slow `iterrows()` path. — plan: [fix_M8.md](docs/reviews/2026-07-12/to_do/fix_M8.md)
+- **M9** `on_close` logic inverted; Cancel leaves a half-dead app. — plan: [fix_M9.md](docs/reviews/2026-07-12/to_do/fix_M9.md)
+- **M10** `parse_xy` silently drops non-digit coordinates → X/Y/Zones desync. — plan: [fix_M10.md](docs/reviews/2026-07-12/to_do/fix_M10.md) — batch with M1+M3 (same function)
+- **M11** Pose `ScaleFactor` not clamped on load. — plan: [fix_M11.md](docs/reviews/2026-07-12/to_do/fix_M11.md)
+- **M12** Analysis: error-swallowing reader + lossy transition metrics. — plan: [fix_M12.md](docs/reviews/2026-07-12/to_do/fix_M12.md) — decided: pairwise cartesian (multiple transitions per multi-zone touch)
 
 ### Low / cleanup
 - **L1–L12** See review.md (binding scope, dead branches, encodings, dup imports, hardcoded version, etc.).

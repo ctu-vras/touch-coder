@@ -6,7 +6,7 @@ import time
 import shutil
 import re
 import traceback
-from threading import Thread, Event, RLock
+from threading import Thread, Event, RLock, get_ident, current_thread
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
@@ -71,6 +71,10 @@ HOLD_START_DELAY_MS = 500
 HOLD_RELEASE_TIMEOUT_MS = 100
 HOLD_WATCHDOG_INTERVAL_MS = 50
 DEBUG = False
+# Dev guard (H1): when True, the main render/timeline methods raise if called
+# off the Tk main thread, so any future thread-boundary regression fails loudly
+# at the offending call site instead of crashing Tcl intermittently.
+DEBUG_ASSERT_UI_THREAD = False
 THREE_D_MODE = "3D Mismatch"
 POSE_OUTLINE_ANCHOR_X = 183.0
 POSE_OUTLINE_ANCHOR_Y = 348.0
@@ -194,6 +198,13 @@ class LabelingApp(tk.Tk):
         self.background_thread = Thread(target=self.background_update, daemon=True)
         self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
         self.buffer_ready = False
+
+        # Thread → UI boundary (H1). Workers never touch Tk widgets directly:
+        # they advance plain state and schedule redraws via self.after(0, ...).
+        self._ui_thread_ident = get_ident()   # Tk main thread (this __init__)
+        self._render_pending = False          # debounce: at most one queued playback redraw
+        self._display_w = 0                   # video_frame geometry, cached on the main
+        self._display_h = 0                   # thread (workers must not call winfo_*)
 
         # Priority-load + parallel-prefetch infrastructure
         self._priority_frame = None              # frame the user explicitly wants ASAP
@@ -347,6 +358,7 @@ class LabelingApp(tk.Tk):
         return image
 
     def render_pose_canvas(self):
+            self._assert_ui_thread()
             with self.perf.time("pose_render_canvas"):
                 if not self.is_pose_mode():
                     return
@@ -1141,6 +1153,22 @@ class LabelingApp(tk.Tk):
 
         self.after(0, _apply)
 
+    def _is_ui_thread(self) -> bool:
+        """True when called on the Tk main thread (recorded in __init__)."""
+        return get_ident() == self._ui_thread_ident
+
+    def _assert_ui_thread(self):
+        """Dev guard (H1): fail loudly on off-thread widget access.
+
+        No-op unless DEBUG_ASSERT_UI_THREAD is enabled — zero cost in
+        production, a hard RuntimeError at the offending call site in dev.
+        """
+        if DEBUG_ASSERT_UI_THREAD and not self._is_ui_thread():
+            raise RuntimeError(
+                f"Tk widget access from non-UI thread '{current_thread().name}' "
+                "— marshal via self.after(0, ...)"
+            )
+
     def navigate_left(self, event):  self._on_arrow_press(-1)
     def navigate_right(self, event): self._on_arrow_press(1)
 
@@ -1252,6 +1280,9 @@ class LabelingApp(tk.Tk):
 
     def on_resize(self, event):
         print("INFO: Resized to {}x{}".format(event.width, event.height))
+        # Refresh the geometry cache the buffer thread reads instead of winfo_* (H1).
+        self._display_w = event.width
+        self._display_h = event.height
         self._buffer_reset()
         if self.video:
             self.display_first_frame()
@@ -2125,6 +2156,7 @@ class LabelingApp(tk.Tk):
             )
 
     def draw_timeline(self):
+        self._assert_ui_thread()
         with self.perf.time("draw_timeline"):
             if not (self.video and self.video.total_frames > 0):
                 return
@@ -2219,6 +2251,7 @@ class LabelingApp(tk.Tk):
                     self.timeline_canvas.coords(self._timeline_playhead_id, left, top, right, bottom)
 
     def draw_timeline2(self):
+        self._assert_ui_thread()
         with self.perf.time("draw_timeline2"):
             if not (self.video and self.video.total_frames > 0):
                 return
@@ -2553,12 +2586,12 @@ class LabelingApp(tk.Tk):
                 if current_frame < 0 or current_frame > self.video.total_frames:
                     return
 
-                # Capture per-tick context once. Workers must NOT touch Tk widgets,
-                # so we read winfo_width / winfo_height here on the bg thread (same
-                # risk profile as before this change â€” bg thread already did this).
+                # Capture per-tick context once. Workers must NOT touch Tk widgets
+                # (H1), so instead of winfo_width/height we read the geometry cache
+                # maintained on the main thread (on_resize + load_video).
                 frames_dir = self.video.frames_dir
-                display_w = self.video_frame.winfo_width()
-                display_h = self.video_frame.winfo_height()
+                display_w = self._display_w
+                display_h = self._display_h
                 downscale = float(getattr(self, "video_downscale", 1.0) or 1.0)
                 gen = self._buffer_gen
 
@@ -2640,14 +2673,48 @@ class LabelingApp(tk.Tk):
                             break
                 self.buffer_ready = buffer_ready
 
+    @staticmethod
+    def _compute_play_step(current_frame, total_frames, direction):
+        """Pure play-step decision: (next_frame, stop). No Tk, no side effects.
+
+        stop=True when playback sits at the edge it is moving toward (frame 0
+        going backward, total_frames going forward) so the play loop doesn't
+        busy-spin against a boundary.
+        """
+        if (direction > 0 and current_frame >= total_frames) or \
+           (direction < 0 and current_frame <= 0):
+            return current_frame, True
+        return max(0, min(total_frames, current_frame + direction)), False
+
+    def _render_current_frame(self):
+        """UI-thread redraw target scheduled by the playback thread (H1).
+
+        Runs on the Tk main thread only (via self.after). Mirrors what
+        next_frame(..., play=True) used to draw: the visible frame plus
+        Timeline 2 (draw_timeline is refreshed separately every 10th frame).
+        Guarded so a callback queued right before shutdown / video reload
+        doesn't touch destroyed widgets.
+        """
+        self._render_pending = False
+        if self.video is None:
+            print("DEBUG: _render_current_frame skipped — no video (shutdown/reload)")
+            return
+        try:
+            self.display_first_frame()
+            self.draw_timeline2()
+        except tk.TclError as e:
+            # Expected only when the app is being torn down mid-playback.
+            print(f"DEBUG: _render_current_frame aborted during teardown: {e}")
+
     def background_update_play(self):
         while True:
             if self.play and self.video is not None:
                 direction = 1 if getattr(self, "play_dir", 1) >= 0 else -1
                 current_frame = self.video.current_frame
-                # Stop at boundaries so the loop doesn't busy-spin against an edge.
-                if (direction > 0 and current_frame >= self.video.total_frames) or \
-                   (direction < 0 and current_frame <= 0):
+                next_frame, stop = self._compute_play_step(
+                    current_frame, self.video.total_frames, direction
+                )
+                if stop:
                     self.play = False
                     self._hold_play_active = False
                     self.play_dir = 1
@@ -2657,7 +2724,6 @@ class LabelingApp(tk.Tk):
                     self.buffer_ready = False
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
                     continue
-                next_frame = max(0, min(self.video.total_frames, current_frame + direction))
                 if next_frame not in self.img_buffer:
                     self.buffer_ready = False
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
@@ -2666,9 +2732,27 @@ class LabelingApp(tk.Tk):
                     time.sleep(PLAYBACK_BUFFER_PAUSE_S)
                     continue
                 start = time.perf_counter()
-                self.next_frame(direction, play=True)
-                if self.video.current_frame % 10 == 0:
-                    self.after(0, self.draw_timeline)
+                # Worker thread: advance plain state only, then schedule ONE
+                # main-thread redraw. No direct Tk calls off-thread (H1).
+                self.video.current_frame = next_frame
+                self._last_step_sign = direction
+                if next_frame not in self.img_buffer:
+                    # Evicted between the check above and now — reload with priority.
+                    self._priority_event.set()
+                try:
+                    if not self._render_pending:
+                        # Debounce: at most one queued redraw; display_first_frame
+                        # paints whatever current_frame is by then (coalescing).
+                        self._render_pending = True
+                        self.after(0, self._render_current_frame)
+                    if next_frame % 10 == 0:
+                        self.after(0, self.draw_timeline)
+                except (tk.TclError, RuntimeError) as e:
+                    # Expected when the Tk mainloop is gone (close mid-playback).
+                    self._render_pending = False
+                    self.play = False
+                    print(f"DEBUG: playback redraw scheduling stopped — Tk shutting down: {e}")
+                    continue
                 interval = 1.0 / self.frame_rate if self.frame_rate else 0.04
                 elapsed = time.perf_counter() - start
                 time.sleep(max(0.0, interval - elapsed))
@@ -2755,6 +2839,7 @@ class LabelingApp(tk.Tk):
                 self._inflight_frames.discard(frame_number)
 
     def display_first_frame(self, frame_number=None):
+        self._assert_ui_thread()
         with self.perf.time("display_first_frame"):
             previous_frame = self._last_displayed_frame
             if frame_number is None:
@@ -3475,6 +3560,11 @@ class LabelingApp(tk.Tk):
             text=f"Video: {video_name} | FPS: {self.frame_rate} | Version: {self.video.program_version}"
         )
 
+        # Seed the geometry cache on the main thread before the buffer thread
+        # runs — workers read _display_w/_display_h instead of winfo_* (H1).
+        self._display_w = self.video_frame.winfo_width()
+        self._display_h = self.video_frame.winfo_height()
+
         if not self.background_thread.is_alive():
             self.background_thread.start()
         else:
@@ -3647,7 +3737,7 @@ class LabelingApp(tk.Tk):
                 "total_frames": int(self.video.total_frames),
             }
             atomic_write(path, lambda f: json.dump(payload, f))
-            print(f"INFO: Saved last position â†’ {path}")
+            print(f"INFO: Saved last position at {path}")
         except Exception as e:
             print(f"WARNING: Failed to save last position: {e}")
 
