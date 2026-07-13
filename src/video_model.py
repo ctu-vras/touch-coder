@@ -4,6 +4,8 @@ import sys
 from typing import Dict, Iterator
 from data_utils import empty_bundle, FrameBundle
 
+PROGRAM_VERSION = "8.0.0"
+
 
 class LimbView:
     """Read/write view onto a single limb ('RH'/'LH'/'RL'/'LL') across the owning
@@ -78,11 +80,11 @@ class Video:
         
 
         if sys.platform.startswith("win"):
-            self.program_version = "7.8.0 (Windows)"
+            self.program_version = f"{PROGRAM_VERSION} (Windows)"
         elif sys.platform.startswith("linux"):
-            self.program_version = "7.8.0 (Linux)"
+            self.program_version = f"{PROGRAM_VERSION} (Linux)"
         else:
-            self.program_version = "7.8.0 (Unknown OS)"
+            self.program_version = f"{PROGRAM_VERSION} (Unknown OS)"
         print("INFO: Program version:", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
