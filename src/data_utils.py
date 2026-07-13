@@ -64,44 +64,6 @@ def write_export_metadata(meta_path: str,
         meta["Total Labeling Time (hours)"] = round(float(labeling_time_seconds) / 3600.0, 4)
     atomic_write(meta_path, lambda f: json.dump(meta, f, indent=2, ensure_ascii=False))
 
-def _prepend_header(
-    path,
-    program_version,
-    video_name,
-    labeling_mode,
-    frame_rate,
-    clothes_list,
-    param_labels: dict | None = None,
-    limb_param_labels: dict | None = None,
-):
-    def _fmt_label_map(d):
-        if not d:
-            return ""
-        # Expecting {"Par1": "Looking", "Par2": "…", "Par3": "…"}
-        items = [f'{k}="{v}"' for k, v in (d.items())]
-        return ", ".join(items)
-
-    with open(path, 'r') as f:
-        data = f.read()
-
-    # Build the 5th line with optional mappings appended
-    fifth = f"Zones Covered With Clothes: {clothes_list}"
-    gl = _fmt_label_map(param_labels)
-    ll = _fmt_label_map(limb_param_labels)
-    if gl:
-        fifth += f" ; Param Labels: {gl}"
-    if ll:
-        fifth += f" ; Limb Param Labels: {ll}"
-
-    with open(path, 'w') as f:
-        f.write(f"Program Version: {program_version}\n")
-        f.write(f"Video Name: {video_name}\n")
-        f.write(f"Labeling Mode: {labeling_mode}\n")
-        f.write(f"Frame Rate: {frame_rate}\n")
-        f.write(fifth + "\n")
-        f.write("\n")  # blank separator line
-        f.write(data)
-        
 def bundle_summary_dict(b):
     """
     Return a compact, readable dict of everything we care about in a FrameBundle,
@@ -507,7 +469,6 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     Emit the legacy *_export.csv with EXACT schema/order and a row for EVERY frame 0..total_frames.
     - Global Params: Par1..Par3 → Parameter_1..3
     - Limb Params:  Par1..Par3 → {LH,LL,RH,RL}_Parameter_1..3
-    Appends label mappings to the 5th header line (keeps 5-line header + blank).
     """
     rows = []
 
@@ -556,18 +517,6 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     df = pd.DataFrame(rows, columns=cols)
     atomic_write(out_csv, lambda f: df.to_csv(f, index=False))
 
-    # Keep 5-line header; append label mappings to the last line
-    '''
-    _prepend_header(
-        out_csv,
-        program_version,
-        video_name,
-        labeling_mode,
-        frame_rate,
-        clothes_list,
-        param_labels=param_labels,
-        limb_param_labels=limb_param_labels,
-    )'''
     # CSV remains clean (no preamble). Metadata is written separately by caller.
     print(f"DEBUG: Export → {out_csv} (rows={len(rows)})")
 
@@ -736,118 +685,6 @@ def load_limb_parameters(csv_path):
             elif param_name == "Parameter_3":
                 p3[(limb, frame)] = state
     return p1, p2, p3
-
-def merge_and_flip_export(
-    lh_csv, ll_csv, rh_csv, rl_csv,
-    param_paths, notes_path, limb_params_path,
-    video_name, frame_rate, program_version, labeling_mode,
-    clothes_list, out_folder
-):
-    # Load limb CSVs
-    lh_df = pd.read_csv(lh_csv)
-    ll_df = pd.read_csv(ll_csv)
-    rh_df = pd.read_csv(rh_csv)
-    rl_df = pd.read_csv(rl_csv)
-
-    for df, limb in zip([lh_df, ll_df, rh_df, rl_df], ['LH', 'LL', 'RH', 'RL']):
-        df.columns = [f"{limb}_{col}" if col != "Frame" else "Frame" for col in df.columns]
-
-    merged_df = lh_df.merge(ll_df, on="Frame", how="outer") \
-                     .merge(rh_df, on="Frame", how="outer") \
-                     .merge(rl_df, on="Frame", how="outer")
-
-    # parameters 1..3
-    for i, p in enumerate(param_paths, start=1):
-        if p and os.path.exists(p):
-            param_df = pd.read_csv(p)
-            param_df.columns = ['Frame', f'Parameter_{i}']
-            merged_df = merged_df.merge(param_df, on='Frame', how='outer')
-        else:
-            col = f'Parameter_{i}'
-            if col not in merged_df.columns:
-                merged_df[col] = None
-
-    # Drop legacy Look columns (no longer used in exports).
-    merged_df = merged_df.drop(columns=[c for c in merged_df.columns if "_Look" in c], errors="ignore")
-
-    merged_df = merged_df.drop_duplicates(subset=['Frame'])
-    merged_df = merged_df.drop([c for c in merged_df.columns if c.endswith('_y')], axis=1)
-    merged_df.columns = [c.replace('_x', '') for c in merged_df.columns]
-    merged_df = merged_df.drop([c for c in merged_df.columns if c.endswith('_Touch')], axis=1)
-
-    # notes
-    if notes_path and os.path.exists(notes_path):
-        notes_df = pd.read_csv(notes_path)
-        merged_df = merged_df.merge(notes_df, on='Frame', how='outer')
-    else:
-        if 'Note' not in merged_df.columns:
-            merged_df['Note'] = None
-
-    # limb params
-    if limb_params_path and os.path.exists(limb_params_path):
-        limb_params_df = pd.read_csv(limb_params_path)
-        if not limb_params_df.empty:
-            limb_params_df = limb_params_df.pivot(index='Frame', columns=['Limb', 'Parameter'], values='State')
-            limb_params_df.columns = [f"{limb}_{param}" for limb, param in limb_params_df.columns]
-            limb_params_df.reset_index(inplace=True)
-        merged_df = pd.merge(merged_df, limb_params_df, on='Frame', how='outer')
-
-    # expected columns scaffold
-    expected_columns = ['Frame']
-    for limb in ['LH', 'LL', 'RH', 'RL']:
-        for i in range(1, 4):
-            col = f"{limb}_Parameter_{i}"
-            if col not in merged_df.columns:
-                merged_df[col] = None
-            expected_columns.append(col)
-
-    merged_df = merged_df.drop_duplicates(subset=['Frame'])
-    existing_columns = [c for c in expected_columns if c in merged_df.columns]
-    remaining_columns = [c for c in merged_df.columns if c not in existing_columns]
-    merged_df = merged_df[existing_columns + remaining_columns]
-    merged_df['Time_ms'] = (merged_df['Frame'] / frame_rate) * 1000
-
-    # final ordering (keep misc first)
-    limb_params_cols = [f"{limb}_Parameter_{i}" for limb in ['LH', 'LL', 'RH', 'RL'] for i in range(1, 4)]
-    other_cols = [c for c in merged_df.columns if c not in limb_params_cols and c not in ('Note', 'Time_ms')]
-    final_cols = other_cols + limb_params_cols + (['Note'] if 'Note' in merged_df.columns else []) + (['Time_ms'] if 'Time_ms' in merged_df.columns else [])
-    merged_df = merged_df[final_cols]
-
-    os.makedirs(out_folder, exist_ok=True)
-    pref = os.path.join(out_folder, f"{video_name}_export_flipped.csv")
-    merged_df.to_csv(pref, index=False)
-
-    # prepend header meta to file
-    _prepend_header(
-        pref, program_version, video_name, labeling_mode, frame_rate,
-        clothes_list
-    )
-
-    # produce L<->R flipped version
-    flipped = _swap_lr_columns(merged_df)
-    flipped = flipped.applymap(_swap_lr_in_string)
-    out_csv = os.path.join(out_folder, f"{video_name}_export.csv")
-    flipped.to_csv(out_csv, index=False)
-    _prepend_header(
-        out_csv, program_version, video_name, labeling_mode, frame_rate,
-        clothes_list
-    )
-    return pref, out_csv
-
-
-def _swap_lr_in_string(val):
-    if not isinstance(val, str):
-        return val
-    return val.replace('L', '§').replace('R', 'L').replace('§', 'R')
-
-def _swap_lr_columns(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    for left_prefix, right_prefix in (('LH_', 'RH_'), ('LL_', 'RL_')):
-        left_cols  = [c for c in out.columns if c.startswith(left_prefix)]
-        right_cols = [c for c in out.columns if c.startswith(right_prefix)]
-        for l, r in zip(sorted(left_cols), sorted(right_cols)):
-            out[l], out[r] = out[r].copy(), out[l].copy()
-    return out
 
 def extract_zones_from_file(file_path):
     if not file_path or not os.path.exists(file_path):

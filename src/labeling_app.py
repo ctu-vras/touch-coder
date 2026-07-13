@@ -32,7 +32,7 @@ from config_utils import (
 from data_utils import (
     bundle_summary_str,
     csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
-    save_limb_parameters, load_limb_parameters, merge_and_flip_export, extract_zones_from_file,
+    save_limb_parameters, load_limb_parameters, extract_zones_from_file,
     FrameRecord,
 )
 from frame_utils import check_items_count, create_frames, FrameExtractionError
@@ -1084,7 +1084,7 @@ class LabelingApp(tk.Tk):
     def mark_bundle_changed(self, index=None):
         if self.video is None:
             return
-        idx = self.video.current_frame
+        idx = self.video.current_frame if index is None else index
         
         b = self.video.frames.get(idx)
         if isinstance(b, dict):
@@ -1099,7 +1099,7 @@ class LabelingApp(tk.Tk):
     def notify_bundle_changed(self, index=None):
         if self.video is None:
             return
-        idx = self.video.current_frame
+        idx = self.video.current_frame if index is None else index
         try:
             b = self.video.frames[idx]
             if DEBUG:

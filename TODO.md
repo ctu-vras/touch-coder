@@ -24,9 +24,7 @@ Each gets a fix plan under `to_do/` before implementation. Move to `DONE.md` whe
 
 ### Medium
 - **M1** `toggle_limb_parameter` stores the string `"None"` instead of `None`. — plan: [fix_M1.md](docs/reviews/2026-07-12/to_do/fix_M1.md)
-- **M2** `mark_bundle_changed(index=None)` ignores its argument. — plan: [fix_M2.md](docs/reviews/2026-07-12/to_do/fix_M2.md) — land **before H2**
 - **M3** `_Look`/gaze data is never exported (schema mismatch). — plan: [fix_M3.md](docs/reviews/2026-07-12/to_do/fix_M3.md) — decided: vestigial, remove + coworker notice in `docs/EXPORT_NOTES.md`
-- **M5** `_swap_lr_in_string` corrupts free text (dead-but-dangerous). — plan: [fix_M5.md](docs/reviews/2026-07-12/to_do/fix_M5.md) — land **before M6**
 - **M6** Missing `encoding="utf-8"` on builtin `open()` calls. — plan: [fix_M6.md](docs/reviews/2026-07-12/to_do/fix_M6.md)
 - **M7** Resource leaks + O(n²) polling in frame extraction.
 - **M8** `load_pose_dataset` uses the slow `iterrows()` path. — plan: [fix_M8.md](docs/reviews/2026-07-12/to_do/fix_M8.md)
