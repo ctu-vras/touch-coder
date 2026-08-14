@@ -6,7 +6,7 @@ The app's `src/` modules import each other with `src/` as the import root
 `src/` on sys.path. We add it here rather than requiring an editable install.
 
 Tests are black-box against the pure-function core (I/O, parsing, data model).
-They must NEVER read or write the real `Labeled_data/` tree — build inputs under
+They must NEVER read or write the real `data/` tree — build inputs under
 the `tmp_path` fixture instead.
 """
 import os

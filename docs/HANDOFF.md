@@ -47,7 +47,7 @@ rendering). Each finding's plan says which half it lives in.
   uv run pytest tests/ -k <id>          # e.g. -k C3
   ```
   Tests are black-box: build inputs in a `tmp_path`, call the function, assert on the
-  returned dict / written file. **Never** touch the real `Labeled_data/` tree — use
+  returned dict / written file. **Never** touch the real `data/` tree (nor a legacy `Labeled_data/` one) — use
   `tmp_path`. Never weaken a test to make it pass.
 - **Manual half — checklist against the running app.** GUI-only behaviour (key bindings,
   canvas repaint, thread timing, dialogs) is verified by hand. Launch the app and walk the
@@ -75,8 +75,8 @@ tag). A fix leaves the version untouched.
   gaze/`_Look`) is resolved by removing dead code, not by extending the schema.
 - Do **not** commit or push — leave all changes in the working tree. (End with a one-line
   commit suggestion; don't act on it.)
-- Do **not** modify anything under `Labeled_data/` (real research data) or the shipped
-  `icons/` masks/diagrams. Tests create their own throwaway inputs under `tmp_path`.
+- Do **not** modify anything under `data/` (real research data; older working copies may still have it as `Labeled_data/`) or the shipped
+  `src/resources/icons/` masks/diagrams. Tests create their own throwaway inputs under `tmp_path`.
 - Do **not** edit the content of `review.md` or the fix plan — they are immutable snapshots.
   (Moving the plan to `done/` and updating link *paths* is the one exception.)
 

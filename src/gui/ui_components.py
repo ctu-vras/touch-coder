@@ -10,7 +10,7 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 import sys
 
-from gui.resource_utils import resource_path
+from gui.resource_utils import asset_path
 from gui import theme
 
 def build_ui(app):
@@ -286,7 +286,7 @@ def _build_diagram_panel(app, scale):
     app.diagram_canvas.pack(padx=10, pady=10, side="top", anchor="n")
 
     try:
-        img = Image.open(resource_path("icons/diagram0.png"))
+        img = Image.open(asset_path("icons/diagram0.png"))
         img = img.resize((w, h), Image.LANCZOS)
         app.photo = ImageTk.PhotoImage(img)
         app.diagram_canvas.create_image(0, 0, anchor="nw", image=app.photo)

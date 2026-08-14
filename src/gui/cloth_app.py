@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 
-from gui.resource_utils import resource_path
+from gui.resource_utils import asset_path
 from gui import theme
 
 DEFAULT_CLOTH_DIAGRAM_SCALE = 1.0
@@ -60,7 +60,7 @@ class ClothApp:
         self.f.grid(row=1, column=0, sticky="nsew")
 
         self.dots = {}
-        self.img = Image.open(resource_path("icons/diagram.png"))
+        self.img = Image.open(asset_path("icons/diagram.png"))
         self.img = self.img.resize(
             (int(self.img.width * self.diagram_scale), int(self.img.height * self.diagram_scale)),
             Image.LANCZOS,

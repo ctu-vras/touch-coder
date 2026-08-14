@@ -13,7 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from gui.resource_utils import resource_path
+from gui.resource_utils import asset_path
 
 LIMBS = ["LH", "RH", "LL", "RL"]
 
@@ -542,7 +542,7 @@ def _zone_sort_key(zone: str):
 
 
 def _get_zone_list(new_template: bool):
-    zones_dir = resource_path("icons/zones3_new_template" if new_template else "icons/zones3")
+    zones_dir = asset_path("icons/zones3_new_template" if new_template else "icons/zones3")
     zones = []
     try:
         for filename in os.listdir(zones_dir):
@@ -622,17 +622,17 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate, new_templat
 
     if new_template:
         image_paths = [
-            resource_path("icons/LH_new_template.png"),
-            resource_path("icons/RH_new_template.png"),
-            resource_path("icons/LL_new_template.png"),
-            resource_path("icons/RL_new_template.png"),
+            asset_path("icons/LH_new_template.png"),
+            asset_path("icons/RH_new_template.png"),
+            asset_path("icons/LL_new_template.png"),
+            asset_path("icons/RL_new_template.png"),
         ]
     else:
         image_paths = [
-            resource_path("icons/LH.png"),
-            resource_path("icons/RH.png"),
-            resource_path("icons/LL.png"),
-            resource_path("icons/RL.png"),
+            asset_path("icons/LH.png"),
+            asset_path("icons/RH.png"),
+            asset_path("icons/LL.png"),
+            asset_path("icons/RL.png"),
         ]
     _plot_touch_visualization_all_4(limb_rows, image_paths, output_folder)
 
@@ -743,8 +743,8 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate, new_templat
 
 
 if __name__ == "__main__":
-    data_path = "Labeled_data/test/data/"
-    output_folder = "Labeled_data/test/plots/"
+    data_path = "data/test/state/"
+    output_folder = "data/test/plots/"
     name = "test"
     debug = False
     do_analysis(data_path, output_folder, name, debug, frame_rate=30)

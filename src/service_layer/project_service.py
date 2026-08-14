@@ -32,12 +32,13 @@ from adapters.unified_repo import (
     load_unified_dataset,
 )
 from domain.model import FrameBundle, empty_bundle
-from domain.project import ProjectPaths
+from domain.project import VIDEOS_DIR, ProjectPaths
+from service_layer.migration_service import migrate_project_dir
 
-DEFAULT_VIDEOS_DIR = "Videos"
+DEFAULT_VIDEOS_DIR = VIDEOS_DIR
 
 
-# === Labeling-time accumulator (data/<name>_metadata.json) ====================
+# === Labeling-time accumulator (state/<name>_metadata.json) ===================
 #
 # BUG FIX (silent reset on restart): the writer used to store
 # "Total Labeling Time (hours)" while the loader read
@@ -118,7 +119,7 @@ class LabelingTimer:
         self.session_start = None
 
 
-# === Video copy into the project Videos folder ================================
+# === Video copy into the project videos folder ================================
 def plan_video_copy(source_path: str, videos_dir: str = DEFAULT_VIDEOS_DIR):
     """Decide the copy target for a source video.
 
@@ -133,7 +134,7 @@ def plan_video_copy(source_path: str, videos_dir: str = DEFAULT_VIDEOS_DIR):
     dest_path = os.path.join(videos_dir, os.path.basename(source_path))
 
     if os.path.abspath(source_path) == os.path.abspath(dest_path):
-        print(f"INFO: Video already inside project Videos folder: {dest_path}")
+        print(f"INFO: Video already inside project videos folder: {dest_path}")
         return dest_path, "in_place", False
 
     if os.path.exists(dest_path):
@@ -142,7 +143,7 @@ def plan_video_copy(source_path: str, videos_dir: str = DEFAULT_VIDEOS_DIR):
             size_mismatch = os.path.getsize(source_path) != os.path.getsize(dest_path)
         except Exception:
             print("WARN: Could not compare video sizes; using existing copy.")
-        print(f"INFO: Video already exists in Videos folder: {dest_path}")
+        print(f"INFO: Video already exists in videos folder: {dest_path}")
         return dest_path, "existing", size_mismatch
 
     return dest_path, "copy", False
@@ -173,7 +174,10 @@ def prepare_project(raw_video_name: str, labeling_mode: str) -> ProjectPaths:
     paths = ProjectPaths.for_video(
         raw_video_name, reliability=(labeling_mode == "Reliability")
     )
-    for d in (paths.data_dir, paths.frames_dir, paths.plots_dir, paths.export_dir):
+    # Pre-rename folders (<video>/data/) must become <video>/state/ BEFORE the
+    # makedirs below would create an empty state/ next to them.
+    migrate_project_dir(paths.video_dir)
+    for d in (paths.state_dir, paths.frames_dir, paths.plots_dir, paths.export_dir):
         os.makedirs(d, exist_ok=True)
     return paths
 
@@ -274,7 +278,7 @@ def load_notes(notes_path: str) -> dict:
 
 # === Last position ============================================================
 def write_last_position(paths: ProjectPaths, frame: int, total_frames: int) -> None:
-    os.makedirs(paths.data_dir, exist_ok=True)
+    os.makedirs(paths.state_dir, exist_ok=True)
     path = paths.last_position_json
     try:
         payload = {

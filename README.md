@@ -86,7 +86,7 @@ python3 src/main.py
 
 6. **Save Labeled Touches:**
    - Periodically save your work by clicking the `Save` button.
-   - You can find the labeled data in `Labeled_data/name_of_video/data/export/name_of_video_export.csv`
+   - You can find the labeled data in `data/name_of_video/export/name_of_video_export.csv`
 
 7. **Close the Application:**
    - The application will automatically save your data when you close it.

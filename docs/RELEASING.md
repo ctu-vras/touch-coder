@@ -36,7 +36,7 @@ Run through this before tagging. None of these are enforced by CI — they're so
 - [ ] Working tree is clean (`git status` shows nothing modified, nothing staged).
 - [ ] All work that should ship is **merged into master**, not lingering on a branch.
 - [ ] `python src/main.py` runs locally (smoke test the GUI, load a video, save once).
-- [ ] `pyinstaller TinyTouch.spec` succeeds locally if you changed anything that affects packaging (new dependency, new asset under `icons/`, anything imported via PyInstaller hooks). Skip if it's a pure code change.
+- [ ] `pyinstaller TinyTouch.spec` succeeds locally if you changed anything that affects packaging (new dependency, new asset under `src/resources/icons/`, anything imported via PyInstaller hooks). Skip if it's a pure code change.
 - [ ] Decide the new version using semver (see [Versioning](#versioning)).
 - [ ] **Bump the version string** in [src/video_model.py](../src/video_model.py) (see below).
 
@@ -53,7 +53,7 @@ else:
     self.program_version = "7.6.0 (Unknown OS)"
 ```
 
-**This string is stamped into every export's metadata JSON sidecar** (`Labeled_data/<video>/export/<video>_metadata.json`, `Program Version` field). Researchers reading old datasets rely on it to know which TinyTouch produced them, so it must match the git tag you're about to push.
+**This string is stamped into every export's metadata JSON sidecar** (`data/<video>/export/<video>_metadata.json`, `Program Version` field). Researchers reading old datasets rely on it to know which TinyTouch produced them, so it must match the git tag you're about to push.
 
 Edit the three lines, commit, then push to master **before** tagging:
 
@@ -112,7 +112,7 @@ Quick post-release sanity check:
 1. Download `TinyTouch-v7.7.0-windows-x64.zip` from the release page.
 2. Extract and run `TinyTouch-v7.7.0.exe`.
 3. Load any video, label one frame, save.
-4. Open `Labeled_data/<video>/export/<video>_metadata.json` and confirm `"Program Version": "7.7.0 (Windows)"` matches the tag.
+4. Open `data/<video>/export/<video>_metadata.json` and confirm `"Program Version": "7.7.0 (Windows)"` matches the tag.
 5. (Optional) Repeat on Linux if you have access — the legacy build is the one most likely to break first since it runs on Bullseye glibc.
 
 ## Manual builds without releasing
@@ -175,4 +175,4 @@ Recent history (most recent first): `v7.6.0`, `v7.5.7`, `v7.5.6`, `v7.5.5`, ...
 - **Tag with `-legacy` suffix.** Every job is gated by `if: ${{ !endsWith(github.ref_name, '-legacy') }}`, so the workflow runs but immediately skips. Don't use `-legacy` in tag names; the *legacy build* runs on regular tags by virtue of the separate `build-linux-legacy` job.
 - **Pushed tag before bumping version.** Use [Re-tagging](#re-tagging) to move the tag to the version-bump commit, or just push another tag (`v7.7.1`) with the right code.
 - **New dependency added but `requirements.txt` not pinned.** PyInstaller may pick up a different version on the runners than you tested locally. Always pin (`package==X.Y.Z`) and verify with a manual `workflow_dispatch` build before tagging.
-- **New asset under `icons/` not picked up by the bundle.** [TinyTouch.spec](../TinyTouch.spec) bundles the whole `icons/` tree as a `datas` entry, so this *should* work automatically — but if you add a folder elsewhere (e.g. `assets/audio/`), update `datas` in the spec.
+- **New asset under `src/resources/` not picked up by the bundle.** [TinyTouch.spec](../TinyTouch.spec) bundles the whole `src/resources/` tree as a single `datas` entry (destination `resources`), so anything you drop under `src/resources/icons/` works automatically — read it at runtime with `resource_utils.asset_path("icons/...")`. If you add a runtime asset folder somewhere else, update `datas` in the spec AND `resource_utils`.

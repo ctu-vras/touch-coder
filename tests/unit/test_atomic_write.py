@@ -7,7 +7,7 @@ routes its bytes through `atomic_io.atomic_write`, which streams into a sibling
 raises before the replace, the previous complete file is left untouched and the
 corruption is confined to the discarded `.tmp`.
 
-Black-box, tmp_path only — never touches the real Labeled_data/.
+Black-box, tmp_path only — never touches the real data/ tree.
 
 Run:  uv run pytest tests/ -k C1 -v
 """

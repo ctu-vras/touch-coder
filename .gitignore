@@ -13,17 +13,20 @@ CLAUDE.md
 # Ignore flagged folder (if not needed in the repo)
 flagged/
 
-# Ignore the icons folder (if not needed in the repo)
-
-
-# Ignore Videos folder contents (large binaries kept locally only)
+# Ignore videos/ contents (large binaries kept locally only)
 # Exception: cat3.mp4 is the in-repo sample used for quick smoke testing.
-Videos/**
-!Videos/cat3.mp4
+/videos/**
+!/videos/cat3.mp4
 
-# Ignore Labeled_data contents but keep the folder in the repo
-Labeled_data/**
-!Labeled_data/.gitkeep
+# Ignore data/ (labeling output) contents but keep the folder in the repo.
+# Anchored with a leading slash so it cannot swallow scripts/bench/data/ etc.
+/data/**
+!/data/.gitkeep
+
+# Pre-rename output root. Kept ignored so a not-yet-migrated working copy never
+# offers real research data for commit; delete this rule once no local
+# Labeled_data/ trees are left (migration_service moves them into data/).
+/Labeled_data/**
 
 # Ignore config and environment files
 
@@ -56,8 +59,8 @@ venv/
 TinyTouch_env/
 
 # Ignore generated sorted frames
-Labeled_data/*/sorted_frames/
-Labeled_data/*/sorted_frames/**
+/data/*/sorted_frames/
+/data/*/sorted_frames/**
 
 .claude
 AGENTS.md

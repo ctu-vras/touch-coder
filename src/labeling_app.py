@@ -29,7 +29,7 @@ from domain.project import ProjectPaths
 from domain.touch import find_last_open_onset, zones_at
 from gui import theme
 from gui.cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
-from gui.resource_utils import resource_path
+from gui.resource_utils import asset_path
 from gui.ui_components import build_ui
 from perf_utils import PerfLogger
 from service_layer import annotation_service, project_service, save_service
@@ -674,7 +674,7 @@ class LabelingApp(tk.Tk):
     def preview_before_save(self, changed_only: bool = True):
         """
         Print a compact preview of what would be saved right now.
-        Shows base/data/export dirs and per-frame summaries.
+        Shows base/state/export dirs and per-frame summaries.
         """
         if not self.video:
             print("PREVIEW: No video loaded."); return
@@ -682,7 +682,7 @@ class LabelingApp(tk.Tk):
         paths = ProjectPaths(self.video_name)
         print("\n===== PREVIEW: Save destinations =====")
         print(f"Base:   {paths.video_dir}")
-        print(f"Data:   {paths.data_dir}")
+        print(f"State:  {paths.state_dir}")
         print(f"Export: {paths.export_dir}")
         print(f"Unified CSV (will write changed-only): {paths.unified_csv}")
         print(f"Export  CSV (will write all frames):   {paths.export_csv}")
@@ -713,18 +713,18 @@ class LabelingApp(tk.Tk):
         )
 
     def on_radio_click(self):
-        expected_dir = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
+        expected_dir = asset_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
         if getattr(self, "_zone_dir", None) != expected_dir:
             self._reset_zone_cache()
             self._load_zone_masks()
         if self.option_var_1.get() == "RH":
-            image_path = resource_path("icons/RH_new_template.png" if self.NEW_TEMPLATE else "icons/RH.png")
+            image_path = asset_path("icons/RH_new_template.png" if self.NEW_TEMPLATE else "icons/RH.png")
         elif self.option_var_1.get() == "LH":
-            image_path = resource_path("icons/LH_new_template.png" if self.NEW_TEMPLATE else "icons/LH.png")
+            image_path = asset_path("icons/LH_new_template.png" if self.NEW_TEMPLATE else "icons/LH.png")
         elif self.option_var_1.get() == "RL":
-            image_path = resource_path("icons/RL_new_template.png" if self.NEW_TEMPLATE else "icons/RL.png")
+            image_path = asset_path("icons/RL_new_template.png" if self.NEW_TEMPLATE else "icons/RL.png")
         else:  # LL
-            image_path = resource_path("icons/LL_new_template.png" if self.NEW_TEMPLATE else "icons/LL.png")
+            image_path = asset_path("icons/LL_new_template.png" if self.NEW_TEMPLATE else "icons/LL.png")
 
         img = Image.open(image_path)
         scale = getattr(self, "diagram_scale", 1.0)
@@ -737,7 +737,7 @@ class LabelingApp(tk.Tk):
 
     # === Zone Masks & Lookups ==================================================
     def _load_zone_masks(self):
-        directory = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
+        directory = asset_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
         if getattr(self, "_zone_dir", None) == directory and getattr(self, "_zone_masks", None):
             return
         self._zone_dir = directory
@@ -1221,7 +1221,7 @@ class LabelingApp(tk.Tk):
             raise result["error"]
 
     def _prepare_video_copy(self, source_path):
-        """Ensure the video lives inside the project Videos folder; returns the
+        """Ensure the video lives inside the project videos folder; returns the
         path to use, or None when the copy failed. The decision is the
         service's; the progress window and warnings are ours."""
         dest_path, action, size_mismatch = project_service.plan_video_copy(source_path)
@@ -1233,7 +1233,7 @@ class LabelingApp(tk.Tk):
             if size_mismatch:
                 messagebox.showwarning(
                     "Video Copy Skipped",
-                    "A video with the same name already exists in the Videos folder.\n"
+                    "A video with the same name already exists in the videos folder.\n"
                     "Using the existing copy to avoid overwriting."
                 )
             return dest_path
@@ -1549,10 +1549,10 @@ class LabelingApp(tk.Tk):
         print("INFO: Saving (unified & export)...")
 
         paths = ProjectPaths(self.video_name)
-        os.makedirs(paths.data_dir, exist_ok=True)
+        os.makedirs(paths.state_dir, exist_ok=True)
         os.makedirs(paths.export_dir, exist_ok=True)
         print(f"DEBUG: Base dir:   {paths.video_dir}")
-        print(f"DEBUG: Data dir:   {paths.data_dir}")
+        print(f"DEBUG: State dir:  {paths.state_dir}")
         print(f"DEBUG: Export dir: {paths.export_dir}")
         print(f"DEBUG: Frames dir: {self.video.frames_dir}")
         print(f"DEBUG: Writing unified dataset -> {paths.unified_csv}")
@@ -1621,7 +1621,7 @@ class LabelingApp(tk.Tk):
             paths = ProjectPaths(self.video_name)
             try:
                 analysis.do_analysis(
-                    paths.data_dir,
+                    paths.state_dir,
                     paths.plots_dir,
                     self.video_name,
                     debug=False,
@@ -1923,7 +1923,7 @@ class LabelingApp(tk.Tk):
         if not self.video.dataRH_path_to_csv:
             print("ERROR: Data path is not set"); return
         paths = ProjectPaths(self.video_name)
-        os.makedirs(paths.data_dir, exist_ok=True)
+        os.makedirs(paths.state_dir, exist_ok=True)
         text_file_path = paths.clothes_txt
         self.video.clothes_file_path = text_file_path
         scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE

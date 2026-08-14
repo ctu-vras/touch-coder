@@ -8,8 +8,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # Update these paths/settings here instead of using CLI arguments.
-SOURCE_IMAGE = Path("icons/diagram.png")
-OUTPUT_DIR = Path("icons/generated_masks")
+# Paths are relative to the repo root (run this offline tool from there).
+SOURCE_IMAGE = Path("src/resources/icons/diagram.png")
+OUTPUT_DIR = Path("src/resources/icons/generated_masks")
 ARCHIVE_DIR = OUTPUT_DIR / "_merged_legacy"
 ZONE_NAME_PREFIX = "ZONE_"
 THRESHOLD = 200

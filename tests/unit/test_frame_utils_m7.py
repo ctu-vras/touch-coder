@@ -6,10 +6,13 @@ import os
 import pytest
 
 from adapters import frame_extractor as frame_utils
+from domain.project import DATA_DIR, FRAMES_SUBDIR
 
 
 def _reliability_source(tmp_path, video_name="vid"):
-    source = tmp_path / "Labeled_data" / video_name / "frames"
+    # Mirrors ProjectPaths(...).original.frames_dir, which create_frames derives
+    # relative to the cwd the tests chdir into.
+    source = tmp_path / DATA_DIR / video_name / FRAMES_SUBDIR
     source.mkdir(parents=True)
     return source
 

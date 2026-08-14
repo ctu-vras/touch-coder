@@ -36,14 +36,17 @@ touch-coder/
 │   ├── cloth_app.py              # Clothing-zone selector dialog (Toplevel)
 │   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
 │   ├── perf_utils.py             # Optional perf timer + periodic summary logging
-│   └── resource_utils.py         # PyInstaller-aware asset path resolution
-├── icons/                        # Body diagrams, limb images, zone masks
-│   ├── diagram0.png              # Default touch diagram (rendered on canvas)
-│   ├── zones3/                   # Touch-mode zone masks (one PNG per zone)
-│   └── zones3_new_template/      # Alternate zone set (config: new_template = true)
-├── Labeled_data/                 # Output (gitignored) -- one folder per video
+│   ├── resource_utils.py         # PyInstaller-aware asset path resolution
+│   └── resources/                # RUNTIME assets -- everything here ships in the exe
+│       └── icons/                # Body diagrams, limb images, zone masks
+│           ├── diagram0.png      # Default touch diagram (rendered on canvas)
+│           ├── zones3/           # Touch-mode zone masks (one PNG per zone)
+│           └── zones3_new_template/  # Alternate zone set (config: new_template = true)
+├── data/                         # Output (gitignored) -- one folder per video
+├── videos/                       # Source videos (gitignored except cat3.mp4 sample)
 ├── tests/                        # Benchmark / dev scripts (e.g. frame extraction)
-├── assets/, docs/, .github/      # Static assets, docs, CI workflow
+├── assets/, docs/, .github/      # REPO-ONLY static assets, docs, CI workflow
+│                                 # (assets/icons_unused/ = quarantined images)
 ├── config.json                   # User-configurable settings (see "Configuration")
 ├── requirements.txt              # Pinned Python dependencies
 └── TinyTouch.spec                # PyInstaller build spec
@@ -119,7 +122,7 @@ The choice is persisted in `config.json` (`last_labeling_mode`).
 - Navigate frame-by-frame: arrow keys, mouse wheel, `<<` / `<` / `>` / `>>` buttons, Play / Stop, click on Timeline 1 / Timeline 2.
 - Pick a limb (RH / LH / RL / LL) via radio buttons; the diagram re-renders with that limb's overlays.
 - **Left-click** on the diagram = touch-onset (green dot), **right-click** = touch-offset (red dot), **middle-click** or `d` = remove nearest dot.
-- Zones under each click are auto-detected from per-zone PNG masks under [icons/zones3/](icons/zones3/) (or [icons/zones3_new_template/](icons/zones3_new_template/) when `new_template = true`).
+- Zones under each click are auto-detected from per-zone PNG masks under [src/resources/icons/zones3/](src/resources/icons/zones3/) (or [src/resources/icons/zones3_new_template/](src/resources/icons/zones3_new_template/) when `new_template = true`). Both directories are loaded by directory scan (`adapters.zone_masks.load_zone_masks`), so *every* PNG in them is live -- adding a file adds a zone.
 - Track infant gaze (`Looking: Yes / No`) and up to 3 global + 3 per-limb parameters (button labels are user-editable in Settings → persisted to `config.json`).
 - Six "boxes" on the diagram act as catch-all zones (ground, prop, etc).
 - Two timelines visualize all touch events; the lower one is the global scrub bar.
@@ -129,8 +132,8 @@ The choice is persisted in `config.json` (`last_labeling_mode`).
 Each labeled video produces a self-contained folder:
 
 ```
-Labeled_data/<video_name>/
-├── data/                             # Working state (load/save round-trips here)
+data/<video_name>/
+├── state/                            # Working state (load/save round-trips here)
 │   ├── <video>_unified.csv           # In-memory FrameBundle dict serialized
 │   │                                 # (changed-row journal; last Frame row wins)
 │   ├── <video>_clothes.txt           # Coordinates + auto-detected zones from Clothes dialog
@@ -146,7 +149,26 @@ Labeled_data/<video_name>/
 └── plots/                            # Plotly HTMLs from "Analysis"
 ```
 
-The split between `data/<video>_unified.csv` and `export/<video>_export.csv` is deliberate:
+Every one of these paths is derived from the `ProjectPaths` dataclass in
+[src/domain/project.py](src/domain/project.py) -- no other module hand-builds
+them.
+
+### Legacy layout & automatic migration
+
+Before v8.1 the same tree was named `Labeled_data/<video_name>/data/...` and
+source videos lived in `Videos/`. Those names are gone from the app's path
+logic; the only code that still knows them is
+[src/service_layer/migration_service.py](src/service_layer/migration_service.py),
+which runs from `main.py` before the Tk app is built (whole-tree pass) and again
+from `project_service.prepare_project` for the video being opened. It performs
+directory renames only -- `Labeled_data/` -> `data/`, `<video>/data/` ->
+`<video>/state/`, `Videos/` -> `videos/` -- via `os.rename`, so no frames tree is
+ever copied. It is idempotent, logs every move and every skip reason, and on a
+name collision it leaves BOTH copies in place with a `WARN` rather than
+overwriting or merging. Older TinyTouch versions cannot read the new layout; the
+export CSV format itself is unchanged.
+
+The split between `state/<video>_unified.csv` and `export/<video>_export.csv` is deliberate:
 
 - **Unified CSV** is the source of truth for round-trips. Saves are *incremental* -- only frames whose `Changed` flag is set are appended. Re-edited frames produce duplicate `Frame` rows; loaders resolve them last-writer-wins and atomically compact the journal when its row count exceeds twice the number of distinct frames.
 - **Export CSV** is rewritten from scratch each save with one row per frame in the canonical legacy column order. Downstream consumers (Analysis, external tooling) read this file.
@@ -193,7 +215,7 @@ When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file
 
 ## Application Workflow
 
-1. **Load Video** -- pick `Normal` / `Reliability`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `Labeled_data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts.
+1. **Load Video** -- pick `Normal` / `Reliability`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `videos/` and the project tree is created under `data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts.
 2. **Clothes** -- mark which body zones are covered with clothes; saved to `<video>_clothes.txt` and surfaced in the export metadata.
 3. **Annotate** -- pick a limb, click onsets/offsets, set gaze and parameters, type notes. Edits stay in memory until Save.
 4. **Save** -- `Save` button (or auto on Close / before Load) writes the unified CSV (incremental), the export CSV (full), and the metadata sidecar. The `Changed` flags are cleared.
@@ -206,7 +228,14 @@ When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file
 pyinstaller TinyTouch.spec
 ```
 
-Produces a standalone executable in `dist/`. The spec bundles `config.json` and the `icons/` tree as data; resource paths go through `resource_utils.resource_path` so the same code works frozen and from source.
+Produces a standalone executable in `dist/`. The spec bundles two `datas` entries, and their destinations must stay in step with [src/gui/resource_utils.py](src/gui/resource_utils.py):
+
+| Spec `datas` | Bundled at | Read via |
+| --- | --- | --- |
+| `config.json` | `<_MEIPASS>/config.json` | `resource_path("config.json")` |
+| `src/resources` | `<_MEIPASS>/resources/…` | `asset_path("icons/…")` |
+
+`resource_path` resolves distribution-root files; `asset_path` resolves the bundled runtime-asset tree (`src/resources/` from source, `<_MEIPASS>/resources/` when frozen). Change one and you must change the other.
 
 ## Releasing a New Version
 

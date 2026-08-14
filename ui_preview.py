@@ -236,7 +236,8 @@ diagram_holder = ttk.Frame(diagram_frame)
 diagram_holder.pack(side="top", pady=(10, 4), **pad)
 _diagram_img = None
 try:
-    img = Image.open(os.path.join(os.path.dirname(__file__), "icons", "diagram.png"))
+    img = Image.open(os.path.join(
+        os.path.dirname(__file__), "src", "resources", "icons", "diagram.png"))
     w, h = int(450 * DIAGRAM_SCALE), int(696 * DIAGRAM_SCALE)
     img = img.resize((w, h), Image.LANCZOS)
     _diagram_img = ImageTk.PhotoImage(img)

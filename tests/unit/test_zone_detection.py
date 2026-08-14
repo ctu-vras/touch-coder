@@ -131,7 +131,7 @@ def test_load_zone_masks_reads_images_and_names_from_filenames(tmp_path, monkeyp
     (zone_dir / "readme.txt").write_text("not a mask")
     (zone_dir / "corrupt.png").write_bytes(b"this is not a png")
 
-    monkeypatch.setattr(labeling_app, "resource_path", lambda rel: str(zone_dir))
+    monkeypatch.setattr(labeling_app, "asset_path", lambda rel: str(zone_dir))
     app = _loader_stub()
 
     LabelingApp._load_zone_masks(app)
@@ -149,7 +149,7 @@ def test_load_zone_masks_caches_per_directory(tmp_path, monkeypatch):
     zone_dir = tmp_path / "zones3"
     zone_dir.mkdir()
     _write_png(str(zone_dir), "FACE.png")
-    monkeypatch.setattr(labeling_app, "resource_path", lambda rel: str(zone_dir))
+    monkeypatch.setattr(labeling_app, "asset_path", lambda rel: str(zone_dir))
     app = _loader_stub()
 
     LabelingApp._load_zone_masks(app)
@@ -164,7 +164,7 @@ def test_load_zone_masks_caches_per_directory(tmp_path, monkeypatch):
 
 def test_load_zone_masks_missing_directory_is_a_warned_noop(tmp_path, monkeypatch, capsys):
     missing = str(tmp_path / "nope")
-    monkeypatch.setattr(labeling_app, "resource_path", lambda rel: missing)
+    monkeypatch.setattr(labeling_app, "asset_path", lambda rel: missing)
     app = _loader_stub()
 
     LabelingApp._load_zone_masks(app)

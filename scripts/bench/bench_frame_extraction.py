@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-VIDEO_DIR = os.path.join(PROJECT_ROOT, "Videos")
+VIDEO_DIR = os.path.join(PROJECT_ROOT, "videos")
 DATA_DIR = os.path.join(PROJECT_ROOT, "scripts", "bench", "data")
 
 VIDEO_FILE = None  # e.g. "videoplayback.mp4"; None = first .mp4 in VIDEO_DIR
@@ -40,10 +40,10 @@ if VIDEO_FILE is None:
             break
 
 if VIDEO_FILE is None:
-    print("ERROR: No .mp4 file found in Videos/")
+    print("ERROR: No .mp4 file found in videos/")
     sys.exit(1)
 if not os.path.exists(os.path.join(VIDEO_DIR, VIDEO_FILE)):
-    print(f"ERROR: {VIDEO_FILE} not found in Videos/")
+    print(f"ERROR: {VIDEO_FILE} not found in videos/")
     sys.exit(1)
 
 VIDEO_PATH = os.path.join(VIDEO_DIR, VIDEO_FILE)
