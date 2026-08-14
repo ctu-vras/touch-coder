@@ -2,8 +2,8 @@
 Shared pytest setup for TinyTouch.
 
 The app's `src/` modules import each other with `src/` as the import root
-(`import analysis`, `from domain.model import ...`), so tests must have
-`src/` on sys.path. We add it here rather than requiring an editable install.
+(`from domain.model import ...`, `from service_layer import ...`), so tests must
+have `src/` on sys.path. We add it here rather than requiring an editable install.
 
 Tests are black-box against the pure-function core (I/O, parsing, data model).
 They must NEVER read or write the real `data/` tree — build inputs under

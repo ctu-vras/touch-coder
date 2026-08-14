@@ -1,6 +1,7 @@
 import os
 import time
 import traceback
+import webbrowser
 from threading import Thread, Event, get_ident, current_thread
 
 import keyboard
@@ -8,7 +9,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
-import analysis
 from adapters import config
 from adapters import video_probe
 from adapters.atomic_io import atomic_write
@@ -32,7 +32,7 @@ from gui.cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
 from gui.resource_utils import asset_path
 from gui.ui_components import build_ui
 from perf_utils import PerfLogger
-from service_layer import annotation_service, project_service, save_service
+from service_layer import analysis_service, annotation_service, project_service, save_service
 from service_layer.project_service import LabelingTimer
 from video_model import Video
 
@@ -1616,21 +1616,34 @@ class LabelingApp(tk.Tk):
 
     # === Analysis / Sort / Playback ============================================
     def analysis(self):
-        if self.video:
-            self.save_data()
-            paths = ProjectPaths(self.video_name)
-            try:
-                analysis.do_analysis(
-                    paths.state_dir,
-                    paths.plots_dir,
-                    self.video_name,
-                    debug=False,
-                    frame_rate=self.frame_rate,
-                    new_template=self.NEW_TEMPLATE,
-                )
-            except Exception as exc:
-                traceback.print_exc()
-                messagebox.showerror("Analysis failed", f"Could not complete analysis:\n{exc}")
+        """Save, then run the Analysis use case and open its master HTML.
+
+        The service does all reading/computing/writing and hands back the master
+        page path; opening the browser stays here (a GUI concern) so the service
+        remains headless and testable. `new_template` is passed down from this
+        app's config snapshot — the service never reads config.json.
+        """
+        if not self.video:
+            return
+        self.save_data()
+        paths = ProjectPaths(self.video_name)
+        try:
+            result = analysis_service.run_analysis(
+                paths,
+                frame_rate=self.frame_rate,
+                new_template=self.NEW_TEMPLATE,
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            messagebox.showerror("Analysis failed", f"Could not complete analysis:\n{exc}")
+            return
+
+        if result.warnings:
+            messagebox.showwarning(
+                "Analysis finished with warnings", "\n\n".join(result.warnings)
+            )
+        print(f"INFO: opening analysis dashboard {result.master_html}")
+        webbrowser.open(result.master_html)
 
     def play_video(self):
         if self.video is None:

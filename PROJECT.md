@@ -27,16 +27,36 @@ touch-coder/
 │   ├── main.py                   # Entry point: instantiates LabelingApp and runs mainloop
 │   ├── labeling_app.py           # Main controller (~3k LOC): video, annotation, persistence,
 │   │                             # background buffer thread, playback thread, save/export
-│   ├── ui_components.py          # Tkinter layout, widgets, key/mouse bindings
-│   ├── video_model.py            # Video + per-frame data model (LimbView wrappers)
-│   ├── data_utils.py             # Unified-CSV I/O, legacy export schema, metadata sidecar
-│   ├── analysis.py               # Plotly-based analysis dashboards
-│   ├── frame_utils.py            # Frame extraction (ffmpeg → OpenCV fallback) + integrity check
-│   ├── config_utils.py           # config.json read / write, parameter-name binding
-│   ├── cloth_app.py              # Clothing-zone selector dialog (Toplevel)
-│   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
+│   ├── video_model.py            # Video entity (LimbView wrappers over the frames dict)
 │   ├── perf_utils.py             # Optional perf timer + periodic summary logging
-│   ├── resource_utils.py         # PyInstaller-aware asset path resolution
+│   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
+│   ├── domain/                   # PURE rules: no I/O, no Tk, no plotting, no config
+│   │   ├── model.py              # FrameRecord / FrameBundle shapes, LIMBS, LimbView
+│   │   ├── project.py            # ProjectPaths -- the only place on-disk layout is built
+│   │   ├── touch.py              # Touch-annotation rules (zone hit test, open-onset scan)
+│   │   └── touch_stats.py        # Episode reconstruction + touch statistics (Analysis core)
+│   ├── adapters/                 # I/O edges: files, cv2/ffmpeg, plotly, config.json
+│   │   ├── unified_repo.py       # Unified-CSV read / write (source of truth)
+│   │   ├── export_writer.py      # Legacy export schema + metadata sidecar (write)
+│   │   ├── export_reader.py      # Export CSV read, incl. legacy 6-line preamble
+│   │   ├── plotting.py           # Every plotly figure / CSV table / master HTML
+│   │   ├── config.py             # config.json read / write, AppConfig snapshot
+│   │   ├── zone_masks.py         # Zone-mask PNG loading + zone-name listing
+│   │   ├── frame_extractor.py    # Frame extraction (ffmpeg → OpenCV fallback) + integrity
+│   │   ├── frame_buffer.py       # Sliding JPEG buffer + playback advance threads
+│   │   ├── video_probe.py        # cv2 frame-count / fps probe
+│   │   └── atomic_io.py          # Write-temp-then-replace helper
+│   ├── service_layer/            # Use cases: orchestration only
+│   │   ├── save_service.py       # The save Unit of Work
+│   │   ├── project_service.py    # Video load / project preparation, labeling timer
+│   │   ├── annotation_service.py # Click / parameter mutations on the frames dict
+│   │   ├── analysis_service.py   # Analysis: read -> validate -> compute -> write
+│   │   └── migration_service.py  # Legacy directory-layout migration
+│   ├── gui/                      # Tkinter only
+│   │   ├── ui_components.py      # Layout, widgets, key/mouse bindings
+│   │   ├── theme.py              # Colors / fonts / widget styling
+│   │   ├── cloth_app.py          # Clothing-zone selector dialog (Toplevel)
+│   │   └── resource_utils.py     # PyInstaller-aware asset path resolution
 │   └── resources/                # RUNTIME assets -- everything here ships in the exe
 │       └── icons/                # Body diagrams, limb images, zone masks
 │           ├── diagram0.png      # Default touch diagram (rendered on canvas)
@@ -219,8 +239,40 @@ When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file
 2. **Clothes** -- mark which body zones are covered with clothes; saved to `<video>_clothes.txt` and surfaced in the export metadata.
 3. **Annotate** -- pick a limb, click onsets/offsets, set gaze and parameters, type notes. Edits stay in memory until Save.
 4. **Save** -- `Save` button (or auto on Close / before Load) writes the unified CSV (incremental), the export CSV (full), and the metadata sidecar. The `Changed` flags are cleared.
-5. **Analysis** -- runs `analysis.do_analysis` over the export CSV: per-limb summary stats, transition heatmaps, touch-trajectory plots, histograms, and a master HTML opened in the browser. Output lands in `plots/`.
+5. **Analysis** -- runs `analysis_service.run_analysis` over the export CSV: per-limb summary stats, transition heatmaps, touch-trajectory plots, histograms, and a master HTML. Output lands in `plots/`; the service returns the master HTML path and `LabelingApp.analysis` opens it in the browser. See "Analysis conventions" below.
 6. **Close** -- final save, persists labeling-time accumulator and last frame position.
+
+### Analysis conventions
+
+The Analysis pipeline is three layers, in this order, with all computation
+finished before the first file is written (so a failure can never leave a
+half-populated `plots/`):
+
+```
+adapters.export_reader.read_export_df   read export/<name>_export.csv
+        │                               (tolerates the legacy 6-line preamble)
+        ▼
+domain.touch_stats.parse_export         validate schema, rebuild Episodes
+        │  summarize / transitions      per-limb stats + zone transitions
+        ▼
+adapters.plotting.write_*               heatmaps, trajectory, tables, histograms,
+        │                               master_<name>.html
+        ▼
+service_layer.analysis_service          orchestrates the above, returns the path
+                                        (LabelingApp opens the browser)
+```
+
+Rules that downstream research depends on -- documented at length in
+[src/domain/touch_stats.py](src/domain/touch_stats.py):
+
+| Rule | Meaning |
+| --- | --- |
+| **Half-open `[ON, OFF)`** | A touch's duration is `OFF - ON`: active on the onset frame, offset frame excluded. Shortest closed touch = 1 frame. Matches what the labeler's timeline shades. |
+| **Open touches are censored** | An `ON` with no `OFF` is `Episode.closed=False`: no duration, excluded from totals / percentages / means / stdev / transitions / histograms, but counted and reported as "open (unterminated)" in the tables, the master page and a `WARN` log. |
+| **Transitions are pairwise** | A touch with 2 start zones and 2 end zones contributes 4 heatmap counts, so heatmap totals exceed the touch count. Stated in the heatmap subtitle. |
+| **`minimal_touch_length` is not a filter** | It is a GUI display threshold only; analysis counts every closed touch, 1-frame ones included. |
+| **Frame rate may be unusable** | `None` / `0` / negative fps (some containers report 0) never crashes: frame-based results are produced in full, every seconds-based value is empty, and the duration histogram switches to frame buckets. |
+| **fps provenance** | An explicitly passed, usable frame rate wins; otherwise `"Frame Rate"` from `export/<name>_metadata.json`; otherwise frame-only mode. The winning source is logged. |
 
 ## Local Build
 
