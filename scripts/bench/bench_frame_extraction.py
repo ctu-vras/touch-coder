@@ -6,11 +6,8 @@ Benchmark: frame extraction methods comparison.
   C) FFmpeg subprocess (imageio-ffmpeg bundled binary, single call)
 
 Usage:
-    .venv\\Scripts\\python.exe tests/bench_frame_extraction.py [video_file] [max_frames]
-
-Examples:
-    .venv\\Scripts\\python.exe tests/bench_frame_extraction.py videoplayback.mp4 27000
-    .venv\\Scripts\\python.exe tests/bench_frame_extraction.py              # first .mp4, all frames
+    Set VIDEO_FILE / MAX_FRAMES below, then run:
+    .venv\\Scripts\\python.exe scripts/bench/bench_frame_extraction.py
 """
 
 import os
@@ -24,32 +21,29 @@ import cv2
 # ---------------------------------------------------------------------------
 # Make src/ importable so we can reuse the original create_frames
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 VIDEO_DIR = os.path.join(PROJECT_ROOT, "Videos")
-DATA_DIR = os.path.join(PROJECT_ROOT, "tests", "data")
+DATA_DIR = os.path.join(PROJECT_ROOT, "scripts", "bench", "data")
 
-# Parse args: [video_file] [max_frames]
-if len(sys.argv) > 1:
-    VIDEO_FILE = sys.argv[1]
-    if not os.path.exists(os.path.join(VIDEO_DIR, VIDEO_FILE)):
-        print(f"ERROR: {VIDEO_FILE} not found in Videos/")
-        sys.exit(1)
-else:
-    VIDEO_FILE = None
+VIDEO_FILE = None  # e.g. "videoplayback.mp4"; None = first .mp4 in VIDEO_DIR
+MAX_FRAMES = None  # e.g. 27000; None = all frames
+
+if VIDEO_FILE is None:
     for f in os.listdir(VIDEO_DIR):
         if f.lower().endswith(".mp4"):
             VIDEO_FILE = f
             break
 
-MAX_FRAMES = int(sys.argv[2]) if len(sys.argv) > 2 else None
-
 if VIDEO_FILE is None:
     print("ERROR: No .mp4 file found in Videos/")
+    sys.exit(1)
+if not os.path.exists(os.path.join(VIDEO_DIR, VIDEO_FILE)):
+    print(f"ERROR: {VIDEO_FILE} not found in Videos/")
     sys.exit(1)
 
 VIDEO_PATH = os.path.join(VIDEO_DIR, VIDEO_FILE)

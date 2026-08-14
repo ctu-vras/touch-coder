@@ -30,8 +30,11 @@ Labeled_data/**
 *.env
 *.exe
 
-# Ignore test data (extracted frames)
-tests/data/
+# Ignore benchmark output data (extracted frames)
+scripts/bench/data/
+
+# Ignore pytest cache
+.pytest_cache/
 
 # Ignore log files
 *.log
@@ -45,6 +48,7 @@ tests/data/
 .DS_Store
 Thumbs.db
 
+docs/books/**
 # Ignore virtual environments
 .venv/
 venv/

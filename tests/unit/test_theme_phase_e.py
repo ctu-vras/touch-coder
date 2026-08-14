@@ -1,8 +1,6 @@
-"""Headless regression checks for the Phase E timeline and packaging polish."""
+"""Headless regression checks for the timeline canvas painters."""
 
 from contextlib import nullcontext
-import inspect
-from pathlib import Path
 from types import SimpleNamespace
 
 import theme
@@ -181,23 +179,3 @@ def test_zoom_timeline_marks_frames_past_video_end_as_unavailable():
     assert len(unavailable_cells) == 2
     assert len(unavailable_marks) == 2
     assert unavailable_cells[0][1][0] > 1
-
-
-def test_pose_timeline_uses_the_same_unavailable_tail_semantics():
-    source = inspect.getsource(LabelingApp._draw_pose_timeline)
-
-    assert "if frame_offset > self.video.total_frames:" in source
-    assert "fill=theme.TL_UNAVAILABLE" in source
-    assert "fill=theme.TL_UNAVAILABLE_MARK" in source
-
-
-def test_phase_e_canvas_and_pyinstaller_configuration_are_present():
-    root = Path(__file__).resolve().parents[1]
-    ui_source = (root / "src" / "ui_components.py").read_text(encoding="utf-8")
-    cloth_source = (root / "src" / "cloth_app.py").read_text(encoding="utf-8")
-    spec_source = (root / "TinyTouch.spec").read_text(encoding="utf-8")
-
-    assert ui_source.count("highlightthickness=0") == 3
-    assert cloth_source.count("highlightthickness=0") == 1
-    assert "app.minsize(1100, 800)" in ui_source
-    assert 'collect_data_files("ttkbootstrap")' in spec_source

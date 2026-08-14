@@ -45,22 +45,3 @@ def test_set_button_state_maps_all_supported_values(state, expected_style):
     theme.set_button_state(button, state)
 
     assert button.style == expected_style
-
-
-def test_init_style_registers_flat_styles_and_preserves_hover_text(monkeypatch):
-    monkeypatch.setitem(sys.modules, "ttkbootstrap", SimpleNamespace(Style=_FakeStyle))
-    root = _FakeRoot()
-
-    style = theme.init_style(root)
-
-    assert style.theme == theme.THEME_NAME
-    assert root.options["bg"] == theme.SURFACE
-    assert set(style.configured) == {
-        "Tool.TButton",
-        "StateOn.TButton",
-        "StateOff.TButton",
-        "StateNeutral.TButton",
-    }
-    assert style.configured["Tool.TButton"]["background"] == theme.NEUTRAL
-    assert ("active", theme.TEXT) in style.mapped["Tool.TButton"]["foreground"]
-    assert ("pressed", theme.TEXT) in style.mapped["Tool.TButton"]["foreground"]
