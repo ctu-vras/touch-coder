@@ -6,7 +6,10 @@ import labeling_app
 from labeling_app import LabelingApp
 
 
-class _Pool:
+class _Buffer:
+    """Stands in for adapters.frame_buffer.FrameBuffer, which now owns the
+    loader pool that on_close tears down."""
+
     def __init__(self, events):
         self.events = events
 
@@ -20,7 +23,7 @@ def _app(events, save_result=True):
         save_data=lambda: events.append("save") or save_result,
         save_last_position=lambda: events.append("last_position"),
         _finalize_video_time=lambda: events.append("finalize_time"),
-        _loader_pool=_Pool(events),
+        frame_buffer=_Buffer(events),
         destroy=lambda: events.append("destroy"),
     )
 

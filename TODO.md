@@ -2,6 +2,14 @@
 
 ## Notes / ideas (freeform)
 
+- position of the version
+- description in config
+- how to delete .db for the videos and when?
+- uninstall option?
+- put info about 3d pose in docs
+- flexible diagram size?
+
+
 - app crashing when closed during frame generation
 - Save takes long time for long video, maybe add progress bar?
 - Make the app dynamic in terms of size of the UI parts

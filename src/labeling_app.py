@@ -1,13 +1,7 @@
 import os
-import sys
-import json
 import time
-import copy
-import shutil
-import re
 import traceback
-from threading import Thread, Event, RLock, get_ident, current_thread
-from concurrent.futures import ThreadPoolExecutor
+from threading import Thread, Event, get_ident, current_thread
 
 import keyboard
 import tkinter as tk
@@ -18,39 +12,34 @@ import analysis
 from adapters import config
 from adapters import video_probe
 from adapters.atomic_io import atomic_write
-from adapters.export_writer import export_from_unified, write_export_metadata
-from adapters.frame_extractor import check_items_count, create_frames, FrameExtractionError
-from adapters.unified_repo import (
-    csv_to_dict,
-    extract_zones_from_file,
-    import_unified_from_export,
-    load_notes_csv,
-    load_unified_dataset,
-    save_unified_dataset,
+from adapters.frame_buffer import (
+    BufferContext,
+    FrameBuffer,
+    PlaybackContext,
+    compute_play_step,
 )
+from adapters.frame_extractor import FrameExtractionError
 from adapters.zone_masks import load_zone_masks
 from domain.model import (
     FrameRecord,
     bundle_summary_str,
-    empty_bundle,
     preview_lines_for_save,
 )
 from domain.project import ProjectPaths
-from domain.touch import cycle_param_state, find_last_open_onset, zones_at
+from domain.touch import find_last_open_onset, zones_at
 from gui import theme
 from gui.cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
 from gui.resource_utils import resource_path
 from gui.ui_components import build_ui
 from perf_utils import PerfLogger
+from service_layer import annotation_service, project_service, save_service
+from service_layer.project_service import LabelingTimer
 from video_model import Video
 
 
 # =============================================================================
 # Constants
 # =============================================================================
-PLAYBACK_BUFFER_PAUSE_S = 1.0
-PLAYBACK_BUFFER_AHEAD = 3
-BUFFER_MAX_BYTES = 1_000_000_000
 # Realtime arrow-hold tuning.
 # HOLD_START_DELAY_MS: how long the key must be held before realtime playback
 # kicks in. The OS keyboard auto-repeat delay (typically ~500ms) is shorter,
@@ -180,8 +169,7 @@ class LabelingApp(tk.Tk):
         self.NEW_TEMPLATE = False
         self.clothes_diagram_scale = DEFAULT_CLOTH_DIAGRAM_SCALE
         self._cloth_app = None
-        self._video_time_total_s = 0.0
-        self._video_session_start = None
+        self.labeling_timer = LabelingTimer()
         self._zone_masks = []
         self._zone_dir = None
 
@@ -221,28 +209,30 @@ class LabelingApp(tk.Tk):
         self._hold_watchdog_id = None         # after() id for the release-detection watchdog
         self._hold_play_active = False        # True while arrow-hold-driven playback is running
 
-        # Timeline and buffering helpers
-        self.background_thread = Thread(target=self.background_update, daemon=True)
-        self.background_thread_play = Thread(target=self.background_update_play, daemon=True)
-        self.buffer_ready = False
-
         # Thread → UI boundary (H1). Workers never touch Tk widgets directly:
         # they advance plain state and schedule redraws via self.after(0, ...).
         self._ui_thread_ident = get_ident()   # Tk main thread (this __init__)
-        self._render_pending = False          # debounce: at most one queued playback redraw
         self._display_w = 0                   # video_frame geometry, cached on the main
         self._display_h = 0                   # thread (workers must not call winfo_*)
+        self._last_step_sign = 0              # +1 forward / -1 backward / 0 none
 
-        # Priority-load + parallel-prefetch infrastructure
-        self._priority_frame = None              # frame the user explicitly wants ASAP
-        self._priority_event = Event()           # wakes background_update on jump
-        self._buffer_lock = RLock()              # serializes img_buffer mutations
-        self._loader_pool = ThreadPoolExecutor(
-            max_workers=3, thread_name_prefix="frame-loader"
+        # Frame buffer + playback engine (adapters.frame_buffer). The engine
+        # owns the buffer lock/generation and the loader pool; every UI touch
+        # is marshaled through the injected schedule_on_ui, and ALL writes to
+        # video.current_frame happen on the Tk thread via _apply_play_advance.
+        self.frame_buffer = FrameBuffer(
+            schedule_on_ui=lambda fn: self.after(0, fn),
+            on_status_change=self._on_buffer_status_change,
+            get_buffer_context=self._buffer_context,
+            get_playback_context=self._playback_context,
+            apply_play_advance=self._apply_play_advance,
+            on_playback_boundary=self._on_playback_boundary,
+            on_playback_schedule_error=self._on_playback_schedule_error,
+            on_priority_frame_loaded=self.display_first_frame,
+            perf=self.perf,
         )
-        self._inflight_frames = set()            # frame indices currently being decoded
-        self._buffer_gen = 0                     # bumps on _buffer_reset to discard stale workers
-        self._last_step_sign = 0                 # +1 forward / -1 backward / 0 none
+        self.background_thread = Thread(target=self.frame_buffer.background_update, daemon=True)
+        self.background_thread_play = Thread(target=self.frame_buffer.background_update_play, daemon=True)
 
         # Diagram init
         self.init_diagram()
@@ -347,38 +337,8 @@ class LabelingApp(tk.Tk):
         self._set_mode_button_states()
 
     # === Data Bundle Management ================================================
-    def _ensure_limb_params(self, rec: dict) -> dict:
-        if not isinstance(rec.get("LimbParams"), dict):
-            rec["LimbParams"] = {}
-        return rec["LimbParams"]
-    
-    def _param_next_state(self, current):
-        # Cycle: None -> "ON" -> "OFF" -> None (pure rule in domain.touch).
-        return cycle_param_state(current)
-
     def _param_key_for_index(self, idx: int) -> str:
         return f"Par{idx}"
-        
-    def on_note_changed(self, text: str):
-        idx = self.frame_index
-        b = self._ensure_bundle(idx)
-        if b.get("Note") != text:
-            b["Note"] = text
-            self.mark_bundle_changed(idx)
-    
-    def _ensure_bundle(self, idx: int):
-        b = self.video.frames.get(idx)
-        if not isinstance(b, dict):
-            # Single canonical empty-bundle constructor (domain.model) — the
-            # old hand-rolled dict here diverged (Onset None, no Bodypart).
-            b = empty_bundle()
-            self.video.frames[idx] = b
-        return b
-
-    def _ensure_params(self, b: dict):
-        if "Params" not in b or not isinstance(b["Params"], dict):
-            b["Params"] = {}
-        return b["Params"]
 
     def mark_bundle_changed(self, index=None):
         if self.video is None:
@@ -405,16 +365,7 @@ class LabelingApp(tk.Tk):
                 print(bundle_summary_str(b, frame_index=idx))
         except Exception as e:
             print(f"[notify_bundle_changed] could not print bundle at {idx}: {e}")
-    
-    def _get_bundle(self, frame):
-        return self.video.frames.setdefault(frame, empty_bundle())
 
-    def set_param_on_frame(self, frame, name, state):  # state: "ON"/"OFF"/None
-        b = self._get_bundle(frame)
-        params = b.get("Params", {}) or {}
-        params[name] = state
-        b["Params"] = params
-    
     # === Navigation & Input Events =============================================
     def global_click(self, event):
         try:
@@ -592,9 +543,8 @@ class LabelingApp(tk.Tk):
         # Hint the buffering thread to prioritize the jump target so the polling
         # loop in _buffered_step_tick picks it up on the next 50ms tick.
         target = max(0, min(self.video.total_frames, self.video.current_frame + delta))
-        if target not in self.img_buffer:
-            self._priority_frame = target
-            self._priority_event.set()
+        if target not in self.frame_buffer:
+            self.frame_buffer.request_priority(target)
         self._buffered_step_tick()
 
     def _buffered_step_tick(self):
@@ -606,8 +556,8 @@ class LabelingApp(tk.Tk):
             return
         current_frame = self.video.current_frame
         next_frame = max(0, min(self.video.total_frames, current_frame + delta))
-        if current_frame not in self.img_buffer or next_frame not in self.img_buffer:
-            self.buffer_ready = False
+        if current_frame not in self.frame_buffer or next_frame not in self.frame_buffer:
+            self.frame_buffer.buffer_ready = False
             self.after(50, self._buffered_step_tick)
             return
         self._pending_buffer_step = None
@@ -627,57 +577,12 @@ class LabelingApp(tk.Tk):
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
 
-        target_data = getattr(self.video, f"data{option}", {})
-
-        rec = target_data.get(current_frame)
-        if not isinstance(rec, dict):
-            return  # nothing to delete
-
-        xs = rec.get('X', [])
-        ys = rec.get('Y', [])
-        zones = rec.get('Zones', [])
-
-        # normalize Zones to list-of-lists (to align with X/Y)
-        if zones and isinstance(zones[0], (int, str)):
-            zones = [[z] for z in zones]
-            rec['Zones'] = zones
-
-        if not xs or not ys:
-            return
-
-        # find closest point (euclidean in data coords)
-        closest_idx = None
-        closest_d2 = float('inf')
-        for i, (x, y) in enumerate(zip(xs, ys)):
-            d2 = (x - x_pos) * (x - x_pos) + (y - y_pos) * (y - y_pos)
-            if d2 < closest_d2:
-                closest_d2 = d2
-                closest_idx = i
-
-        # threshold in data coords (â‰ˆ20 px in display); translates to 20/scale
-        if closest_idx is not None and closest_d2 <= (20.0 / scale) ** 2:
-            # delete this point and its zones bucket (if present)
-            del xs[closest_idx]
-            del ys[closest_idx]
-            if isinstance(zones, list) and closest_idx < len(zones):
-                del zones[closest_idx]
-
-            if not xs:  # no points left -> clear the record to prevent export leakage
-                target_data[current_frame] = {
-                    "X": [],
-                    "Y": [],
-                    "Onset": "",          # important: clear onset
-                    "Bodypart": option,   # keep limb name for consistency if needed
-                    "Zones": [],
-                    "Touch": None,
-                }
-            else:
-                rec['X'] = xs
-                rec['Y'] = ys
-                rec['Zones'] = zones
-                # keep Onset as-is for remaining points; you can also coerce if you prefer:
-                # rec['Onset'] = "ON" if any remaining were added with ON else ""
-
+        # threshold in data coords (≈20 px in display); translates to 20/scale
+        removed = annotation_service.remove_nearest_click(
+            self.video.frames, current_frame, option, x_pos, y_pos,
+            max_dist=20.0 / scale,
+        )
+        if removed:
             self.mark_bundle_changed()
             # Repaint immediately so the erased dot disappears without waiting
             # for the 300ms periodic_print_dot tick.
@@ -748,45 +653,19 @@ class LabelingApp(tk.Tk):
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
 
-        target_data = getattr(self.video, f"data{option}", {})
         setattr(self.video, f"is_touch{option}", True)
 
         print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={zone_results}")
 
-        existing = target_data.get(current_frame)
-        if not isinstance(existing, dict) or (not existing.get('X') and not existing.get('Y')):
-            rec = {
-                "X": [int(x_pos)],
-                "Y": [int(y_pos)],
-                "Onset": onset,
-                "Bodypart": option,
-                # IMPORTANT: store zones per point (list-of-lists)
-                "Zones": [zone_results],   # <- one entry per point
-                "Touch": None,
-            }
-            target_data[current_frame] = rec
-        else:
-            rec = existing
-            rec.setdefault('X', []).append(int(x_pos))
-            rec.setdefault('Y', []).append(int(y_pos))
-
-            # normalize Zones to list-of-lists if older shape is present
-            zones = rec.get('Zones', [])
-            if zones and zones and isinstance(zones[0], (int, str)):
-                # legacy shape -> convert to list-of-lists pairing length with X
-                zones = [[z] for z in zones]
-            rec['Zones'] = zones
-            zones.append(zone_results)  # one zones bucket per point
-
-            rec['Bodypart'] = option
-            rec['Onset'] = onset
+        rec = annotation_service.add_click(
+            self.video.frames, current_frame, option, x_pos, y_pos, onset, zone_results
+        )
 
         self.mark_bundle_changed()
         # Repaint immediately so the dot appears without waiting for the
         # 300ms periodic_print_dot tick.
         self._render_diagram_dots()
 
-        rec = target_data.get(current_frame, {})
         print(
             f"CLICK:  after  frame={current_frame:>5} limb={option} onset={rec.get('Onset')} "
             f"points={len(rec.get('X', []))} zones_len={len(rec.get('Zones', []))}"
@@ -1341,50 +1220,27 @@ class LabelingApp(tk.Tk):
         if "error" in result:
             raise result["error"]
 
-    def _copy_file_with_progress(self, src_path, dest_path, progress_cb, chunk_size=8 * 1024 * 1024):
-        total_bytes = os.path.getsize(src_path)
-        copied = 0
-        start_time = time.time()
-
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(src_path, "rb") as src_file, open(dest_path, "wb") as dest_file:
-            while True:
-                chunk = src_file.read(chunk_size)
-                if not chunk:
-                    break
-                dest_file.write(chunk)
-                copied += len(chunk)
-                if progress_cb:
-                    progress_cb(copied, total_bytes, "Copying video", time.time() - start_time)
-        shutil.copystat(src_path, dest_path, follow_symlinks=True)
-
     def _prepare_video_copy(self, source_path):
-        videos_dir = os.path.join("Videos")
-        os.makedirs(videos_dir, exist_ok=True)
-        dest_path = os.path.join(videos_dir, os.path.basename(source_path))
+        """Ensure the video lives inside the project Videos folder; returns the
+        path to use, or None when the copy failed. The decision is the
+        service's; the progress window and warnings are ours."""
+        dest_path, action, size_mismatch = project_service.plan_video_copy(source_path)
 
-        if os.path.abspath(source_path) == os.path.abspath(dest_path):
-            print(f"INFO: Video already inside project Videos folder: {dest_path}")
+        if action == "in_place":
             return dest_path
 
-        if os.path.exists(dest_path):
-            try:
-                src_size = os.path.getsize(source_path)
-                dest_size = os.path.getsize(dest_path)
-                if src_size != dest_size:
-                    messagebox.showwarning(
-                        "Video Copy Skipped",
-                        "A video with the same name already exists in the Videos folder.\n"
-                        "Using the existing copy to avoid overwriting."
-                    )
-            except Exception:
-                print("WARN: Could not compare video sizes; using existing copy.")
-            print(f"INFO: Video already exists in Videos folder: {dest_path}")
+        if action == "existing":
+            if size_mismatch:
+                messagebox.showwarning(
+                    "Video Copy Skipped",
+                    "A video with the same name already exists in the Videos folder.\n"
+                    "Using the existing copy to avoid overwriting."
+                )
             return dest_path
 
         progress_update, progress_close = self._open_video_copy_progress_window()
         try:
-            self._copy_file_with_progress(source_path, dest_path, progress_update)
+            project_service.copy_file_with_progress(source_path, dest_path, progress_update)
         except Exception as exc:
             print(f"ERROR: Failed to copy video: {exc}")
             messagebox.showerror("Video Copy Failed", f"Failed to copy video:\n{exc}")
@@ -1395,271 +1251,92 @@ class LabelingApp(tk.Tk):
         print(f"INFO: Copied video to {dest_path}")
         return dest_path
 
-    # === Frame Loading, Display & Buffer =======================================
-    def background_update(self, frame_number=None):
-        while True:
-            # Sleep up to 10 ms unless a jump pokes us awake earlier.
-            self._priority_event.wait(timeout=0.01)
-            self._priority_event.clear()
-            if self.video is None or self.video.frames_dir is None:
-                continue
-            with self.perf.time("background_update"):
-                current_frame = self.video.current_frame
-                if current_frame < 0 or current_frame > self.video.total_frames:
-                    return
+    # === Frame Buffer Boundary (GUI side of adapters.frame_buffer) =============
+    def _buffer_context(self):
+        """Per-tick state snapshot for the buffering thread, built on demand.
 
-                # Capture per-tick context once. Workers must NOT touch Tk widgets
-                # (H1), so instead of winfo_width/height we read the geometry cache
-                # maintained on the main thread (on_resize + load_video).
-                frames_dir = self.video.frames_dir
-                display_w = self._display_w
-                display_h = self._display_h
-                downscale = float(getattr(self, "video_downscale", 1.0) or 1.0)
-                gen = self._buffer_gen
+        Workers must NOT touch Tk widgets (H1), so instead of winfo_width/height
+        this hands over the geometry cache maintained on the main thread
+        (on_resize + load_video).
+        """
+        if self.video is None or self.video.frames_dir is None:
+            return None
+        return BufferContext(
+            frames_dir=self.video.frames_dir,
+            current_frame=self.video.current_frame,
+            total_frames=self.video.total_frames,
+            display_w=self._display_w,
+            display_h=self._display_h,
+            downscale=float(getattr(self, "video_downscale", 1.0) or 1.0),
+            jump_frame_count=max(1, getattr(self, "jump_frame_count", 1)),
+            last_step_sign=self._last_step_sign,
+        )
 
-                # 1) Load the currently-visible frame first (synchronously) so the
-                #    user sees their jump destination ASAP, then fire a paint.
-                current_frame_loaded = current_frame in self.img_buffer
-                if not current_frame_loaded:
-                    with self.perf.time("priority_load"):
-                        self._load_frame_to_buffer(
-                            current_frame, frames_dir, display_w, display_h, downscale, gen
-                        )
-                    if current_frame in self.img_buffer:
-                        self.after(0, self.display_first_frame)
-                        current_frame_loaded = True
+    def _playback_context(self):
+        """Per-tick state snapshot for the playback thread."""
+        if self.video is None:
+            return None
+        return PlaybackContext(
+            playing=bool(self.play),
+            direction=1 if getattr(self, "play_dir", 1) >= 0 else -1,
+            current_frame=self.video.current_frame,
+            total_frames=self.video.total_frames,
+            frame_rate=self.frame_rate,
+        )
 
-                # 2) Honour an explicit priority hint (e.g. _request_buffered_step
-                #    polling pre-loads the jump target before next_frame() is called).
-                priority = self._priority_frame
-                self._priority_frame = None
-                if (priority is not None
-                        and priority != current_frame
-                        and 0 <= priority <= self.video.total_frames
-                        and priority not in self.img_buffer):
-                    with self.perf.time("priority_load"):
-                        self._load_frame_to_buffer(
-                            priority, frames_dir, display_w, display_h, downscale, gen
-                        )
+    def _on_buffer_status_change(self, loaded: bool):
+        """Buffer status pill (the setter dedupes and marshals to the Tk thread)."""
+        if loaded:
+            self._set_loading_label_async("Loaded", theme.STATUS_OK)
+        else:
+            self._set_loading_label_async("Loading", theme.STATUS_BAD)
 
-                # 3) Asymmetric, velocity-aware prefetch window. Same direction as
-                #    the user's last navigation step gets a wider lookahead so a
-                #    second jump in that direction lands in cache.
-                base_ahead, base_behind = 50, 30
-                jump = max(1, getattr(self, "jump_frame_count", 1))
-                sign = self._last_step_sign
-                if sign > 0:
-                    ahead = max(base_ahead, jump * 2)
-                    behind = max(10, base_behind // 2)
-                elif sign < 0:
-                    ahead = max(10, base_ahead // 2)
-                    behind = max(base_behind, jump * 2)
-                else:
-                    ahead, behind = base_ahead, base_behind
-                start_frame = max(0, current_frame - behind)
-                end_frame = min(self.video.total_frames, current_frame + ahead)
+    def _apply_play_advance(self, next_frame, direction):
+        """Apply one playback advance ON THE TK THREAD (single-writer rule).
 
-                # 4) Submit prefetch loads to the worker pool. Forward window first
-                #    (most likely direction of travel), then backward.
-                for i in range(current_frame + 1, end_frame + 1):
-                    self._maybe_submit_load(i, frames_dir, display_w, display_h, downscale, gen)
-                for i in range(current_frame - 1, start_frame - 1, -1):
-                    self._maybe_submit_load(i, frames_dir, display_w, display_h, downscale, gen)
+        The playback worker only REQUESTS the advance (via schedule_on_ui), so
+        every write to video.current_frame happens here or in the other
+        UI-thread writers (next_frame, timeline clicks, select_frame) — never
+        concurrently from two threads.
+        """
+        if self.video is None:
+            print("DEBUG: play advance skipped — no video (shutdown/reload)")
+            return
+        self.video.current_frame = next_frame
+        self._last_step_sign = direction
+        try:
+            self.display_first_frame()
+            self.draw_timeline2()
+            if next_frame % 10 == 0:
+                self.draw_timeline()
+        except tk.TclError as e:
+            # Expected only when the app is being torn down mid-playback.
+            print(f"DEBUG: play advance redraw aborted during teardown: {e}")
 
-                # 5) Trim out-of-range frames + enforce the byte budget. Hard cap
-                #    scales with the asymmetric window so a wide forward prefetch
-                #    isn't immediately undone.
-                buffer_range_behind = max(200, behind * 4)
-                buffer_range_ahead = max(200, ahead * 4)
-                min_keep = max(0, current_frame - buffer_range_behind)
-                max_keep = min(self.video.total_frames, current_frame + buffer_range_ahead)
-                with self._buffer_lock:
-                    frames_to_remove = [k for k in self.img_buffer if k < min_keep or k > max_keep]
-                    for k in frames_to_remove:
-                        self._buffer_remove_frame(k)
-                    self._evict_buffer_to_budget(current_frame)
+    def _on_playback_boundary(self, current_frame, direction):
+        """Playback hit the edge it was moving toward — stop cleanly."""
+        self.play = False
+        self._hold_play_active = False
+        self.play_dir = 1
+        print(f"INFO: Playback stopped at boundary (frame {current_frame}, dir={direction})")
 
-                # 6) Update the status pill.
-                if current_frame_loaded:
-                    self._set_loading_label_async("Loaded", theme.STATUS_OK)
-                else:
-                    self._set_loading_label_async("Loading", theme.STATUS_BAD)
-
-                # 7) buffer_ready gates the playback thread.
-                buffer_ready = current_frame_loaded
-                if buffer_ready:
-                    max_check = min(self.video.total_frames, current_frame + PLAYBACK_BUFFER_AHEAD)
-                    for i in range(current_frame, max_check + 1):
-                        if i not in self.img_buffer:
-                            buffer_ready = False
-                            break
-                self.buffer_ready = buffer_ready
+    def _on_playback_schedule_error(self, exc):
+        """UI marshaling failed — the Tk mainloop is gone (close mid-playback)."""
+        self.play = False
+        print(f"DEBUG: playback redraw scheduling stopped — Tk shutting down: {exc}")
 
     @staticmethod
     def _compute_play_step(current_frame, total_frames, direction):
         """Pure play-step decision: (next_frame, stop). No Tk, no side effects.
+        Lives in adapters.frame_buffer.compute_play_step; kept here as the
+        stable entry point the H1 tests pin."""
+        return compute_play_step(current_frame, total_frames, direction)
 
-        stop=True when playback sits at the edge it is moving toward (frame 0
-        going backward, total_frames going forward) so the play loop doesn't
-        busy-spin against a boundary.
-        """
-        if (direction > 0 and current_frame >= total_frames) or \
-           (direction < 0 and current_frame <= 0):
-            return current_frame, True
-        return max(0, min(total_frames, current_frame + direction)), False
+    def _buffer_reset(self):
+        """Drop the whole buffer and bump its generation (see FrameBuffer.reset)."""
+        self.frame_buffer.reset()
 
-    def _render_current_frame(self):
-        """UI-thread redraw target scheduled by the playback thread (H1).
-
-        Runs on the Tk main thread only (via self.after). Mirrors what
-        next_frame(..., play=True) used to draw: the visible frame plus
-        Timeline 2 (draw_timeline is refreshed separately every 10th frame).
-        Guarded so a callback queued right before shutdown / video reload
-        doesn't touch destroyed widgets.
-        """
-        self._render_pending = False
-        if self.video is None:
-            print("DEBUG: _render_current_frame skipped — no video (shutdown/reload)")
-            return
-        try:
-            self.display_first_frame()
-            self.draw_timeline2()
-        except tk.TclError as e:
-            # Expected only when the app is being torn down mid-playback.
-            print(f"DEBUG: _render_current_frame aborted during teardown: {e}")
-
-    def background_update_play(self):
-        while True:
-            if self.play and self.video is not None:
-                direction = 1 if getattr(self, "play_dir", 1) >= 0 else -1
-                current_frame = self.video.current_frame
-                next_frame, stop = self._compute_play_step(
-                    current_frame, self.video.total_frames, direction
-                )
-                if stop:
-                    self.play = False
-                    self._hold_play_active = False
-                    self.play_dir = 1
-                    print(f"INFO: Playback stopped at boundary (frame {current_frame}, dir={direction})")
-                    continue
-                if current_frame not in self.img_buffer:
-                    self.buffer_ready = False
-                    time.sleep(PLAYBACK_BUFFER_PAUSE_S)
-                    continue
-                if next_frame not in self.img_buffer:
-                    self.buffer_ready = False
-                    time.sleep(PLAYBACK_BUFFER_PAUSE_S)
-                    continue
-                if not self.buffer_ready:
-                    time.sleep(PLAYBACK_BUFFER_PAUSE_S)
-                    continue
-                start = time.perf_counter()
-                # Worker thread: advance plain state only, then schedule ONE
-                # main-thread redraw. No direct Tk calls off-thread (H1).
-                self.video.current_frame = next_frame
-                self._last_step_sign = direction
-                if next_frame not in self.img_buffer:
-                    # Evicted between the check above and now — reload with priority.
-                    self._priority_event.set()
-                try:
-                    if not self._render_pending:
-                        # Debounce: at most one queued redraw; display_first_frame
-                        # paints whatever current_frame is by then (coalescing).
-                        self._render_pending = True
-                        self.after(0, self._render_current_frame)
-                    if next_frame % 10 == 0:
-                        self.after(0, self.draw_timeline)
-                except (tk.TclError, RuntimeError) as e:
-                    # Expected when the Tk mainloop is gone (close mid-playback).
-                    self._render_pending = False
-                    self.play = False
-                    print(f"DEBUG: playback redraw scheduling stopped — Tk shutting down: {e}")
-                    continue
-                interval = 1.0 / self.frame_rate if self.frame_rate else 0.04
-                elapsed = time.perf_counter() - start
-                time.sleep(max(0.0, interval - elapsed))
-            else:
-                time.sleep(0.05)
-
-    def _resize_for_buffer(self, img, display_width, display_height, downscale):
-        """Tk-free resize used by worker threads. Pure CPU work â€” no widget calls."""
-        if display_width <= 0 or display_height <= 0:
-            return img
-        original_width, original_height = img.size
-        aspect_ratio = original_width / original_height
-
-        if downscale <= 0:
-            downscale = 1.0
-
-        target_width = max(1, int(original_width / downscale))
-        target_height = max(1, int(original_height / downscale))
-
-        max_width = min(display_width, target_width)
-        max_height = min(display_height, target_height)
-
-        if max_width / max_height > aspect_ratio:
-            new_width = int(max_height * aspect_ratio); new_height = max_height
-        else:
-            new_width = max_width; new_height = int(max_width / aspect_ratio)
-        return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-    def resize_frame(self, img):
-        with self.perf.time("resize_frame"):
-            display_width = self.video_frame.winfo_width()
-            display_height = self.video_frame.winfo_height()
-            downscale = float(getattr(self, "video_downscale", 1.0) or 1.0)
-            resized = self._resize_for_buffer(img, display_width, display_height, downscale)
-            self.old_width = resized.width
-            self.old_height = resized.height
-            return resized
-
-    def _load_frame_to_buffer(self, frame_number, frames_dir, display_w, display_h, downscale, gen):
-        """Disk read + JPEG decode + resize + buffer store. Safe to run on any thread.
-
-        Stores the result only if the buffer generation still matches (gen == self._buffer_gen),
-        i.e. no _buffer_reset happened mid-decode. Always discards from _inflight_frames.
-        """
-        from PIL import Image
-        try:
-            with self.perf.time("load_frame_total"):
-                frame_path = os.path.join(frames_dir, f"frame{frame_number}.jpg")
-                with self.perf.time("load_frame_open"):
-                    with Image.open(frame_path) as opened:
-                        img = opened.copy()
-                with self.perf.time("load_frame_resize"):
-                    img = self._resize_for_buffer(img, display_w, display_h, downscale)
-                try:
-                    bytes_per_pixel = max(1, len(img.getbands()))
-                except Exception:
-                    bytes_per_pixel = 4
-                est_bytes = int(img.width * img.height * bytes_per_pixel)
-                with self._buffer_lock:
-                    if gen == self._buffer_gen:
-                        self._buffer_store_frame(frame_number, img, est_bytes)
-                    self._inflight_frames.discard(frame_number)
-        except Exception as e:
-            with self._buffer_lock:
-                self._inflight_frames.discard(frame_number)
-            print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
-
-    def _maybe_submit_load(self, frame_number, frames_dir, display_w, display_h, downscale, gen):
-        """Submit a prefetch load to the worker pool, deduping against in-flight + cached frames."""
-        if frame_number < 0 or self.video is None or frame_number > self.video.total_frames:
-            return
-        with self._buffer_lock:
-            if frame_number in self.img_buffer or frame_number in self._inflight_frames:
-                return
-            self._inflight_frames.add(frame_number)
-        try:
-            self._loader_pool.submit(
-                self._load_frame_to_buffer,
-                frame_number, frames_dir, display_w, display_h, downscale, gen,
-            )
-        except RuntimeError:
-            # Pool was shut down (e.g. on app close); back out the inflight reservation.
-            with self._buffer_lock:
-                self._inflight_frames.discard(frame_number)
-
+    # === Frame Display =========================================================
     def display_first_frame(self, frame_number=None):
         self._assert_ui_thread()
         with self.perf.time("display_first_frame"):
@@ -1669,8 +1346,8 @@ class LabelingApp(tk.Tk):
                 self.video.current_frame = frame_number
             if frame_number < 0 or frame_number > self.video.total_frames:
                 print("ERROR: Frame number out of bounds."); return
-            if frame_number in self.img_buffer:
-                pil_img = self.img_buffer[frame_number]
+            pil_img = self.frame_buffer.get(frame_number)
+            if pil_img is not None:
                 with self.perf.time("display_frame_photo"):
                     photo_img = ImageTk.PhotoImage(pil_img)
                 if hasattr(self, 'frame_label') and self.frame_label:
@@ -1697,116 +1374,30 @@ class LabelingApp(tk.Tk):
             self.update_limb_parameter_buttons()
             self.update_button_colors()
 
-    def _buffer_reset(self):
-        # Lock so concurrent workers can't store into a half-cleared buffer.
-        # Bumps _buffer_gen so any in-flight worker decoded under the OLD video
-        # discards its result instead of polluting the new buffer.
-        with self._buffer_lock:
-            if hasattr(self, "img_buffer"):
-                self.img_buffer.clear()
-            if hasattr(self, "img_buffer_bytes"):
-                self.img_buffer_bytes.clear()
-            self.img_buffer_total = 0
-            if hasattr(self, "_inflight_frames"):
-                self._inflight_frames.clear()
-            if hasattr(self, "_buffer_gen"):
-                self._buffer_gen += 1
+    # === Labeling-time accumulator (service_layer.project_service) =============
+    def _video_time_state_path(self) -> str:
+        return ProjectPaths(self.video_name).video_time_json
 
-    def _buffer_remove_frame(self, frame_number):
-        with self._buffer_lock:
-            if frame_number in self.img_buffer:
-                del self.img_buffer[frame_number]
-            if hasattr(self, "img_buffer_bytes"):
-                removed = self.img_buffer_bytes.pop(frame_number, 0)
-                self.img_buffer_total = max(0, self.img_buffer_total - removed)
-
-    def _buffer_store_frame(self, frame_number, photo_img, est_bytes):
-        with self._buffer_lock:
-            if not hasattr(self, "img_buffer_bytes"):
-                self.img_buffer_bytes = {}
-            if frame_number in self.img_buffer_bytes:
-                self.img_buffer_total = max(0, self.img_buffer_total - self.img_buffer_bytes.get(frame_number, 0))
-            self.img_buffer[frame_number] = photo_img
-            self.img_buffer_bytes[frame_number] = est_bytes
-            self.img_buffer_total = self.img_buffer_total + est_bytes
-
-    def _evict_buffer_to_budget(self, current_frame):
-        limit = BUFFER_MAX_BYTES
-        if limit is None or limit <= 0:
-            return
-        with self._buffer_lock:
-            if self.img_buffer_total <= limit:
-                return
-            candidates = sorted(self.img_buffer.keys(), key=lambda k: abs(k - current_frame), reverse=True)
-            for k in candidates:
-                if k == current_frame:
-                    continue
-                self._buffer_remove_frame(k)
-                if self.img_buffer_total <= limit:
-                    break
-
-    def _video_time_meta_path(self, data_dir, video_name):
-        # Canonical location: ProjectPaths.video_time_json (data_dir is always
-        # ProjectPaths(video_name).data_dir at every call site).
-        return ProjectPaths(video_name).video_time_json
-
-    def _load_video_time(self, data_dir, video_name):
-        path = self._video_time_meta_path(data_dir, video_name)
-        if not os.path.exists(path):
-            return 0.0
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f) or {}
-            return float(payload.get("Total Labeling Time (seconds)", 0.0))
-        except Exception as e:
-            print(f"WARNING: Failed to load labeling time: {e}")
-            return 0.0
-
-    def _write_video_time(self, data_dir, video_name, total_seconds):
-        path = self._video_time_meta_path(data_dir, video_name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        payload = {
-            "Total Labeling Time (hours)": round(float(total_seconds) / 3600.0, 4),
-        }
-        try:
-            atomic_write(path, lambda f: json.dump(payload, f, indent=2, ensure_ascii=False))
-        except Exception as e:
-            print(f"WARNING: Failed to save labeling time: {e}")
-
-    def _start_video_timer(self, data_dir, video_name):
-        self._video_time_total_s = self._load_video_time(data_dir, video_name)
-        self._video_session_start = time.monotonic()
-
-    def _current_video_time_s(self):
-        total = float(getattr(self, "_video_time_total_s", 0.0) or 0.0)
-        start = getattr(self, "_video_session_start", None)
-        if start is None:
-            return total
-        return total + (time.monotonic() - start)
+    def _current_video_time_s(self) -> float:
+        return self.labeling_timer.current_s()
 
     def _persist_video_time(self):
+        """Checkpoint the accumulator, session keeps running."""
         if self.video is None or self.video_name is None:
             return
-        data_dir = ProjectPaths(self.video_name).data_dir
-        total = self._current_video_time_s()
-        self._write_video_time(data_dir, self.video_name, total)
-        self._video_time_total_s = total
-        self._video_session_start = time.monotonic()
+        self.labeling_timer.persist(self._video_time_state_path())
 
     def _finalize_video_time(self):
+        """Checkpoint the accumulator and end the session."""
         if self.video is None or self.video_name is None:
             return
-        data_dir = ProjectPaths(self.video_name).data_dir
-        total = self._current_video_time_s()
-        self._write_video_time(data_dir, self.video_name, total)
-        self._video_time_total_s = total
-        self._video_session_start = None
+        self.labeling_timer.finalize(self._video_time_state_path())
 
     def _stop_video_timer_if_any(self):
         """Stop the labeling-time timer without persisting, discarding the
         current session's elapsed time. Used when a load aborts after the
         timer was already started (e.g. frame extraction failed)."""
-        self._video_session_start = None
+        self.labeling_timer.cancel_session()
 
     # === Parameter Toggles & Coloring ==========================================
     def update_button_colors(self):
@@ -1826,14 +1417,9 @@ class LabelingApp(tk.Tk):
         if self.video is None:
             return
         idx = self.video.current_frame
-        b = self._ensure_bundle(idx)
-        params = self._ensure_params(b)
-
-        key = self._param_key_for_index(parameter_index)
-        prev = params.get(key)
-        new_state = self._param_next_state(prev)
-        params[key] = new_state
-        b["Params"] = params
+        new_state = annotation_service.toggle_global_param(
+            self.video.frames, idx, parameter_index
+        )
 
         # color the right button immediately
         button = {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn}[parameter_index]
@@ -1846,18 +1432,9 @@ class LabelingApp(tk.Tk):
     def toggle_limb_parameter(self, param_number: int):
         limb = self.option_var_1.get()
         frame = self.video.current_frame
-
-        # ensure bundle & this limb's record exist
-        b = self._ensure_bundle(frame)
-        rec = b.get(limb) or {"X": [], "Y": [], "Onset": "", "Bodypart": limb, "Zones": [], "Touch": None}
-        b[limb] = rec
-
-        limb_params = self._ensure_limb_params(rec)
-        key = self._limb_param_key_for_index(param_number)
-        prev = limb_params.get(key)
-        # None -> ON -> OFF -> None
-        new_state = self._param_next_state(prev)
-        limb_params[key] = new_state
+        new_state = annotation_service.toggle_limb_param(
+            self.video.frames, frame, limb, param_number
+        )
 
         # reflect on button color
         btn = {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn}[param_number]
@@ -1935,23 +1512,10 @@ class LabelingApp(tk.Tk):
         idx = self.video.current_frame
         note_text = self._get_note_entry_text().strip()
 
-        # ensure bundle exists, then update Note
-        b = self._ensure_bundle(idx)
+        if annotation_service.set_note(self.video.frames, idx, note_text):
+            self.mark_bundle_changed(idx)
+            self.notify_bundle_changed(idx)
 
-        prev = (b.get("Note") or "").strip()
-        new_val = note_text if note_text else None
-
-        if prev != (new_val or ""):
-            b["Note"] = new_val
-            # mark bundle dirty + print (uses your existing helpers)
-            if hasattr(self, "mark_bundle_changed"):
-                self.mark_bundle_changed(idx)
-            elif isinstance(b, dict):
-                b["Changed"] = True
-            if hasattr(self, "notify_bundle_changed"):
-                self.notify_bundle_changed(idx)
-
-        
         print(f"INFO: Note saved for frame {idx}: {note_text}")
         try:
             import keyboard
@@ -1991,75 +1555,64 @@ class LabelingApp(tk.Tk):
         print(f"DEBUG: Data dir:   {paths.data_dir}")
         print(f"DEBUG: Export dir: {paths.export_dir}")
         print(f"DEBUG: Frames dir: {self.video.frames_dir}")
-        unified_path = paths.unified_csv
-        print(f"DEBUG: Writing unified dataset â†’ {unified_path}")
+        print(f"DEBUG: Writing unified dataset -> {paths.unified_csv}")
 
-        save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
+        # 1) Journal append (changed-only) — the source of truth, UI thread.
+        save_service.persist_unified(
+            paths.unified_csv, self.video.total_frames, self.video.frames
+        )
+
         clothes_path = self.video.clothes_file_path
         if not clothes_path and self.video.dataNotes_path_to_csv:
             clothes_path = paths.clothes_txt
-        clothes_list = extract_zones_from_file(clothes_path) if clothes_path else None
-        export_path = paths.export_csv
-        print(f"DEBUG: Writing export dataset â†’ {export_path}")
+        print(f"DEBUG: Writing export dataset -> {paths.export_csv}")
 
-        # labeling_app.py (inside save_data, before export_from_unified call)
-        param_labels = {
-            "Parameter_1": (self.par1_btn.cget("text") or "Par1"),
-            "Parameter_2": (self.par2_btn.cget("text") or "Par2"),
-            "Parameter_3": (self.par3_btn.cget("text") or "Par3"),
-        }
-        limb_param_labels = None
+        # Non-tabular inputs gathered here: the button labels are Tk reads and
+        # the labeling clock must be sampled on the UI thread.
+        metadata = save_service.MetadataInputs(
+            program_version=self.video.program_version,
+            video_name=self.video_name,
+            labeling_mode=self.labeling_mode,
+            clothes_list=save_service.load_clothes_zones(clothes_path),
+            param_labels={
+                "Parameter_1": (self.par1_btn.cget("text") or "Par1"),
+                "Parameter_2": (self.par2_btn.cget("text") or "Par2"),
+                "Parameter_3": (self.par3_btn.cget("text") or "Par3"),
+            },
+            limb_param_labels=self._limb_param_labels_for_export(),
+            labeling_time_seconds=self._current_video_time_s(),
+        )
+
+        # 2) Snapshot BEFORE the worker-thread export so concurrent edits can
+        #    neither tear the export nor be wrongly marked clean afterwards.
+        snapshot = save_service.build_save_snapshot(self.video.frames)
+        total_frames = self.video.total_frames
+        frame_rate = self.frame_rate
+
+        # 3) Export (metadata sidecar + full CSV) on a worker thread while a
+        #    modal progress dialog keeps the UI responsive.
+        self._run_export_with_progress(
+            lambda: save_service.run_export(
+                snapshot, paths, frame_rate, metadata, total_frames
+            )
+        )
+        print("INFO: Save completed successfully.")
+
+        # 4) Clear Changed ONLY where the live bundle still equals its snapshot:
+        #    a frame edited DURING the export stays dirty for the next save.
+        save_service.clear_clean_flags(self.video.frames, snapshot)
+        return True
+
+    def _limb_param_labels_for_export(self):
+        """Limb-parameter button labels for the export metadata, or None when
+        the limb controls have not been built yet."""
         if self.limb_par1_btn and self.limb_par2_btn and self.limb_par3_btn:
-            limb_param_labels = {
+            return {
                 "XX_Parameter_1": (self.limb_par1_btn.cget("text") or "LimbPar1"),
                 "XX_Parameter_2": (self.limb_par2_btn.cget("text") or "LimbPar2"),
                 "XX_Parameter_3": (self.limb_par3_btn.cget("text") or "LimbPar3"),
             }
-        # NEW: write JSON sidecar with metadata (instead of stuffing CSV header)
-        meta_path = paths.export_metadata
-        write_export_metadata(
-            meta_path=meta_path,
-            program_version=self.video.program_version,
-            video_name=self.video_name,
-            labeling_mode=self.labeling_mode,
-            frame_rate=self.frame_rate,
-            clothes_list=clothes_list,
-            param_labels=param_labels,
-            limb_param_labels=limb_param_labels,
-            labeling_time_seconds=self._current_video_time_s(),
-        )
-
-        export_frames = copy.deepcopy(self.video.frames)
-        total_frames = self.video.total_frames
-        frame_rate = self.frame_rate
-
-        program_version = self.video.program_version
-        video_name = self.video_name
-        labeling_mode = self.labeling_mode
-        self._run_export_with_progress(
-            lambda: export_from_unified(
-                export_frames,
-                export_path,
-                program_version,
-                video_name,
-                labeling_mode,
-                frame_rate,
-                clothes_list,
-                total_frames=total_frames,
-                param_labels=param_labels,
-                limb_param_labels=limb_param_labels,
-            )
-        )
-        print("INFO: Save completed successfully.")
-        for f, b in self.video.frames.items():
-            if (
-                isinstance(b, dict)
-                and b.get("Changed")
-                and b == export_frames.get(f)
-            ):
-                b["Changed"] = False
-        print("DEBUG: Cleared bundle 'Changed' flags after save.")
-        return True
+        return None
 
     # === Analysis / Sort / Playback ============================================
     def analysis(self):
@@ -2198,96 +1751,39 @@ class LabelingApp(tk.Tk):
         min_length_in_frames = self.minimal_touch_length * self.frame_rate / 1000
         self.min_touch_length_label.config(text=f"Minimal Touch Length: {min_length_in_frames}")
         raw_video_name = os.path.splitext(os.path.basename(video_path))[0]
-        # The "_reliability" suffix rule lives in ProjectPaths.for_video.
-        paths = ProjectPaths.for_video(
-            raw_video_name, reliability=(self.labeling_mode == "Reliability")
-        )
+        # The "_reliability" suffix rule and directory creation live in the
+        # service (ProjectPaths.for_video underneath).
+        paths = project_service.prepare_project(raw_video_name, self.labeling_mode)
         video_name = paths.video_name
         self.video_name = video_name
 
-        data_dir = paths.data_dir
-        frames_dir = paths.frames_dir
-        for d in (paths.data_dir, paths.frames_dir, paths.plots_dir, paths.export_dir):
-            os.makedirs(d, exist_ok=True)
-        self.video.frames_dir = frames_dir
-        self._start_video_timer(data_dir, video_name)
+        self.video.frames_dir = paths.frames_dir
+        # ORDERING: the labeling timer starts BEFORE any load work so the
+        # session is already accumulating; an extraction abort below rolls it
+        # back via _stop_video_timer_if_any().
+        self.labeling_timer.start(paths.video_time_json)
 
-        # --- Unified-first load ---
-        unified_path = paths.unified_csv
-        export_path  = paths.export_csv
-        print(f"INFO: load_video: unified_path={unified_path}", flush=True)
-        print(f"INFO: load_video: export_path={export_path}", flush=True)
-
-        # Load unified (robust: handles 0-byte / header-only files).
+        # --- Unified-first load (recovery ladder tiers 1+2 in the service) ---
         # Open a progress window covering the full data-load phase (unified
         # load + export-recovery) so the user sees progress on huge videos.
         data_progress_update, data_progress_close = self._open_data_progress_window()
         try:
-            try:
-                print("INFO: load_video: loading unified dataset...", flush=True)
-                t_unified = time.time()
-                self._reset_zone_cache()
-                self.video.frames = load_unified_dataset(
-                    unified_path, progress_cb=data_progress_update
-                ) or {}
-                print(f"INFO: load_video: unified load done in {time.time() - t_unified:.1f}s "
-                      f"({len(self.video.frames)} frames)", flush=True)
-            except Exception:
-                print("ERROR: load_video: exception while loading unified dataset:", flush=True)
-                traceback.print_exc()
-                sys.stdout.flush()
-                self.video.frames = {}
-
-            # Fallback: if unified is empty but export exists, recover once from export.
-            # We deliberately do NOT write the unified CSV here: on huge videos
-            # (e.g. 300k+ frames) writing all rows blocks the UI thread for tens of
-            # seconds. The next regular Save will materialize the unified file
-            # naturally; until then we just keep the recovered dict in memory.
-            if (not self.video.frames) and os.path.exists(export_path):
-                print("INFO: Unified empty; importing from export for recoveryâ€¦", flush=True)
-                try:
-                    t_recover = time.time()
-                    self.video.frames = import_unified_from_export(
-                        export_path, progress_cb=data_progress_update
-                    ) or {}
-                    print(f"INFO: Recovery import returned in {time.time() - t_recover:.1f}s", flush=True)
-                except Exception:
-                    print("ERROR: load_video: exception during import_unified_from_export:", flush=True)
-                    traceback.print_exc()
-                    sys.stdout.flush()
-                    self.video.frames = {}
-
-                print(
-                    f"INFO: Recovery loaded {len(self.video.frames)} frames in memory "
-                    f"(unified CSV will be written on first Save).",
-                    flush=True,
-                )
+            self._reset_zone_cache()
+            self.video.frames = project_service.load_frames_dataset(
+                paths, progress_cb=data_progress_update
+            )
         finally:
             data_progress_close()
-
-        
 
 
         # Always set these paths (other features derive folders from them)
         for suffix in ['RH', 'LH', 'RL', 'LL']:
             setattr(self.video, f"data{suffix}_path_to_csv", paths.limb_csv(suffix))
 
-        # If unified did not exist BUT legacy limb CSVs do, migrate them once into self.video.frames
+        # Recovery ladder tier 3: if unified did not exist BUT legacy limb CSVs
+        # do, migrate them once into self.video.frames.
         if not self.video.frames:
-            print("INFO: No unified file found; attempting legacy CSV migration...")
-            any_legacy = False
-            for suffix in ['RH', 'LH', 'RL', 'LL']:
-                csv_path = getattr(self.video, f"data{suffix}_path_to_csv")
-                if os.path.exists(csv_path):
-                    any_legacy = True
-                    d = csv_to_dict(csv_path)
-                    for fr, rec in d.items():
-                        b = self.video.frames.setdefault(fr, empty_bundle())
-                        b[suffix] = rec
-            if any_legacy:
-                print("INFO: Legacy limb CSVs merged into unified in-memory store.")
-            else:
-                print("INFO: Starting with an empty unified store.")
+            project_service.migrate_legacy_limb_csvs(self.video.frames, paths)
 
         # Names for parameters (update button text)
         load_parameter_names_into(
@@ -2298,17 +1794,12 @@ class LabelingApp(tk.Tk):
 
         # Frames generation/check
         print("INFO: load_video: checking frames folder...", flush=True)
-        if not check_items_count(frames_dir, self.video.total_frames):
+        if not project_service.frames_ready(paths, self.video.total_frames):
             print("INFO: Number of frames is different, creating new frames", flush=True)
             progress_update, progress_close = self._open_frame_progress_window()
             try:
-                create_frames(
-                    video_path,
-                    frames_dir,
-                    self.labeling_mode,
-                    self.video_name,
-                    progress_cb=progress_update,
-                    original_frames_dir=paths.original.frames_dir,
+                project_service.extract_frames(
+                    video_path, paths, self.labeling_mode, progress_cb=progress_update
                 )
             except FrameExtractionError as exc:
                 print(f"ERROR: load_video: frame extraction failed: {exc}", flush=True)
@@ -2338,7 +1829,7 @@ class LabelingApp(tk.Tk):
         self._timeline2_playhead_id = None
 
         print("INFO: load_video: restoring last position...", flush=True)
-        self.restore_last_position(data_dir, video_name)
+        self.restore_last_position(paths)
 
         print("INFO: load_video: drawing first frame & timelines...", flush=True)
         t_draw = time.time()
@@ -2362,20 +1853,15 @@ class LabelingApp(tk.Tk):
             print("INFO: Thread already running.")
 
         # Notes
-        self.video.notes = {}
         self.video.dataNotes_path_to_csv = paths.notes_csv
-        if os.path.exists(self.video.dataNotes_path_to_csv):
-            self.video.notes = load_notes_csv(self.video.dataNotes_path_to_csv)
-            print("INFO: Notes loaded successfully.")
+        self.video.notes = project_service.load_notes(paths.notes_csv)
         self.update_note_entry()
 
         # Clothes file presence => colorize button
         self.video.clothes_file_path = paths.clothes_txt
         theme.set_button_state(self.cloth_btn, None)
-        if self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
-            with open(self.video.clothes_file_path, 'r', encoding="utf-8") as f:
-                if len(f.readlines()) > 1:
-                    theme.set_button_state(self.cloth_btn, "ON")
+        if project_service.clothes_file_has_data(self.video.clothes_file_path):
+            theme.set_button_state(self.cloth_btn, "ON")
 
         self.load_video_btn.config(state=tk.DISABLED)
         for b in self.video.frames.values():
@@ -2398,7 +1884,9 @@ class LabelingApp(tk.Tk):
             if not file_path and self.video_name:
                 file_path = ProjectPaths(self.video_name).clothes_txt
             scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
-            initial_points = self._load_clothes_points_from_file(file_path, scale)
+            initial_points = project_service.load_clothes_points(
+                file_path, scale, DEFAULT_CLOTH_DIAGRAM_SCALE
+            )
             self.cloth_btn.config(state=tk.DISABLED)
 
             def on_save(dots, diagram_scale=None):
@@ -2421,34 +1909,6 @@ class LabelingApp(tk.Tk):
                 self.cloth_btn.config(state=tk.NORMAL)
                 self._cloth_app = None
                 print(f"ERROR: Failed to open Clothes App: {e}")
-
-    def _load_clothes_points_from_file(self, file_path, display_scale):
-        if not file_path or not os.path.exists(file_path):
-            return []
-        file_scale = None
-        points = []
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.lower().startswith("diagramscale:"):
-                    try:
-                        file_scale = float(line.split(":", 1)[1].strip())
-                    except ValueError:
-                        file_scale = None
-                    continue
-                if "X=" in line and "Y=" in line:
-                    match = re.search(r"X=([-\d.]+),\s*Y=([-\d.]+)", line)
-                    if match:
-                        x = float(match.group(1))
-                        y = float(match.group(2))
-                        points.append((x, y))
-        if file_scale is None:
-            file_scale = 0.5
-        if file_scale <= 0:
-            file_scale = display_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
-        display_scale = display_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
-        scale_ratio = display_scale / file_scale
-        return [(x * scale_ratio, y * scale_ratio) for x, y in points]
 
     def update_data_clothes(self, dots, diagram_scale=None):
         self.data_clothes = dots
@@ -2503,46 +1963,27 @@ class LabelingApp(tk.Tk):
             self.save_last_position()
             self._finalize_video_time()
         try:
-            self._loader_pool.shutdown(wait=False, cancel_futures=True)
+            self.frame_buffer.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             print(f"WARN: loader pool shutdown failed: {e}")
         self.destroy()
 
-    def _last_position_path(self, data_dir: str, video_name: str) -> str:
-        # Canonical location: ProjectPaths.last_position_json (data_dir is
-        # always ProjectPaths(video_name).data_dir at every call site).
-        return ProjectPaths(video_name).last_position_json
-
     def save_last_position(self):
         if self.video is None or self.video_name is None:
             return
-        data_dir = ProjectPaths(self.video_name).data_dir
-        os.makedirs(data_dir, exist_ok=True)
-        path = self._last_position_path(data_dir, self.video_name)
-        try:
-            payload = {
-                "frame": int(self.video.current_frame),
-                "total_frames": int(self.video.total_frames),
-            }
-            atomic_write(path, lambda f: json.dump(payload, f))
-            print(f"INFO: Saved last position at {path}")
-        except Exception as e:
-            print(f"WARNING: Failed to save last position: {e}")
+        project_service.write_last_position(
+            ProjectPaths(self.video_name),
+            self.video.current_frame,
+            self.video.total_frames,
+        )
 
-    def restore_last_position(self, data_dir: str, video_name: str):
-        path = self._last_position_path(data_dir, video_name)
-        if not os.path.exists(path):
+    def restore_last_position(self, paths: ProjectPaths):
+        frame = project_service.read_last_position(paths, self.video.total_frames)
+        if frame is None:
             return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f) or {}
-            frame = int(payload.get("frame", 0))
-            frame = max(0, min(self.video.total_frames, frame))
-            self.video.current_frame = frame
-            self.video.current_frame_zone = int(self.video.current_frame / self.video.number_frames_in_zone)
-            print(f"INFO: Restored last position: frame {self.video.current_frame}")
-        except Exception as e:
-            print(f"WARNING: Failed to restore last position: {e}")
+        self.video.current_frame = frame
+        self.video.current_frame_zone = int(self.video.current_frame / self.video.number_frames_in_zone)
+        print(f"INFO: Restored last position: frame {self.video.current_frame}")
 
     # === Settings ==============================================================
     def open_settings(self):
@@ -2820,8 +2261,7 @@ class LabelingApp(tk.Tk):
             pass
 
         # Flush buffer so new resolution takes effect immediately.
-        if hasattr(self, "img_buffer"):
-            self._buffer_reset()
+        self._buffer_reset()
         self._timeline_dirty = True
         self._timeline2_dirty = True
         self._timeline_playhead_id = None
@@ -2844,8 +2284,8 @@ class LabelingApp(tk.Tk):
 
         # Wake the buffering thread if the destination isn't cached so it gets
         # loaded with priority before any prefetch fills.
-        if self.video.current_frame not in self.img_buffer:
-            self._priority_event.set()
+        if self.video.current_frame not in self.frame_buffer:
+            self.frame_buffer.poke()
 
         self.display_first_frame()
         if not play: self.draw_timeline()

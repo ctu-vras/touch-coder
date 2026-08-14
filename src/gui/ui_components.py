@@ -36,13 +36,10 @@ def build_ui(app):
     app.color_end = theme.TOUCH_END
     app.frame_cache = {}
     app.image = None
-    app.img_buffer = {}
-    app.img_buffer_bytes = {}
-    app.img_buffer_total = 0
+    # The frame cache itself lives in adapters.frame_buffer.FrameBuffer
+    # (constructed in LabelingApp.__init__), not on the widget tree.
     app.play = False
     app.play_thread_on = False
-    app.old_width = None
-    app.old_height = None
     app.notes_file_path = None
     app.progress = {}
     app.frame_rate = None
