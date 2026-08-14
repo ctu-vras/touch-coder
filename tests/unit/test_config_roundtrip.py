@@ -25,8 +25,8 @@ import json
 
 import pytest
 
-import config_utils
-from config_utils import load_config, save_config, load_config_flags, load_jump_seconds
+from adapters import config as config_utils
+from adapters.config import load_config, save_config, load_config_flags, load_jump_seconds
 
 
 FULL_CONFIG = {

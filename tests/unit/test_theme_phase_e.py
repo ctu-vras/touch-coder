@@ -3,7 +3,7 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
 
-import theme
+from gui import theme
 from labeling_app import LabelingApp
 
 

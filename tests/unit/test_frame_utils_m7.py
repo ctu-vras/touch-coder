@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-import frame_utils
+from adapters import frame_extractor as frame_utils
 
 
 def _reliability_source(tmp_path, video_name="vid"):

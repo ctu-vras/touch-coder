@@ -3,7 +3,7 @@
 import csv
 import json
 
-from data_utils import import_unified_from_export, load_unified_dataset
+from adapters.unified_repo import import_unified_from_export, load_unified_dataset
 
 
 def test_M3_recovery_records_have_no_look(tmp_path):

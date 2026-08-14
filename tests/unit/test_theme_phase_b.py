@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import theme
+from gui import theme
 
 
 class _FakeStyle:

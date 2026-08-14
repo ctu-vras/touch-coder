@@ -3,12 +3,12 @@
 import csv
 import json
 
-from data_utils import (
-    empty_bundle,
-    export_from_unified,
+from adapters.export_writer import export_from_unified
+from adapters.unified_repo import (
     import_unified_from_export,
     load_unified_dataset,
 )
+from domain.model import empty_bundle
 
 
 def test_M1_load_unified_normalizes_none_string(tmp_path):

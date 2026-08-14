@@ -10,16 +10,16 @@ import types
 
 import pytest
 
-import config_utils
-from config_utils import (
+from adapters import config as config_utils
+from adapters.config import (
     load_config_flags,
     load_perf_config,
     load_display_limits,
     load_video_downscale,
     load_jump_seconds,
     load_realtime_arrow_hold,
-    load_parameter_names_into,
 )
+from labeling_app import load_parameter_names_into
 
 
 @pytest.fixture

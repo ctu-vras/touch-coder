@@ -10,25 +10,8 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 import sys
 
-from config_utils import load_config
-from resource_utils import resource_path
-import theme
-
-def _load_diagram_scale():
-    """Read a numeric diagram_scale from config.json; default to 1.0 if missing."""
-    try:
-        cfg = load_config()
-        return float(cfg.get("diagram_scale", 1.0))
-    except Exception:
-        return 1.0
-
-def _load_dot_size():
-    """Read a numeric dot_size from config.json; default to 10 if missing."""
-    try:
-        cfg = load_config()
-        return float(cfg.get("dot_size", 10))
-    except Exception:
-        return 10.0
+from gui.resource_utils import resource_path
+from gui import theme
 
 def build_ui(app):
     """
@@ -66,10 +49,11 @@ def build_ui(app):
     app.last_mouse_x = 0
     app.last_mouse_y = 0
 
-    # Also store diagram_size to mirror original (controller later overwrites with config_utils)
-    scale = _load_diagram_scale()
+    # Diagram scale / dot size come from the AppConfig snapshot the app holds
+    # (loaded once in LabelingApp.__init__) — the GUI never re-reads config.json.
+    scale = app.config.diagram_scale
     app.diagram_scale = scale
-    dot_size = _load_dot_size()
+    dot_size = app.config.dot_size
     app.dot_size = dot_size
 
     # === Containers ===

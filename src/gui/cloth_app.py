@@ -2,8 +2,8 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 
-from resource_utils import resource_path
-import theme
+from gui.resource_utils import resource_path
+from gui import theme
 
 DEFAULT_CLOTH_DIAGRAM_SCALE = 1.0
 DEFAULT_CLOTH_DOT_RADIUS = 7

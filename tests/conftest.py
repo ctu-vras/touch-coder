@@ -1,9 +1,9 @@
 """
 Shared pytest setup for TinyTouch.
 
-The app's `src/` modules import each other by bare name (`import analysis`,
-`from data_utils import ...`), so tests must have `src/` on sys.path. We add it
-here rather than requiring an editable install.
+The app's `src/` modules import each other with `src/` as the import root
+(`import analysis`, `from domain.model import ...`), so tests must have
+`src/` on sys.path. We add it here rather than requiring an editable install.
 
 Tests are black-box against the pure-function core (I/O, parsing, data model).
 They must NEVER read or write the real `Labeled_data/` tree — build inputs under
@@ -40,7 +40,7 @@ def one_touch_frames():
     """A touch-mode `frames` dict with a single LH touch: ON at frame 2
     (zone FACE), OFF at frame 5. Zones are stored list-of-lists, one bucket
     per click — the exact shape the exporter and Sort Frames must handle."""
-    from data_utils import empty_bundle
+    from domain.model import empty_bundle
 
     frames = {}
 

@@ -1,7 +1,8 @@
 """H3 regression tests for append-only unified dataset saves."""
 
-import data_utils
-from data_utils import empty_bundle, load_unified_dataset, save_unified_dataset
+from adapters import unified_repo as data_utils
+from adapters.unified_repo import load_unified_dataset, save_unified_dataset
+from domain.model import empty_bundle
 
 
 def _touch_bundle(onset, *, note=None):

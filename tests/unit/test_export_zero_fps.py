@@ -19,7 +19,7 @@ Run:  uv run pytest tests/ -k M4
 """
 import pandas as pd
 
-from data_utils import export_from_unified
+from adapters.export_writer import export_from_unified
 
 
 def test_M4_export_survives_zero_fps(tmp_path, one_touch_frames):

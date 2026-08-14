@@ -14,7 +14,7 @@ Run:  uv run pytest tests/ -k schema
 """
 import pandas as pd
 
-from data_utils import export_from_unified
+from adapters.export_writer import export_from_unified
 
 
 TOUCH_EXPORT_COLUMNS = [

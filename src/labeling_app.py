@@ -9,38 +9,40 @@ import traceback
 from threading import Thread, Event, RLock, get_ident, current_thread
 from concurrent.futures import ThreadPoolExecutor
 
-import cv2
-import pandas as pd
 import keyboard
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
 import analysis
-from cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
-from atomic_io import atomic_write
-from config_utils import (
-    load_config,
-    save_config,
-    load_config_flags,
-    load_parameter_names_into,
-    load_perf_config,
-    load_video_downscale,
-    load_jump_seconds,
-    load_realtime_arrow_hold,
+from adapters import config
+from adapters import video_probe
+from adapters.atomic_io import atomic_write
+from adapters.export_writer import export_from_unified, write_export_metadata
+from adapters.frame_extractor import check_items_count, create_frames, FrameExtractionError
+from adapters.unified_repo import (
+    csv_to_dict,
+    extract_zones_from_file,
+    import_unified_from_export,
+    load_notes_csv,
+    load_unified_dataset,
+    save_unified_dataset,
 )
-from data_utils import (
-    bundle_summary_str,
-    csv_to_dict, save_dataset, save_parameter_to_csv, load_parameter_from_csv,
-    save_limb_parameters, load_limb_parameters, load_notes_csv, extract_zones_from_file,
+from adapters.zone_masks import load_zone_masks
+from domain.model import (
     FrameRecord,
+    bundle_summary_str,
+    empty_bundle,
+    preview_lines_for_save,
 )
-from frame_utils import check_items_count, create_frames, FrameExtractionError
+from domain.project import ProjectPaths
+from domain.touch import cycle_param_state, find_last_open_onset, zones_at
+from gui import theme
+from gui.cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
+from gui.resource_utils import resource_path
+from gui.ui_components import build_ui
 from perf_utils import PerfLogger
-from resource_utils import resource_path
-from ui_components import build_ui
 from video_model import Video
-import theme
 
 
 # =============================================================================
@@ -121,6 +123,48 @@ def custom_confirm_close(root) -> bool:
     return confirmed
 
 
+def load_parameter_names_into(video_obj, par_buttons, limb_par_buttons):
+    """
+    Sets names onto the video object and updates the buttons' labels.
+    par_buttons: dict {1: button, 2: button, 3: button}
+    limb_par_buttons: dict {1: button, 2: button, 3: button}
+
+    The config-reading half lives in adapters.config.load_parameter_labels();
+    this keeps the Video-entity mutation + Tk button wiring (GUI side, to be
+    absorbed by the service layer in the next refactor step).
+    """
+    labels = config.load_parameter_labels()
+    p1 = labels['parameter1']
+    p2 = labels['parameter2']
+    p3 = labels['parameter3']
+
+    video_obj.parameter1_name = p1
+    video_obj.parameter2_name = p2
+    video_obj.parameter3_name = p3
+    if par_buttons.get(1):
+        par_buttons[1].config(text=f"{p1}")
+        theme.set_button_state(par_buttons[1], None)
+    if par_buttons.get(2):
+        par_buttons[2].config(text=f"{p2}")
+        theme.set_button_state(par_buttons[2], None)
+    if par_buttons.get(3):
+        par_buttons[3].config(text=f"{p3}")
+        theme.set_button_state(par_buttons[3], None)
+
+    video_obj.limb_parameter1_name = labels['limb_parameter1']
+    video_obj.limb_parameter2_name = labels['limb_parameter2']
+    video_obj.limb_parameter3_name = labels['limb_parameter3']
+    if limb_par_buttons.get(1):
+        limb_par_buttons[1].config(text=f"{video_obj.limb_parameter1_name}")
+        theme.set_button_state(limb_par_buttons[1], None)
+    if limb_par_buttons.get(2):
+        limb_par_buttons[2].config(text=f"{video_obj.limb_parameter2_name}")
+        theme.set_button_state(limb_par_buttons[2], None)
+    if limb_par_buttons.get(3):
+        limb_par_buttons[3].config(text=f"{video_obj.limb_parameter3_name}")
+        theme.set_button_state(limb_par_buttons[3], None)
+
+
 # =============================================================================
 # Main Application
 # =============================================================================
@@ -141,30 +185,34 @@ class LabelingApp(tk.Tk):
         self._zone_masks = []
         self._zone_dir = None
 
+        # Config snapshot, loaded ONCE. build_ui and everything below read
+        # from this AppConfig instead of re-reading config.json.
+        self.config = config.load_app_config()
+
         # Build UI (creates frames, widgets, binds events; sets many attributes)
         build_ui(self)
 
-        # Load config flags that affect UI sizing & behavior
-        self.NEW_TEMPLATE, self.minimal_touch_length = load_config_flags()
+        # Config flags that affect UI sizing & behavior
+        self.NEW_TEMPLATE = self.config.new_template
+        self.minimal_touch_length = self.config.minimal_touch_length
         print("INFO: Loaded new template:", self.NEW_TEMPLATE)
         print("INFO: Loaded minimal touch length:", self.minimal_touch_length)
-        perf_enabled, perf_log_every_s, perf_log_top_n = load_perf_config()
         self.perf = PerfLogger(
-            enabled=perf_enabled,
-            log_every_s=perf_log_every_s,
-            top_n=perf_log_top_n,
+            enabled=self.config.perf_enabled,
+            log_every_s=self.config.perf_log_every_s,
+            top_n=self.config.perf_log_top_n,
         )
-        print("INFO: Perf logging enabled:", perf_enabled)
-        self.video_downscale = load_video_downscale()
+        print("INFO: Perf logging enabled:", self.config.perf_enabled)
+        self.video_downscale = self.config.video_downscale
         print("INFO: Video downscale:", self.video_downscale)
-        self.jump_seconds = load_jump_seconds()
+        self.jump_seconds = self.config.jump_seconds
         self.jump_frame_count = 7  # fallback until a video loads & framerate is known
         print(f"INFO: Fast-jump configured to {self.jump_seconds}s")
         self._refresh_jump_label()
 
         # Realtime arrow-hold playback state (no KeyRelease bindings â€” OS keyboard
         # auto-repeat KeyPress events act as a heartbeat, polled by a watchdog).
-        self.realtime_arrow_hold = load_realtime_arrow_hold()
+        self.realtime_arrow_hold = self.config.realtime_arrow_hold
         print(f"INFO: Realtime arrow hold: {self.realtime_arrow_hold}")
         self.play_dir = 1                     # 1 = forward, -1 = backward (set by arrow-hold)
         self._arrow_held_dir = None           # currently-held arrow direction (1 / -1 / None)
@@ -305,14 +353,8 @@ class LabelingApp(tk.Tk):
         return rec["LimbParams"]
     
     def _param_next_state(self, current):
-        # Cycle: None -> "ON" -> "OFF" -> "ON" ...
-        if current is None or current == "":
-            return "ON"
-        if current == "ON":
-            return "OFF"
-        if current == "OFF":
-            return None
-        return None  # current == "ON" or anything else
+        # Cycle: None -> "ON" -> "OFF" -> None (pure rule in domain.touch).
+        return cycle_param_state(current)
 
     def _param_key_for_index(self, idx: int) -> str:
         return f"Par{idx}"
@@ -327,16 +369,9 @@ class LabelingApp(tk.Tk):
     def _ensure_bundle(self, idx: int):
         b = self.video.frames.get(idx)
         if not isinstance(b, dict):
-            # create an empty bundle (match your empty_bundle() structure)
-            b = {
-                "Note": None,
-                "Params": {},
-                "LH": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "RH": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "LL": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                "RL": {"Onset": None, "Touch": None, "Zones": [], "X": [], "Y": []},
-                # no "Changed" by default
-            }
+            # Single canonical empty-bundle constructor (domain.model) — the
+            # old hand-rolled dict here diverged (Onset None, no Bodypart).
+            b = empty_bundle()
             self.video.frames[idx] = b
         return b
 
@@ -372,7 +407,6 @@ class LabelingApp(tk.Tk):
             print(f"[notify_bundle_changed] could not print bundle at {idx}: {e}")
     
     def _get_bundle(self, frame):
-        from data_utils import empty_bundle
         return self.video.frames.setdefault(frame, empty_bundle())
 
     def set_param_on_frame(self, frame, name, state):  # state: "ON"/"OFF"/None
@@ -593,8 +627,7 @@ class LabelingApp(tk.Tk):
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
 
-        target_attr = f"data{option}" if hasattr(self.video, f"data{option}") else "data"
-        target_data = getattr(self.video, target_attr, {})
+        target_data = getattr(self.video, f"data{option}", {})
 
         rec = target_data.get(current_frame)
         if not isinstance(rec, dict):
@@ -666,7 +699,7 @@ class LabelingApp(tk.Tk):
         self.on_radio_click()  # keeps same behavior for image & palette
         dot_size = getattr(self, "dot_size", 10)
         scale = getattr(self, "diagram_scale", 1.0)
-        if self.video and hasattr(self.video, 'data'):
+        if self.video:
             sel = self.option_var_1.get()
             if sel == "RH":
                 data = self.video.dataRH
@@ -715,8 +748,7 @@ class LabelingApp(tk.Tk):
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
 
-        target_attr = f"data{option}" if hasattr(self.video, f"data{option}") else "data"
-        target_data = getattr(self.video, target_attr, {})
+        target_data = getattr(self.video, f"data{option}", {})
         setattr(self.video, f"is_touch{option}", True)
 
         print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={zone_results}")
@@ -768,21 +800,14 @@ class LabelingApp(tk.Tk):
         if not self.video:
             print("PREVIEW: No video loaded."); return
 
-
-        base_dir = os.path.dirname(self.video.frames_dir)  # -> Labeled_data/<video>
-        data_dir   = os.path.join(base_dir, "data")
-        export_dir = os.path.join(base_dir, "export")
-        unified_path = os.path.join(data_dir, f"{self.video_name}_unified.csv")
-        export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
-
+        paths = ProjectPaths(self.video_name)
         print("\n===== PREVIEW: Save destinations =====")
-        print(f"Base:   {base_dir}")
-        print(f"Data:   {data_dir}")
-        print(f"Export: {export_dir}")
-        print(f"Unified CSV (will write changed-only): {unified_path}")
-        print(f"Export  CSV (will write all frames):   {export_path}")
+        print(f"Base:   {paths.video_dir}")
+        print(f"Data:   {paths.data_dir}")
+        print(f"Export: {paths.export_dir}")
+        print(f"Unified CSV (will write changed-only): {paths.unified_csv}")
+        print(f"Export  CSV (will write all frames):   {paths.export_csv}")
 
-        from data_utils import preview_lines_for_save
         lines = preview_lines_for_save(self.video.frames, self.video.total_frames, changed_only=changed_only)
 
         if not lines:
@@ -797,34 +822,16 @@ class LabelingApp(tk.Tk):
         """
         Set self.video.last_green to the last 'ON' points for the selected limb
         at or before the current frame; clear when an 'OFF' is encountered first.
-
-        Walks integer frame indices backward from current_frame instead of
-        sorting all dict keys â€” O(distance to last ON/OFF) instead of
-        O(N log N) per call. Matters at 300k+ frames.
+        The pure backward scan lives in domain.touch.find_last_open_onset.
         """
         if not (self.video and isinstance(self.video.frames, dict)):
             self.video.last_green = [(None, None)]
             return
 
         limb = self.option_var_1.get()  # "LH"/"RH"/"LL"/"RL"
-        frames = self.video.frames
-
-        for f in range(self.video.current_frame, -1, -1):
-            b = frames.get(f)
-            if not isinstance(b, dict):
-                continue
-            rec = b.get(limb, {}) if isinstance(b, dict) else {}
-            onset = rec.get("Onset")
-            if onset == "OFF":
-                self.video.last_green = [(None, None)]
-                return
-            if onset == "ON":
-                xs = rec.get("X", []) or []
-                ys = rec.get("Y", []) or []
-                self.video.last_green = list(zip(xs, ys)) if xs and ys else [(None, None)]
-                return
-
-        self.video.last_green = [(None, None)]
+        self.video.last_green = find_last_open_onset(
+            self.video.frames, limb, self.video.current_frame
+        )
 
     def on_radio_click(self):
         expected_dir = resource_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
@@ -855,35 +862,16 @@ class LabelingApp(tk.Tk):
         if getattr(self, "_zone_dir", None) == directory and getattr(self, "_zone_masks", None):
             return
         self._zone_dir = directory
-        self._zone_masks = []
-        if not os.path.isdir(directory):
-            print(f"WARNING: Zones directory not found: {directory}")
-            return
-        for filename in os.listdir(directory):
-            fp = os.path.join(directory, filename)
-            if os.path.isfile(fp) and fp.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
-                if image is None:
-                    continue
-                zone_name = filename.rsplit('.', 1)[0]
-                self._zone_masks.append((zone_name, image))
-        print(f"INFO: Loaded touch zone masks from {directory}: {len(self._zone_masks)} masks")
+        self._zone_masks = load_zone_masks(directory)
 
     def find_image_with_white_pixel(self, x, y):
+        # NOTE: historically misleading name — the masks are BLACK shapes on
+        # white, so a hit is pixel == 0 (see domain.touch.zones_at, which pins
+        # the first-match + ['NN'] sentinel semantics the exports rely on).
         with self.perf.time("find_image_with_white_pixel"):
-            x = int(x); y = int(y)
             if not getattr(self, "_zone_masks", None):
                 self._load_zone_masks()
-            matches = []
-            for zone_name, image in self._zone_masks:
-                h, w = image.shape[:2]
-                if x < 0 or y < 0 or x >= w or y >= h:
-                    continue
-                if image[y, x] == 0:
-                    matches.append(zone_name)
-            if matches:
-                return [matches[0]]
-            return ['NN']
+            return zones_at(self._zone_masks, x, y)
 
     # === Timelines =============================================================
     def on_timeline_click(self, event):
@@ -971,7 +959,7 @@ class LabelingApp(tk.Tk):
                 data_source = {
                     'RH': self.video.dataRH, 'LH': self.video.dataLH, 'RL': self.video.dataRL, 'LL': self.video.dataLL
                 }
-                data = data_source.get(limb, self.video.data)
+                data = data_source.get(limb, {})
                 self.is_touch_timeline = False if zone == 0 else self.video.touch_to_next_zone[zone]
 
                 def get_color(frame_idx, data):
@@ -1758,7 +1746,9 @@ class LabelingApp(tk.Tk):
                     break
 
     def _video_time_meta_path(self, data_dir, video_name):
-        return os.path.join(data_dir, f"{video_name}_metadata.json")
+        # Canonical location: ProjectPaths.video_time_json (data_dir is always
+        # ProjectPaths(video_name).data_dir at every call site).
+        return ProjectPaths(video_name).video_time_json
 
     def _load_video_time(self, data_dir, video_name):
         path = self._video_time_meta_path(data_dir, video_name)
@@ -1797,7 +1787,7 @@ class LabelingApp(tk.Tk):
     def _persist_video_time(self):
         if self.video is None or self.video_name is None:
             return
-        data_dir = os.path.join("Labeled_data", self.video_name, "data")
+        data_dir = ProjectPaths(self.video_name).data_dir
         total = self._current_video_time_s()
         self._write_video_time(data_dir, self.video_name, total)
         self._video_time_total_s = total
@@ -1806,7 +1796,7 @@ class LabelingApp(tk.Tk):
     def _finalize_video_time(self):
         if self.video is None or self.video_name is None:
             return
-        data_dir = os.path.join("Labeled_data", self.video_name, "data")
+        data_dir = ProjectPaths(self.video_name).data_dir
         total = self._current_video_time_s()
         self._write_video_time(data_dir, self.video_name, total)
         self._video_time_total_s = total
@@ -1993,26 +1983,23 @@ class LabelingApp(tk.Tk):
         self._persist_video_time()
         self.preview_before_save(changed_only=True)
         print("INFO: Saving (unified & export)...")
-        
-        base_dir = os.path.dirname(self.video.frames_dir)  # -> Labeled_data/<video>
-        data_dir   = os.path.join(base_dir, "data")
-        export_dir = os.path.join(base_dir, "export")
-        os.makedirs(data_dir, exist_ok=True)
-        os.makedirs(export_dir, exist_ok=True)
-        print(f"DEBUG: Base dir:   {base_dir}")
-        print(f"DEBUG: Data dir:   {data_dir}")
-        print(f"DEBUG: Export dir: {export_dir}")
+
+        paths = ProjectPaths(self.video_name)
+        os.makedirs(paths.data_dir, exist_ok=True)
+        os.makedirs(paths.export_dir, exist_ok=True)
+        print(f"DEBUG: Base dir:   {paths.video_dir}")
+        print(f"DEBUG: Data dir:   {paths.data_dir}")
+        print(f"DEBUG: Export dir: {paths.export_dir}")
         print(f"DEBUG: Frames dir: {self.video.frames_dir}")
-        unified_path = os.path.join(data_dir, f"{self.video_name}_unified.csv")
+        unified_path = paths.unified_csv
         print(f"DEBUG: Writing unified dataset â†’ {unified_path}")
 
-        from data_utils import save_unified_dataset, export_from_unified, extract_zones_from_file
         save_unified_dataset(unified_path, self.video.total_frames, self.video.frames)
         clothes_path = self.video.clothes_file_path
         if not clothes_path and self.video.dataNotes_path_to_csv:
-            clothes_path = self.video.dataNotes_path_to_csv.replace('_notes.csv', '_clothes.txt')
+            clothes_path = paths.clothes_txt
         clothes_list = extract_zones_from_file(clothes_path) if clothes_path else None
-        export_path = os.path.join(export_dir, f"{self.video_name}_export.csv")
+        export_path = paths.export_csv
         print(f"DEBUG: Writing export dataset â†’ {export_path}")
 
         # labeling_app.py (inside save_data, before export_from_unified call)
@@ -2029,8 +2016,7 @@ class LabelingApp(tk.Tk):
                 "XX_Parameter_3": (self.limb_par3_btn.cget("text") or "LimbPar3"),
             }
         # NEW: write JSON sidecar with metadata (instead of stuffing CSV header)
-        from data_utils import write_export_metadata
-        meta_path = os.path.join(export_dir, f"{self.video_name}_metadata.json")
+        meta_path = paths.export_metadata
         write_export_metadata(
             meta_path=meta_path,
             program_version=self.video.program_version,
@@ -2079,16 +2065,15 @@ class LabelingApp(tk.Tk):
     def analysis(self):
         if self.video:
             self.save_data()
-            data_dir = os.path.dirname(self.video.dataRH_path_to_csv)
-            base_dir = os.path.dirname(data_dir)
-            plots_path = os.path.join(base_dir, "plots")
+            paths = ProjectPaths(self.video_name)
             try:
                 analysis.do_analysis(
-                    data_dir,
-                    plots_path,
+                    paths.data_dir,
+                    paths.plots_dir,
                     self.video_name,
                     debug=False,
                     frame_rate=self.frame_rate,
+                    new_template=self.NEW_TEMPLATE,
                 )
             except Exception as exc:
                 traceback.print_exc()
@@ -2136,7 +2121,7 @@ class LabelingApp(tk.Tk):
             font=theme.FONT_DIALOG_TITLE,
         )
         label.pack(pady=(0, 10))
-        cfg = load_config()
+        cfg = config.load_config()
         labeling_var = tk.StringVar(value=getattr(self, "labeling_mode", cfg.get("last_labeling_mode", "Normal")))
 
         ttk.Radiobutton(
@@ -2159,7 +2144,7 @@ class LabelingApp(tk.Tk):
             color = theme.STATUS_WARN if self.labeling_mode == 'Reliability' else theme.STATUS_OK
             self.mode_label.set(color, self.labeling_mode)
             cfg["last_labeling_mode"] = self.labeling_mode
-            save_config(cfg)
+            config.save_config(cfg)
             mode_window.destroy()
 
         ttk.Button(
@@ -2200,10 +2185,10 @@ class LabelingApp(tk.Tk):
         if had_video:
             self._finalize_video_time()
 
-        self.video = Video(video_path)
-        cap = cv2.VideoCapture(video_path)
-        self.video.frame_rate = round(cap.get(cv2.CAP_PROP_FPS), 1)
-        cap.release()
+        # Probe once (adapter); the Video model itself does no I/O anymore.
+        raw_frame_count, fps = video_probe.probe(video_path)
+        self.video = Video(video_path, total_frames=raw_frame_count - 1)
+        self.video.frame_rate = round(fps, 1)
         self.frame_rate = self.video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
         self.jump_frame_count = max(1, round(self.frame_rate * self.jump_seconds))
@@ -2212,30 +2197,26 @@ class LabelingApp(tk.Tk):
         self._refresh_jump_label()
         min_length_in_frames = self.minimal_touch_length * self.frame_rate / 1000
         self.min_touch_length_label.config(text=f"Minimal Touch Length: {min_length_in_frames}")
-        video_name = os.path.splitext(os.path.basename(video_path))[0]
-        if self.labeling_mode == "Reliability":
-            video_name += "_reliability"
+        raw_video_name = os.path.splitext(os.path.basename(video_path))[0]
+        # The "_reliability" suffix rule lives in ProjectPaths.for_video.
+        paths = ProjectPaths.for_video(
+            raw_video_name, reliability=(self.labeling_mode == "Reliability")
+        )
+        video_name = paths.video_name
         self.video_name = video_name
 
-        base_dir = os.path.join("Labeled_data", video_name)
-        data_dir = os.path.join(base_dir, "data")
-        frames_dir = os.path.join(base_dir, "frames")
-        plots_dir = os.path.join(base_dir, "plots")
-        export_dir = os.path.join(base_dir, "export")
-        for d in (data_dir, frames_dir, plots_dir, export_dir): os.makedirs(d, exist_ok=True)
+        data_dir = paths.data_dir
+        frames_dir = paths.frames_dir
+        for d in (paths.data_dir, paths.frames_dir, paths.plots_dir, paths.export_dir):
+            os.makedirs(d, exist_ok=True)
         self.video.frames_dir = frames_dir
         self._start_video_timer(data_dir, video_name)
 
         # --- Unified-first load ---
-        unified_path = os.path.join(data_dir, f"{video_name}_unified.csv")
-        export_path  = os.path.join(export_dir, f"{video_name}_export.csv")
+        unified_path = paths.unified_csv
+        export_path  = paths.export_csv
         print(f"INFO: load_video: unified_path={unified_path}", flush=True)
         print(f"INFO: load_video: export_path={export_path}", flush=True)
-
-        from data_utils import (
-            load_unified_dataset, empty_bundle,
-            import_unified_from_export, save_unified_dataset
-        )
 
         # Load unified (robust: handles 0-byte / header-only files).
         # Open a progress window covering the full data-load phase (unified
@@ -2289,8 +2270,7 @@ class LabelingApp(tk.Tk):
 
         # Always set these paths (other features derive folders from them)
         for suffix in ['RH', 'LH', 'RL', 'LL']:
-            csv_path = os.path.join(data_dir, f"{video_name}{suffix}.csv")
-            setattr(self.video, f"data{suffix}_path_to_csv", csv_path)
+            setattr(self.video, f"data{suffix}_path_to_csv", paths.limb_csv(suffix))
 
         # If unified did not exist BUT legacy limb CSVs do, migrate them once into self.video.frames
         if not self.video.frames:
@@ -2308,13 +2288,6 @@ class LabelingApp(tk.Tk):
                 print("INFO: Legacy limb CSVs merged into unified in-memory store.")
             else:
                 print("INFO: Starting with an empty unified store.")
-
-        # Parameter CSVs
-        for name in ['parameter_1', 'parameter_2', 'parameter_3']:
-            csv_path = os.path.join(data_dir, f"{video_name}{name}.csv")
-            setattr(self.video, f"data{name}_path_to_csv", csv_path)
-
-        
 
         # Names for parameters (update button text)
         load_parameter_names_into(
@@ -2335,6 +2308,7 @@ class LabelingApp(tk.Tk):
                     self.labeling_mode,
                     self.video_name,
                     progress_cb=progress_update,
+                    original_frames_dir=paths.original.frames_dir,
                 )
             except FrameExtractionError as exc:
                 print(f"ERROR: load_video: frame extraction failed: {exc}", flush=True)
@@ -2389,18 +2363,14 @@ class LabelingApp(tk.Tk):
 
         # Notes
         self.video.notes = {}
-        self.video.dataNotes_path_to_csv = os.path.join(data_dir, f"{video_name}_notes.csv")
+        self.video.dataNotes_path_to_csv = paths.notes_csv
         if os.path.exists(self.video.dataNotes_path_to_csv):
             self.video.notes = load_notes_csv(self.video.dataNotes_path_to_csv)
             print("INFO: Notes loaded successfully.")
         self.update_note_entry()
 
-        # Limb parameters
-        p1, p2, p3 = load_limb_parameters(os.path.join(data_dir, f"{video_name}_limb_parameters.csv"))
-        self.video.limb_parameter1, self.video.limb_parameter2, self.video.limb_parameter3 = p1, p2, p3
-
         # Clothes file presence => colorize button
-        self.video.clothes_file_path = os.path.join(data_dir, f"{video_name}_clothes.txt")
+        self.video.clothes_file_path = paths.clothes_txt
         theme.set_button_state(self.cloth_btn, None)
         if self.video.clothes_file_path and os.path.exists(self.video.clothes_file_path):
             with open(self.video.clothes_file_path, 'r', encoding="utf-8") as f:
@@ -2426,8 +2396,7 @@ class LabelingApp(tk.Tk):
                 return
             file_path = self.video.clothes_file_path
             if not file_path and self.video_name:
-                data_dir = os.path.join("Labeled_data", self.video_name, "data")
-                file_path = os.path.join(data_dir, f"{self.video_name}_clothes.txt")
+                file_path = ProjectPaths(self.video_name).clothes_txt
             scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
             initial_points = self._load_clothes_points_from_file(file_path, scale)
             self.cloth_btn.config(state=tk.DISABLED)
@@ -2493,9 +2462,9 @@ class LabelingApp(tk.Tk):
         print("INFO: Saving clothes...")
         if not self.video.dataRH_path_to_csv:
             print("ERROR: Data path is not set"); return
-        data_folder = os.path.dirname(self.video.dataRH_path_to_csv)
-        os.makedirs(data_folder, exist_ok=True)
-        text_file_path = os.path.join(data_folder, f"{self.video_name}_clothes.txt")
+        paths = ProjectPaths(self.video_name)
+        os.makedirs(paths.data_dir, exist_ok=True)
+        text_file_path = paths.clothes_txt
         self.video.clothes_file_path = text_file_path
         scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
 
@@ -2540,12 +2509,14 @@ class LabelingApp(tk.Tk):
         self.destroy()
 
     def _last_position_path(self, data_dir: str, video_name: str) -> str:
-        return os.path.join(data_dir, f"{video_name}_last_position.json")
+        # Canonical location: ProjectPaths.last_position_json (data_dir is
+        # always ProjectPaths(video_name).data_dir at every call site).
+        return ProjectPaths(video_name).last_position_json
 
     def save_last_position(self):
         if self.video is None or self.video_name is None:
             return
-        data_dir = os.path.join("Labeled_data", self.video_name, "data")
+        data_dir = ProjectPaths(self.video_name).data_dir
         os.makedirs(data_dir, exist_ok=True)
         path = self._last_position_path(data_dir, self.video_name)
         try:
@@ -2579,7 +2550,7 @@ class LabelingApp(tk.Tk):
             self._settings_win.lift()
             return
 
-        cfg = load_config()
+        cfg = config.load_config()
         win = tk.Toplevel(self)
         win.title("Settings")
         win.resizable(False, False)
@@ -2761,7 +2732,7 @@ class LabelingApp(tk.Tk):
                 messagebox.showerror("Invalid settings", str(e), parent=win)
                 return
 
-            save_config(new_cfg)
+            config.save_config(new_cfg)
             self.apply_runtime_settings(new_cfg)
             if close:
                 win.destroy()
@@ -2791,6 +2762,9 @@ class LabelingApp(tk.Tk):
         ).pack(side="left", padx=5)
 
     def apply_runtime_settings(self, cfg: dict):
+        # Refresh the one AppConfig snapshot the app holds (build_ui and other
+        # readers consume self.config instead of re-reading config.json).
+        self.config = config.load_app_config()
         self.perf.enabled = bool(cfg.get("perf_enabled", False))
         self.perf.log_every_s = float(cfg.get("perf_log_every_s", 2.0))
         self.perf.top_n = int(cfg.get("perf_log_top_n", 6))

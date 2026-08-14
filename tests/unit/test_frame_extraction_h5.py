@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-import frame_utils
+from adapters import frame_extractor as frame_utils
 
 
 class _FakeCapture:

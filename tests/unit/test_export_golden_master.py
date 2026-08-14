@@ -25,7 +25,8 @@ import os
 
 import pandas as pd
 
-from data_utils import export_from_unified, empty_bundle
+from adapters.export_writer import export_from_unified
+from domain.model import empty_bundle
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "golden_export.csv")
 

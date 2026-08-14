@@ -7,8 +7,8 @@ independently testable everywhere.
 
 import json
 
-import config_utils
-from data_utils import load_limb_parameters, load_notes_csv, save_limb_parameters
+from adapters import config as config_utils
+from adapters.unified_repo import load_limb_parameters, load_notes_csv, save_limb_parameters
 
 
 NOTE = "Dívá se"

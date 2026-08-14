@@ -1,6 +1,6 @@
 """
-frame_utils.py
-Frame folder management and generation.
+adapters/frame_extractor.py
+Frame folder management and generation (was frame_utils.py).
 """
 
 import os
@@ -13,6 +13,8 @@ import threading
 import traceback
 
 import cv2
+
+from domain.project import ProjectPaths
 
 
 _FRAME_RE = re.compile(r"^frame(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
@@ -313,12 +315,15 @@ def create_frames(
     video_name,
     progress_cb=None,
     progress_interval_s=1.0,
+    original_frames_dir=None,
 ):
     print("INFO: Checking if frames need to be created...")
 
     if labeling_mode == "Reliability":
-        original_video_name = video_name.replace("_reliability", "")
-        original_frames_dir = os.path.join("Labeled_data", original_video_name, "frames")
+        if original_frames_dir is None:
+            # Reliability projects copy frames from their non-reliability
+            # original; derive its location from the canonical project layout.
+            original_frames_dir = ProjectPaths(video_name).original.frames_dir
         if os.path.exists(original_frames_dir):
             print(f"INFO: Found existing frames at {original_frames_dir}. Copying instead of generating...")
             os.makedirs(frames_dir, exist_ok=True)

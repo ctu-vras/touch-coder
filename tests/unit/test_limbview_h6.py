@@ -12,8 +12,7 @@ The view is constructed with a `dict` subclass that ALSO exposes itself as
 HEAD ctor `LimbView(frames, limb)` and GREEN against the fixed ctor
 `LimbView(video, limb)`.
 """
-from video_model import LimbView
-from data_utils import empty_bundle
+from domain.model import LimbView, empty_bundle
 
 
 class _Owner(dict):

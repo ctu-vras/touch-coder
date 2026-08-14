@@ -3,7 +3,7 @@
 import pytest
 
 import analysis
-from data_utils import export_from_unified
+from adapters.export_writer import export_from_unified
 
 
 def _row(frame, onset, zones):

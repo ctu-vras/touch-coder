@@ -1,61 +1,25 @@
-import cv2
-# --- top of video_model.py ---
 import sys
-from typing import Dict, Iterator
-from data_utils import empty_bundle, FrameBundle
+from typing import Dict
+
+from domain.model import FrameBundle, LimbView
 
 PROGRAM_VERSION = "8.0.0"
 
 
-class LimbView:
-    """Read/write view onto a single limb ('RH'/'LH'/'RL'/'LL') across the owning
-    Video's live `frames` dict. Reads never mutate; writes create the bundle on demand.
-    `frames` is resolved lazily from the owner, so reassigning `video.frames` needs no rebind."""
-    def __init__(self, video, limb: str):
-        self._video = video
-        self._limb = limb
-
-    @property
-    def _frames(self) -> Dict[int, FrameBundle]:
-        return self._video.frames
-
-    # --- reads: never insert ---
-    def __getitem__(self, frame: int):
-        return self._frames[frame][self._limb]          # KeyError if frame absent; no mutation
-
-    def get(self, frame, default=None):
-        b = self._frames.get(frame)
-        return (b[self._limb] if b and self._limb in b else default)
-
-    def __contains__(self, frame) -> bool:
-        return frame in self._frames
-
-    def __len__(self) -> int:
-        return len(self._frames)
-
-    def __iter__(self) -> Iterator[int]:
-        return iter(self._frames)
-
-    def keys(self):   return self._frames.keys()
-    def values(self): return (b[self._limb] for b in self._frames.values() if self._limb in b)
-    def items(self):  return ((f, b[self._limb]) for f, b in self._frames.items() if self._limb in b)
-
-    # --- write: creating the bundle here is intended ---
-    def __setitem__(self, frame: int, rec):
-        b = self._frames.setdefault(frame, empty_bundle())
-        b[self._limb] = rec
-
 class Video:
-    def __init__(self, video_path):
+    """Per-video state container. Does NO I/O: total_frames comes from the
+    caller (probe via adapters.video_probe), frame_rate is set after probing.
+    """
+
+    def __init__(self, video_path, total_frames):
         self.video_path = video_path
         self.current_frame = 0  # Starting at frame 0
         self.current_frame_zone = 0
         self.number_frames_in_zone = 100
         self.video_name = None
-        self.total_frames = self.get_total_frames()
+        self.total_frames = total_frames
         self.number_zones = int(self.total_frames/self.number_frames_in_zone) + 1
         self.frames_dir = None
-        self.data = {}
         self.data_path_to_csv = None
         self.dots = []
         self.frames: Dict[int, FrameBundle] = {}
@@ -73,11 +37,7 @@ class Video:
         self.last_green = [(10, 10),(5, 5),(50, 50)]
         self.play = False
         self.frame_rate = None
-        self.parameter_button1_state_dict = {}
-        self.parameter_button2_state_dict = {}
-        self.parameter_button3_state_dict = {}
         self.dataNotes_path_to_csv = None
-        
 
         if sys.platform.startswith("win"):
             self.program_version = f"{PROGRAM_VERSION} (Windows)"
@@ -91,27 +51,3 @@ class Video:
         self.parameter3_name = None
         self.clothes_file_path = None
         self.notes = {}
-        self.limb_parameter1 = {}  # RH, LH, RL, LL each has its own entry
-        self.limb_parameter2 = {}
-        self.limb_parameter3 = {}
-
-    def get_total_frames(self):
-        cap = cv2.VideoCapture(self.video_path)
-        is_opened = cap.isOpened()
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
-        print(f"INFO: VideoCapture opened: {is_opened}")
-        print(f"INFO: OpenCV frame count: {total_frames}")
-        print(f"INFO: OpenCV FPS: {fps:.3f}")
-        return total_frames - 1
-
-    def get_frame(self, frame_number):
-        cap = cv2.VideoCapture(self.video_path)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-        success, frame = cap.read()
-        cap.release()
-        if success:
-            return frame
-        else:
-            return None

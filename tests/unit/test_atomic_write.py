@@ -16,7 +16,8 @@ import os
 import pandas as pd
 import pytest
 
-from data_utils import save_unified_dataset, empty_bundle
+from adapters.unified_repo import save_unified_dataset
+from domain.model import empty_bundle
 
 
 def _one_changed(frame):
@@ -53,7 +54,7 @@ def test_C1_unified_save_preserves_prior_file_on_write_crash(tmp_path, monkeypat
 
 
 def test_C1_atomic_write_rolls_back_on_exception(tmp_path):
-    from atomic_io import atomic_write
+    from adapters.atomic_io import atomic_write
 
     path = str(tmp_path / "sub" / "file.txt")
 

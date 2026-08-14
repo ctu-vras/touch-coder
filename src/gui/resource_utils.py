@@ -3,7 +3,9 @@ import sys
 
 
 def get_repo_root() -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    # This file lives at src/gui/resource_utils.py — the repo root is two
+    # levels up (was one level up before the gui/ package move).
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def get_app_dir() -> str:

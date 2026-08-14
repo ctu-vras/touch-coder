@@ -12,7 +12,7 @@ insertion-ordered), so `list(d.keys())` asserts the on-disk order exactly.
 """
 import json
 
-from data_utils import write_export_metadata
+from adapters.export_writer import write_export_metadata
 
 
 BASE_KEYS = [

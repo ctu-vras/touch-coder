@@ -1,7 +1,10 @@
 """
-data_utils.py
-I/O helpers split from LabelingApp – CSV/notes/parameters and a small
-CSV loader. Pure functions where possible; controller passes what’s needed.
+adapters/unified_repo.py
+Persistence for the unified-CSV journal (the source of truth) plus the legacy
+loaders it can recover from: export CSV import, per-limb CSVs, notes, limb
+parameters, and the clothes sidecar. Split from the old data_utils.py — the
+pure model shapes now live in domain.model, the export writer in
+adapters.export_writer.
 """
 
 import csv
@@ -10,111 +13,16 @@ import json
 import os
 import time
 import pandas as pd
-from typing import TypedDict, NotRequired, List, Optional, Dict
+from typing import Dict, Optional
 
-from atomic_io import atomic_write, durable_append
-# --- ADD to data_utils.py (near the top with other imports) ---
-from typing import TypedDict, Dict, Optional
-import json
-import pandas as pd
-import os
-
-class FrameRecord(TypedDict):
-    X: List[int]                 # 0+ points in X
-    Y: List[int]                 # 0+ points in Y (aligned with X)
-    Onset: str                   # "ON" | "OFF" | ""
-    Bodypart: str                # "LH"|"RH"|"LL"|"RL"|"" (for the owning limb CSV this is redundant, but present)
-    Zones: List[str]             # always list, may be []
-    Touch: Optional[int]          # Parameter_1..3 states ("ON"/"OFF"/None)
-    LimbParams: NotRequired[Dict[str, Optional[str]]]        # same, but limb-specific
-
-# Reuse your existing FrameRecord type
-class FrameBundle(TypedDict):
-    LH: FrameRecord
-    RH: FrameRecord
-    LL: FrameRecord
-    RL: FrameRecord
-    Note: Optional[str]
-    Params: Dict[str, Optional[str]]
-    Changed: NotRequired[bool]   # per-frame (global) params
-
-def write_export_metadata(meta_path: str,
-                          program_version,
-                          video_name,
-                          labeling_mode,
-                          frame_rate,
-                          clothes_list,
-                          param_labels: dict | None = None,
-                          limb_param_labels: dict | None = None,
-                          labeling_time_seconds: float | None = None) -> None:
-    """
-    Writes a JSON sidecar with all non-tabular export metadata that used to be
-    stuffed into the first 5 lines of *_export.csv.
-    """
-    meta = {
-        "Program Version": program_version,
-        "Video Name": video_name,
-        "Labeling Mode": labeling_mode,
-        "Frame Rate": frame_rate,
-        "Zones Covered With Clothes": clothes_list,
-        "Param Labels": param_labels or {},
-        "Limb Param Labels": limb_param_labels or {},
-    }
-    if labeling_time_seconds is not None:
-        meta["Total Labeling Time (hours)"] = round(float(labeling_time_seconds) / 3600.0, 4)
-    atomic_write(meta_path, lambda f: json.dump(meta, f, indent=2, ensure_ascii=False))
-
-def bundle_summary_dict(b):
-    """
-    Return a compact, readable dict of everything we care about in a FrameBundle,
-    including Onset/Touch/Zones per limb + top-level Note/Params.
-    """
-    def limb_view(rec, label):
-        if not rec:
-            return {"_missing": True}
-        return {
-            "Onset": rec.get("Onset"),
-            "Touch": rec.get("Touch"),
-            "Zones": rec.get("Zones") or [],
-            "Points": len(rec.get("X") or []),  # quick sanity check of clic
-            "LimbParams": rec.get("LimbParams") or {},
-        }
-
-    return {
-        "Note": b.get("Note"),
-        "Params": b.get("Params") or {},
-        "LH": limb_view(b.get("LH"), "LH"),
-        "RH": limb_view(b.get("RH"), "RH"),
-        "LL": limb_view(b.get("LL"), "LL"),
-        "RL": limb_view(b.get("RL"), "RL"),
-    }
-
-def bundle_summary_str(b, frame_index=None):
-    import json
-    head = {} if frame_index is None else {"Frame": frame_index}
-    data = bundle_summary_dict(b)
-    data = {**head, **data}
-    return json.dumps(data, indent=2, ensure_ascii=False)
-
-def empty_record(limb: str) -> FrameRecord:
-    return FrameRecord(
-        X=[], Y=[], Onset="", Bodypart=limb, Zones=[], Touch=None
-    )
-
-
-def _normalize_param_state(v):
-    # Legacy artifact: toggle_limb_parameter used to store the string "None" (M1).
-    return None if v in (None, "", "None") else v
-
-def empty_bundle() -> FrameBundle:
-    return {
-        "LH": empty_record("LH"),
-        "RH": empty_record("RH"),
-        "LL": empty_record("LL"),
-        "RL": empty_record("RL"),
-        "Note": None,
-        "Params": {},
-    }
+from adapters.atomic_io import atomic_write, durable_append
+from domain.model import (
+    FrameBundle,
+    FrameRecord,
+    _normalize_param_state,
+    empty_bundle,
+    empty_record,
+)
 
 
 UNIFIED_COLUMNS = ["Frame", "Note", "Params", "LH", "RH", "LL", "RL"]
@@ -532,120 +440,6 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
           f"from {export_csv_path} in {time.time() - iter_start:.1f}s", flush=True)
     return frames
 
-def export_from_unified(frames: Dict[int, FrameBundle],
-                        out_csv: str,
-                        program_version: float,
-                        video_name: str,
-                        labeling_mode: str,
-                        frame_rate: float,
-                        clothes_list,
-                        total_frames: int,
-                        param_labels: Dict[str, str] | None = None,
-                        limb_param_labels: Dict[str, str] | None = None) -> None:
-    """
-    Emit the legacy *_export.csv with EXACT schema/order and a row for EVERY frame 0..total_frames.
-    - Global Params: Par1..Par3 → Parameter_1..3
-    - Limb Params:  Par1..Par3 → {LH,LL,RH,RL}_Parameter_1..3
-    """
-    rows = []
-
-    def _xy_str(lst):
-        return ",".join(map(str, lst)) if lst else ""
-
-    for f in range(total_frames + 1):
-        b = frames.get(f, empty_bundle())
-        # 0-FPS probe (some containers) must not abort the export.
-        row = {"Frame": f, "Time_ms": (f / frame_rate) * 1000.0 if frame_rate else 0.0}
-
-        # Limb blocks in order: LH, LL, RH, RL
-        for limb in ["LH", "LL", "RH", "RL"]:
-            rec = b.get(limb, {}) if isinstance(b, dict) else {}
-            row[f"{limb}_X"] = _xy_str(rec.get("X", []))
-            row[f"{limb}_Y"] = _xy_str(rec.get("Y", []))
-            row[f"{limb}_Onset"] = rec.get("Onset", "")
-            row[f"{limb}_Zones"] = json.dumps(rec.get("Zones", []) or [])
-
-        # Global params (canonical keys → fixed columns)
-        params = (b.get("Params") or {}) if isinstance(b, dict) else {}
-        for i in (1, 2, 3):
-            val = params.get(f"Par{i}")
-            row[f"Parameter_{i}"] = "" if (val is None or val == "") else val
-
-        # Limb-specific params (canonical keys → fixed columns)
-        for limb in ["LH", "LL", "RH", "RL"]:
-            rec = b.get(limb, {}) if isinstance(b, dict) else {}
-            lp = rec.get("LimbParams", {}) if isinstance(rec, dict) else {}
-            for i in (1, 2, 3):
-                val = _normalize_param_state(lp.get(f"Par{i}"))
-                row[f"{limb}_Parameter_{i}"] = "" if (val is None or val == "") else val
-
-        row["Note"] = b.get("Note", "") if isinstance(b, dict) else ""
-        rows.append(row)
-
-    # Exact legacy column order
-    cols = ["Frame", "Time_ms"]
-    for limb in ["LH", "LL", "RH", "RL"]:
-        cols += [f"{limb}_X", f"{limb}_Y", f"{limb}_Onset", f"{limb}_Zones"]
-    cols += ["Parameter_1", "Parameter_2", "Parameter_3"]
-    for limb in ["LH", "LL", "RH", "RL"]:
-        cols += [f"{limb}_Parameter_1", f"{limb}_Parameter_2", f"{limb}_Parameter_3"]
-    cols += ["Note"]
-
-    df = pd.DataFrame(rows, columns=cols)
-    atomic_write(out_csv, lambda f: df.to_csv(f, index=False))
-
-    # CSV remains clean (no preamble). Metadata is written separately by caller.
-    print(f"DEBUG: Export → {out_csv} (rows={len(rows)})")
-
-def preview_lines_for_save(frames: Dict[int, FrameBundle],
-                           total_frames: int,
-                           changed_only: bool = True,
-                           limbs_order = ("LH","LL","RH","RL")) -> list[str]:
-    """
-    Build human-readable preview lines for frames that are about to be saved.
-    Format per limb present: 'frame=23 | LH: On ["17L"] | RH: Off [] ...'
-    If changed_only=True, only lists frames where any limb has rec['changed'].
-    """
-    lines: list[str] = []
-
-    def bundle_is_changed(b: FrameBundle) -> bool:
-        if b.get("Changed"):
-            return True
-        return any(isinstance(b.get(l), dict) and b[l].get("changed") for l in limbs_order)
-
-    for f in range(total_frames + 1):
-        b = frames.get(f)
-        if not isinstance(b, dict):
-            continue
-        if changed_only and not b.get("Changed"):
-            continue
-
-        parts = [f"frame={f:>5}"]
-        for limb in limbs_order:
-            rec = b.get(limb, {})
-            xs = rec.get("X", [])
-            ys = rec.get("Y", [])
-            if not xs or not ys:
-                # skip empty limb (keeps preview concise)
-                continue
-            onset = rec.get("Onset", "")
-            zones = rec.get("Zones", [])
-            parts.append(f"{limb}: {onset} {zones}")
-        # include note/params if present
-        note = b.get("Note")
-        if note:
-            parts.append(f'Note="{note}"')
-        params = b.get("Params") or {}
-        if any(v is not None for v in params.values()):
-            # Show only ON/OFF/None summary
-            par_show = ", ".join(f"{k}:{v}" for k, v in params.items())
-            parts.append(f"Params[{par_show}]")
-
-        if len(parts) > 1:  # at least one limb had content or note/params
-            lines.append(" | ".join(parts))
-
-    return lines
-
 def csv_to_dict(csv_path) -> Dict[int, "FrameRecord"]:
     data: Dict[int, FrameRecord] = {}
     import csv, json
@@ -679,33 +473,6 @@ def csv_to_dict(csv_path) -> Dict[int, "FrameRecord"]:
             }
     return data
 
-def save_dataset(csv_path, total_frames, data, with_touch: bool = False):
-    if not csv_path:
-        return
-    import csv, json
-    with open(csv_path, mode='w', newline='', encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(['Frame', 'X', 'Y', 'Onset', 'Bodypart', 'Look', 'Zones', 'Touch'])
-        for frame in range(total_frames + 1):
-            rec: FrameRecord | None = data.get(frame)
-            if not rec:
-                writer.writerow([frame, '', '', '', '', '', json.dumps([]), ''])
-                continue
-            xs = rec.get('X', []) or []
-            ys = rec.get('Y', []) or []
-            x_str = ','.join(map(str, xs))
-            y_str = ','.join(map(str, ys))
-            onset = rec.get('Onset', '')
-            bodypart = rec.get('Bodypart', '')
-            look = rec.get('Look', '')
-            zones = json.dumps(rec.get('Zones', []) or [])
-            touch_val = ''
-            if with_touch and onset:
-                touch_val = 1 if onset == "ON" else 0
-            elif rec.get('Touch') is not None:
-                touch_val = rec['Touch']
-            writer.writerow([frame, x_str, y_str, onset, bodypart, look, zones, touch_val])
-
 def load_notes_csv(path) -> dict[int, str]:
     """Load notes as UTF-8, falling back to legacy Windows cp1252 files."""
     def _read(encoding: str) -> dict[int, str]:
@@ -724,29 +491,6 @@ def load_notes_csv(path) -> dict[int, str]:
         print(f"WARN: {path} is not UTF-8; retrying as cp1252 (legacy notes file).")
         return _read("cp1252")
 
-
-def save_parameter_to_csv(path, param_dict):
-    if not path:
-        return
-    with open(path, mode='w', newline='', encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(['Frame', 'State'])
-        for key, value in param_dict.items():
-            writer.writerow([key, value])
-
-def load_parameter_from_csv(path):
-    d = {}
-    if not path or not os.path.exists(path):
-        return d
-    with open(path, mode='r', encoding="utf-8") as csv_file:
-        reader = csv.reader(csv_file)
-        next(reader, None)
-        for row in reader:
-            if len(row) == 2:
-                key = int(row[0])
-                value = row[1]
-                d[key] = value
-    return d
 
 def save_limb_parameters(csv_path, limb_param_dicts):
     """

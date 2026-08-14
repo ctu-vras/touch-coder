@@ -4,9 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import config_utils
-import theme
-from cloth_app import ClothApp
+from adapters import config as config_utils
+from gui import theme
+from gui.cloth_app import ClothApp
+import labeling_app
 from labeling_app import LabelingApp
 
 
@@ -117,7 +118,7 @@ def test_loading_parameter_names_resets_ttk_state(monkeypatch):
     video = SimpleNamespace()
     monkeypatch.setattr(config_utils, "load_config", lambda: {})
 
-    config_utils.load_parameter_names_into(video, par_buttons, limb_buttons)
+    labeling_app.load_parameter_names_into(video, par_buttons, limb_buttons)
 
     for button in (*par_buttons.values(), *limb_buttons.values()):
         assert button.options["style"] == "StateNeutral.TButton"

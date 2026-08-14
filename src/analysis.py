@@ -13,8 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from config_utils import load_config
-from resource_utils import resource_path
+from gui.resource_utils import resource_path
 
 LIMBS = ["LH", "RH", "LL", "RL"]
 
@@ -536,15 +535,6 @@ def _create_touch_duration_histogram(touch_durations_list, frame_rate, limbs, ou
     fig.write_html(os.path.join(output_folder, "histogram_2.html"))
 
 
-def _read_new_template_flag():
-    try:
-        cfg = load_config()
-        return bool(cfg.get("new_template", False))
-    except Exception as exc:
-        print(f"WARN: analysis could not read new-template setting; using default: {exc!r}")
-        return False
-
-
 def _zone_sort_key(zone: str):
     z = str(zone)
     special = z.startswith("BOX") or z in {"OUTSIDE", "LINE", "NN"}
@@ -566,7 +556,9 @@ def _get_zone_list(new_template: bool):
     return sorted(zones, key=_zone_sort_key)
 
 
-def do_analysis(folder_path, output_folder, name, debug, frame_rate):
+def do_analysis(folder_path, output_folder, name, debug, frame_rate, new_template=False):
+    """`new_template` is passed in by the caller (the app's config snapshot) —
+    analysis never re-reads config.json itself."""
     if frame_rate is None:
         print("Analysis error: Frame rate is None.")
         return 0
@@ -590,7 +582,6 @@ def do_analysis(folder_path, output_folder, name, debug, frame_rate):
     stdev_list = []
     transition_matrices = []
 
-    new_template = _read_new_template_flag()
     zones_default = _get_zone_list(new_template)
 
     for limb in LIMBS:

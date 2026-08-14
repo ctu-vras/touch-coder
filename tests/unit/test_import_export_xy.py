@@ -2,7 +2,7 @@
 
 import csv
 
-from data_utils import import_unified_from_export
+from adapters.unified_repo import import_unified_from_export
 
 
 def _write_export(path, rows):
