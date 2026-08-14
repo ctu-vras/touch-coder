@@ -1,10 +1,20 @@
 """
 adapters/unified_repo.py
-Persistence for the unified-CSV journal (the source of truth) plus the legacy
-loaders it can recover from: export CSV import, per-limb CSVs, notes, limb
-parameters, and the clothes sidecar. Split from the old data_utils.py — the
-pure model shapes now live in domain.model, the export writer in
-adapters.export_writer.
+READ-ONLY legacy state loaders: the unified-CSV journal, export-CSV import,
+per-limb CSVs, notes, limb parameters, and the clothes sidecar.
+
+These are the migration + disaster-recovery path, kept permanently. The
+working-state source of truth is now ONE SQLite database per video
+(`adapters.sqlite_repo`), imported from these readers exactly once by
+`service_layer.state_migration`.
+
+Nothing in this module WRITES any more. The journal writer
+(`save_unified_dataset`), its row serializer, its torn-tail repair and its
+load-time compaction were deleted with the journal itself: an in-place UPSERT
+inside one transaction makes duplicate rows, tail repair and compaction
+meaningless. `load_unified_dataset` still resolves duplicate `Frame` rows
+last-writer-wins and still tolerates a torn final row, because journals written
+by older builds are exactly what it has to migrate.
 """
 
 import csv
@@ -15,35 +25,27 @@ import time
 import pandas as pd
 from typing import Dict, Optional
 
-from adapters.atomic_io import atomic_write, durable_append
 from domain.model import (
     FrameBundle,
     FrameRecord,
     _normalize_param_state,
-    empty_bundle,
     empty_record,
 )
 
 
 UNIFIED_COLUMNS = ["Frame", "Note", "Params", "LH", "RH", "LL", "RL"]
-UNIFIED_COMPACT_FACTOR = 2
 
 
-def _unified_row(frame: int, bundle: FrameBundle) -> dict:
-    return {
-        "Frame": frame,
-        "Note": bundle.get("Note"),
-        "Params": json.dumps(bundle.get("Params", {})),
-        "LH": json.dumps(bundle["LH"]),
-        "RH": json.dumps(bundle["RH"]),
-        "LL": json.dumps(bundle["LL"]),
-        "RL": json.dumps(bundle["RL"]),
-    }
+def _read_unified_journal(csv_path: str) -> pd.DataFrame:
+    """Parse the journal, tolerating a crash-torn final row.
 
-
-def _read_unified_journal(csv_path: str):
+    An older build could be killed mid-append and leave a partial last line.
+    The bytes before the last complete newline are always intact, so parse
+    those and drop the fragment. (SQLite cannot produce this state at all —
+    this exists purely to migrate journals that already have it.)
+    """
     try:
-        return pd.read_csv(csv_path), False
+        return pd.read_csv(csv_path)
     except pd.errors.ParserError:
         with open(csv_path, "rb") as f:
             data = f.read()
@@ -53,75 +55,16 @@ def _read_unified_journal(csv_path: str):
         if last_newline < 0:
             raise
         print(
-            f"WARNING: Ignoring crash-torn final unified row and repairing journal → {csv_path}",
+            f"WARNING: Ignoring crash-torn final unified row → {csv_path}",
             flush=True,
         )
-        return pd.read_csv(io.BytesIO(data[: last_newline + 1])), True
+        return pd.read_csv(io.BytesIO(data[: last_newline + 1]))
 
-
-def _compact_unified_dataset(
-    csv_path: str,
-    frames: Dict[int, FrameBundle],
-    rows_on_disk: int,
-    *,
-    force: bool = False,
-) -> None:
-    distinct_frames = len(frames)
-    if not distinct_frames or (
-        not force and rows_on_disk <= distinct_frames * UNIFIED_COMPACT_FACTOR
-    ):
-        return
-    rows = [_unified_row(frame, frames[frame]) for frame in sorted(frames)]
-    df = pd.DataFrame(rows, columns=UNIFIED_COLUMNS)
-    atomic_write(csv_path, lambda f: df.to_csv(f, index=False), keep_backup=True)
-    print(
-        f"INFO: Unified compacted {rows_on_disk} journal rows to "
-        f"{distinct_frames} distinct frames → {csv_path}"
-    )
-
-def save_unified_dataset(csv_path: str, total_frames: int, frames: Dict[int, FrameBundle], changed_only: bool = True) -> None:
-    """
-    Append changed frames to the unified CSV journal.
-
-    Duplicate frame rows intentionally resolve last-writer-wins in the loader;
-    load-time compaction bounds journal growth without making each save depend
-    on the amount of previously persisted data.
-    """
-    if not csv_path:
-        return
-
-    # 1) collect rows for changed frames
-    changed_rows = []
-
-    for f in range(total_frames + 1):
-        b = frames.get(f)
-        if changed_only:
-            if not isinstance(b, dict) or not b.get("Changed"):
-                continue
-        else:
-            # Full write: ensure we always have a bundle to serialize
-            if not isinstance(b, dict):
-                b = empty_bundle()
-        changed_rows.append(_unified_row(f, b))
-
-    if changed_only and not changed_rows:
-        print(f"DEBUG: Unified → {csv_path}")
-        print(f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, rows_written=0 (skipped writing; kept previous file)")
-        return
-
-    df = pd.DataFrame(changed_rows, columns=UNIFIED_COLUMNS)
-    durable_append(
-        csv_path,
-        lambda f, is_new_file: df.to_csv(f, index=False, header=is_new_file),
-    )
-
-    print(f"DEBUG: Unified → {csv_path}")
-    print(
-        f"DEBUG: total_frames={total_frames}, changed_only={changed_only}, "
-        f"rows_appended={len(changed_rows)}"
-    )
 
 def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBundle]:
+    """Legacy journal -> in-memory frames store, duplicate rows resolved
+    last-writer-wins (rows are iterated in file order, so a later row for the
+    same frame overwrites an earlier one)."""
     frames: Dict[int, FrameBundle] = {}
     if not (csv_path and os.path.exists(csv_path)):
         print(f"DEBUG: Unified not found → {csv_path}", flush=True)
@@ -134,7 +77,7 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
             return frames
         t0 = time.time()
         print("DEBUG: load_unified_dataset: pd.read_csv starting...", flush=True)
-        df, recovered_torn_tail = _read_unified_journal(csv_path)
+        df = _read_unified_journal(csv_path)
         print(f"DEBUG: load_unified_dataset: pd.read_csv done in {time.time() - t0:.2f}s "
               f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
     except pd.errors.EmptyDataError:
@@ -223,7 +166,6 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
         except Exception:
             pass
     print(f"DEBUG: Unified loaded rows={len(frames)} in {time.time() - iter_start:.1f}s", flush=True)
-    _compact_unified_dataset(csv_path, frames, total_rows, force=recovered_torn_tail)
     return frames
 
 def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[int, FrameBundle]:
@@ -492,21 +434,15 @@ def load_notes_csv(path) -> dict[int, str]:
         return _read("cp1252")
 
 
-def save_limb_parameters(csv_path, limb_param_dicts):
-    """
-    limb_param_dicts: { 'Parameter_1': dict, 'Parameter_2': dict, 'Parameter_3': dict }
-    dict keys are (limb, frame) tuples; values are 'ON'/'OFF'/None.
-    """
-    with open(csv_path, 'w', newline='', encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["Limb", "Frame", "Parameter", "State"])
-        for param_name, param_dict in limb_param_dicts.items():
-            for (limb, frame), state in param_dict.items():
-                writer.writerow([limb, frame, param_name, state])
-
 def load_limb_parameters(csv_path):
     """
-    Returns three dicts (for Parameter_1..3) keyed by (limb, frame) -> state
+    Returns three dicts (for Parameter_1..3) keyed by (limb, frame) -> state.
+
+    Migration reader for `state/<name>_limb_parameters.csv`. That sidecar has
+    had no app reader and no app writer for several versions (the states live
+    in the journal's limb blobs), so `state_migration` quarantines its rows in
+    `legacy_limb_params` rather than folding them into LimbParams — see that
+    module.
     """
     p1, p2, p3 = {}, {}, {}
     if not os.path.exists(csv_path):
@@ -527,6 +463,15 @@ def load_limb_parameters(csv_path):
     return p1, p2, p3
 
 def extract_zones_from_file(file_path):
+    """Zone names from a legacy `state/<name>_clothes.txt`, in the exact shape
+    the export metadata contract expects: set-deduplicated, UNSORTED, and a
+    multi-zone dot contributing its whole comma-joined `Zones=` tail as ONE
+    entry.
+
+    Disaster-recovery reader. The live path is
+    `SqliteRepository.clothes_zone_list`, which reproduces this byte-for-byte
+    (pinned by tests/unit/test_sqlite_repo.py).
+    """
     if not file_path or not os.path.exists(file_path):
         return None
     zones = set()

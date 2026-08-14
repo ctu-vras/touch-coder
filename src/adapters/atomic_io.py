@@ -5,8 +5,8 @@ import this without introducing an import cycle).
 
 The whole app used to serialize directly onto the live destination file
 (open in "w" mode, then stream bytes). A kill / disk-full / OS crash during
-that window left the file truncated — for the unified CSV (the source of truth)
-that is silent, permanent annotation loss.
+that window left the file truncated — for a published export that is silent,
+permanent corruption.
 
 `atomic_write` removes that hazard: it streams into a sibling `<path>.tmp`,
 flushes + fsyncs it, then `os.replace`s it onto `path`. `os.replace` is an
@@ -14,23 +14,26 @@ atomic same-volume rename on both Windows and POSIX, so a reader ever only sees
 the previous complete file or the new complete file — never a half-written one.
 On ANY exception before the replace the temp file is discarded and the original
 is left untouched.
+
+Live callers: `adapters.export_writer` (export CSV + metadata sidecar) and the
+clothes/last-position writers' successor is SQLite, so this is the only
+file-write primitive left. Its sibling `durable_append` was deleted with the
+unified-CSV journal — appending is exactly what SQLite replaced, and the
+`keep_backup` `.bak` path went with it (it existed only for the two journal
+writers; the state DB's recovery point is the `*.migrated` sources plus the
+export CSV).
 """
 
 import os
-import shutil
 
 
-def atomic_write(path, write_fn, *, encoding="utf-8", newline="", keep_backup=False):
+def atomic_write(path, write_fn, *, encoding="utf-8", newline=""):
     """Atomically (re)write `path`.
 
     `write_fn(f)` streams into a temp file; on success the temp is
     `os.replace()`d onto `path`. On ANY exception the original file is left
     untouched. `newline=""` matches pandas' own path-mode file handling so CSV
     bytes are byte-for-byte identical to a direct `df.to_csv(path)`.
-
-    When `keep_backup=True` and `path` already exists, the previous good file is
-    copied to `<path>.bak` right before the replace, giving a manual recovery
-    point (used only by the two unified-CSV writers).
     """
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
@@ -40,12 +43,6 @@ def atomic_write(path, write_fn, *, encoding="utf-8", newline="", keep_backup=Fa
             write_fn(f)
             f.flush()
             os.fsync(f.fileno())
-        if keep_backup and os.path.exists(path):
-            try:
-                shutil.copyfile(path, path + ".bak")
-            except OSError as backup_err:
-                # Best-effort recovery point; never block the save for it.
-                print(f"WARN: atomic_write backup failed for {path}: {backup_err}")
         os.replace(tmp, path)  # atomic on same volume (Win + POSIX)
     except Exception:
         try:
@@ -53,38 +50,4 @@ def atomic_write(path, write_fn, *, encoding="utf-8", newline="", keep_backup=Fa
                 os.remove(tmp)  # best-effort cleanup; never mask original error
         except OSError as cleanup_err:
             print(f"WARN: atomic_write temp cleanup failed for {tmp}: {cleanup_err}")
-        raise
-
-
-def durable_append(path, write_fn, *, encoding="utf-8", newline=""):
-    """Append to `path`, flush to disk, and roll back caught write failures.
-
-    A process or OS crash can still leave a partial final row, but all bytes that
-    existed before the append remain untouched. For exceptions raised in this
-    process, truncate back to the original length so callers can safely retry.
-    `write_fn(file, is_new_file)` receives whether it must emit a header.
-    """
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    original_size = os.path.getsize(path) if os.path.exists(path) else 0
-    is_new_file = original_size == 0
-    mode = "w" if is_new_file else "a"
-
-    try:
-        with open(path, mode, encoding=encoding, newline=newline) as f:
-            write_fn(f, is_new_file)
-            f.flush()
-            os.fsync(f.fileno())
-    except Exception:
-        try:
-            if original_size == 0:
-                if os.path.exists(path):
-                    os.remove(path)
-            else:
-                with open(path, "r+b") as f:
-                    f.truncate(original_size)
-                    f.flush()
-                    os.fsync(f.fileno())
-        except OSError as rollback_err:
-            print(f"ERROR: durable_append rollback failed for {path}: {rollback_err}")
         raise

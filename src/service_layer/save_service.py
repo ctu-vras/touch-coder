@@ -4,7 +4,8 @@ The save Unit of Work, extracted from LabelingApp.save_data. No Tk here:
 the GUI orchestrates the modal progress dialog + worker thread and calls
 these steps in order:
 
-    1. persist_unified(...)        — changed-only journal append (UI thread)
+    1. persist_state(repo, ...)    — dirty frames -> state DB, ONE transaction
+                                     (UI thread; the repo is Tk-thread-bound)
     2. snapshot = build_save_snapshot(frames)
     3. run_export(snapshot, ...)   — metadata sidecar + full export CSV
                                      (the GUI runs THIS on its worker thread)
@@ -14,6 +15,11 @@ Concurrency invariant (pinned by tests): the snapshot is a deep copy taken
 BEFORE the worker-thread export, and afterwards `Changed` is cleared ONLY
 for bundles still equal to their snapshot (`b == snapshot.get(f)`), so a
 frame edited DURING the export stays dirty and reaches the next save.
+
+Thread invariant: step 1 touches the SQLite connection and MUST run on the Tk
+thread; step 3 only ever sees the immutable deepcopy and writes through
+`adapters.export_writer`, which is file-based and repository-free. The
+repository enforces this itself (`SqliteRepository._check_thread`).
 """
 
 import copy
@@ -22,7 +28,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from adapters.export_writer import export_from_unified, write_export_metadata
-from adapters.unified_repo import extract_zones_from_file, save_unified_dataset
+from adapters.sqlite_repo import SqliteRepository
 from domain.model import FrameBundle
 from domain.project import ProjectPaths
 
@@ -40,9 +46,15 @@ class MetadataInputs:
     labeling_time_seconds: Optional[float]
 
 
-def load_clothes_zones(clothes_path: Optional[str]):
-    """Clothes-zone list for the export metadata, or None when no file path."""
-    return extract_zones_from_file(clothes_path) if clothes_path else None
+def load_clothes_zones(repo: Optional[SqliteRepository]):
+    """Clothes-zone list for the export metadata, or None without a repo.
+
+    Reproduces the retired `unified_repo.extract_zones_from_file` exactly
+    (set-deduplicated, UNSORTED, a multi-zone dot contributing its whole
+    comma-joined string as one entry) because
+    `export/<video>_metadata.json` is a frozen contract.
+    """
+    return repo.clothes_zone_list() if repo is not None else None
 
 
 def build_save_snapshot(frames: Dict[int, FrameBundle]) -> Dict[int, FrameBundle]:
@@ -51,10 +63,16 @@ def build_save_snapshot(frames: Dict[int, FrameBundle]) -> Dict[int, FrameBundle
     return copy.deepcopy(frames)
 
 
-def persist_unified(unified_path: str, total_frames: int, frames: Dict[int, FrameBundle]) -> None:
-    """Changed-only journal append to the unified CSV (source of truth)."""
-    os.makedirs(os.path.dirname(unified_path), exist_ok=True)
-    save_unified_dataset(unified_path, total_frames, frames)
+def persist_state(repo: SqliteRepository, total_frames: int,
+                  frames: Dict[int, FrameBundle]) -> int:
+    """Write every dirty frame to the state DB in ONE transaction.
+
+    Replaces the old changed-only journal append. Same dirty tracker
+    (`Changed`), but the write is now an UPSERT: idempotent (a second identical
+    save changes nothing) and atomic (no torn tail to repair, no compaction to
+    schedule). Returns the number of frames written.
+    """
+    return repo.save_frames(frames, total_frames)
 
 
 def run_export(snapshot: Dict[int, FrameBundle],

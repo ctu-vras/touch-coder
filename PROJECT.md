@@ -36,7 +36,8 @@ touch-coder/
 │   │   ├── touch.py              # Touch-annotation rules (zone hit test, open-onset scan)
 │   │   └── touch_stats.py        # Episode reconstruction + touch statistics (Analysis core)
 │   ├── adapters/                 # I/O edges: files, cv2/ffmpeg, plotly, config.json
-│   │   ├── unified_repo.py       # Unified-CSV read / write (source of truth)
+│   │   ├── sqlite_repo.py        # Working-state DB per video (SOURCE OF TRUTH)
+│   │   ├── unified_repo.py       # Legacy state READERS (migration / recovery only)
 │   │   ├── export_writer.py      # Legacy export schema + metadata sidecar (write)
 │   │   ├── export_reader.py      # Export CSV read, incl. legacy 6-line preamble
 │   │   ├── plotting.py           # Every plotly figure / CSV table / master HTML
@@ -51,7 +52,8 @@ touch-coder/
 │   │   ├── project_service.py    # Video load / project preparation, labeling timer
 │   │   ├── annotation_service.py # Click / parameter mutations on the frames dict
 │   │   ├── analysis_service.py   # Analysis: read -> validate -> compute -> write
-│   │   └── migration_service.py  # Legacy directory-layout migration
+│   │   ├── migration_service.py  # Legacy directory-layout migration
+│   │   └── state_migration.py    # Legacy state CSV/JSON -> SQLite (once per project)
 │   ├── gui/                      # Tkinter only
 │   │   ├── ui_components.py      # Layout, widgets, key/mouse bindings
 │   │   ├── theme.py              # Colors / fonts / widget styling
@@ -79,7 +81,8 @@ TinyTouch is a single-process Tkinter app organized around one controller (`Labe
 - the `Video` model (raw video info + per-frame data dict),
 - the UI built by `ui_components.build_ui(app)` (frames, canvases, buttons, key bindings),
 - two daemon threads for I/O-bound work (frame buffering and playback advance),
-- persistence helpers from `data_utils`.
+- the working-state repository (`adapters.sqlite_repo`) plus the save / project
+  services that orchestrate it.
 
 ### High-level data flow
 
@@ -89,14 +92,19 @@ User input (clicks / keys)
          ├─► mutates Video.frames[frame] (the in-memory FrameBundle)
          ├─► marks bundle "Changed" = True
          └─► repaints diagram canvas + timelines
-                                              ┌─► save_unified_dataset (changed-only journal append)
+                                              ┌─► persist_state  (dirty frames -> state DB,
+                                              │                   ONE transaction, Tk thread)
 On Save / Close ─► LabelingApp.save_data ─────┼─► export_from_unified  (full legacy schema)
                                               └─► write_export_metadata (JSON sidecar)
 ```
 
+The state write happens on the Tk thread; the two export writes run on a worker
+thread against a `deepcopy` snapshot taken beforehand. The SQLite connection
+never leaves the Tk thread (`SqliteRepository` raises if it does).
+
 ### In-memory data model
 
-Touch-mode state for a frame is a **`FrameBundle`** (see [src/data_utils.py](src/data_utils.py)):
+Touch-mode state for a frame is a **`FrameBundle`** (see [src/domain/model.py](src/domain/model.py)):
 
 ```python
 FrameBundle = {
@@ -154,13 +162,9 @@ Each labeled video produces a self-contained folder:
 ```
 data/<video_name>/
 ├── state/                            # Working state (load/save round-trips here)
-│   ├── <video>_unified.csv           # In-memory FrameBundle dict serialized
-│   │                                 # (changed-row journal; last Frame row wins)
-│   ├── <video>_clothes.txt           # Coordinates + auto-detected zones from Clothes dialog
-│   ├── <video>_notes.csv             # Per-frame freeform notes
-│   ├── <video>_limb_parameters.csv   # Limb-specific Parameter_1..3
-│   ├── <video>_last_position.json    # Resume position + per-video labeling-time accumulator
-│   └── ...                           # Legacy per-limb {RH,LH,RL,LL}.csv if migrated
+│   ├── <video>.db                    # SQLite — THE source of truth (see below)
+│   └── *.migrated                    # Pre-SQLite CSV/JSON sources, kept forever
+│                                     # after the one-time import (never deleted)
 ├── export/                           # Final, "publication-ready" artifacts
 │   ├── <video>_export.csv            # Flat schema (see below) -- the file analysis reads
 │   └── <video>_metadata.json         # Program version, FPS, mode, clothes zones, param labels,
@@ -188,16 +192,62 @@ name collision it leaves BOTH copies in place with a `WARN` rather than
 overwriting or merging. Older TinyTouch versions cannot read the new layout; the
 export CSV format itself is unchanged.
 
-The split between `state/<video>_unified.csv` and `export/<video>_export.csv` is deliberate:
+### Working state: `state/<video>.db`
 
-- **Unified CSV** is the source of truth for round-trips. Saves are *incremental* -- only frames whose `Changed` flag is set are appended. Re-edited frames produce duplicate `Frame` rows; loaders resolve them last-writer-wins and atomically compact the journal when its row count exceeds twice the number of distinct frames.
+One SQLite database per video ([src/adapters/sqlite_repo.py](src/adapters/sqlite_repo.py))
+holds everything the app used to spread over six files: the frames store, notes,
+per-frame and per-limb parameters, clothes dots, resume position and the
+labeling-time accumulator.
+
+| Table | Holds |
+| --- | --- |
+| `meta` | `video_name`, `fps`, `last_frame`, `total_frames`, `labeling_time_seconds`, `clothes_diagram_scale`, migration provenance |
+| `frames` | one row per frame present in the store (its EXISTENCE is data) + `note` |
+| `frame_params` | global `Par1..3`; absent row = key absent, `state IS NULL` = key present but None |
+| `limb_records` | per-limb `onset` + a `has_limb_params` flag; a limb with nothing to store has NO row and is rebuilt as `empty_record(limb)` |
+| `clicks` | `click_index` IS the `X`/`Y`/`Zones` alignment; `x`/`y` NULL = zone bucket with no click, `zones` NULL = click with no bucket |
+| `limb_params` | per-limb `Par1..3`, same NULL semantics as `frame_params` |
+| `clothes_dots` | dot id, x, y, comma-joined zone string (frozen sidecar tokenization) |
+| `legacy_notes`, `legacy_limb_params` | quarantined pre-unified sidecar rows — stored so nothing is lost, NOT merged into the bundles (they never reached the export, and promoting them would change published datasets) |
+
+Operational choices, all deliberate:
+
+- **Saves are transactional and idempotent.** Each dirty frame (`Changed` is still the tracker) is deleted and re-inserted inside one `BEGIN IMMEDIATE`. Saving twice changes nothing; a crash leaves either the old or the new state. This retired the journal's duplicate-row resolution, load-time compaction and torn-tail repair.
+- **`journal_mode=DELETE`, not WAL.** Single-writer desktop app, and WAL's `-wal`/`-shm` sidecars confuse OneDrive / Dropbox sync clients (these folders often live in synced trees). Plus `synchronous=FULL`, `foreign_keys=ON`, `busy_timeout=5000`.
+- **One connection per open project, pinned to the Tk thread.** Every method asserts the owning thread; the export worker only ever sees the `deepcopy` snapshot.
+- **`PRAGMA user_version`** carries the schema version. A DB from a newer TinyTouch is refused rather than silently down-converted.
+- **Not persisted, by decision:** `Bodypart` (reconstructed from the limb key — every writer set it to exactly that and nothing reads it), `Touch` (no writer, no reader, no export column), the retired per-limb `Look`, and `Changed` (a runtime flag no backend ever serialized).
+
+The split between the state DB and `export/<video>_export.csv` stays deliberate:
+
+- **State DB** is the source of truth for round-trips, written incrementally.
 - **Export CSV** is rewritten from scratch each save with one row per frame in the canonical legacy column order. Downstream consumers (Analysis, external tooling) read this file.
 
-If a unified CSV is missing on load, the app first tries to recover from the export CSV (`import_unified_from_export`), falling back to legacy per-limb CSVs (`csv_to_dict`) if needed.
+### First open of a pre-SQLite project
+
+[src/service_layer/state_migration.py](src/service_layer/state_migration.py) runs
+once per project, from `project_service.open_state`. If `state/<video>.db` is
+missing it reads every legacy source with the **existing readers** — which all
+stay in the codebase permanently as the migration + disaster-recovery path —
+writes them into a fresh DB in ONE transaction, then renames each consumed
+source to `<name>.migrated`. Nothing is ever deleted; on a rename collision both
+copies are kept with a `WARN`. If the import raises, the partial DB is discarded
+and no source is renamed, so the next attempt starts from the same inputs. Once
+the DB exists it wins: a legacy file that reappears is never re-imported.
+
+The recovery ladder is unchanged: `state/<video>_unified.csv`
+(`load_unified_dataset`, still resolving duplicate rows last-writer-wins and
+tolerating a crash-torn final row) → `export/<video>_export.csv`
+(`import_unified_from_export`) → legacy per-limb CSVs (`csv_to_dict`). The export
+CSV is a published artifact and a recovery input, so it is never renamed.
+
+The migration is verified end-to-end: the export produced from a migrated DB is
+byte-identical to the export produced from the original CSVs
+(`tests/integration/test_sqlite_migration.py`).
 
 ### Touch export schema
 
-`<video>_export.csv` columns (from `export_from_unified` in [src/data_utils.py](src/data_utils.py)):
+`<video>_export.csv` columns (from `export_from_unified` in [src/adapters/export_writer.py](src/adapters/export_writer.py)):
 
 ```
 Frame, Time_ms,
@@ -236,9 +286,9 @@ When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file
 ## Application Workflow
 
 1. **Load Video** -- pick `Normal` / `Reliability`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `videos/` and the project tree is created under `data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts.
-2. **Clothes** -- mark which body zones are covered with clothes; saved to `<video>_clothes.txt` and surfaced in the export metadata.
+2. **Clothes** -- mark which body zones are covered with clothes; stored in the state DB's `clothes_dots` and surfaced in the export metadata.
 3. **Annotate** -- pick a limb, click onsets/offsets, set gaze and parameters, type notes. Edits stay in memory until Save.
-4. **Save** -- `Save` button (or auto on Close / before Load) writes the unified CSV (incremental), the export CSV (full), and the metadata sidecar. The `Changed` flags are cleared.
+4. **Save** -- `Save` button (or auto on Close / before Load) writes the dirty frames to the state DB (one transaction), then the export CSV (full) and the metadata sidecar. The `Changed` flags are cleared.
 5. **Analysis** -- runs `analysis_service.run_analysis` over the export CSV: per-limb summary stats, transition heatmaps, touch-trajectory plots, histograms, and a master HTML. Output lands in `plots/`; the service returns the master HTML path and `LabelingApp.analysis` opens it in the browser. See "Analysis conventions" below.
 6. **Close** -- final save, persists labeling-time accumulator and last frame position.
 

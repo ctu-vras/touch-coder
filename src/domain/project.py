@@ -7,7 +7,9 @@ strings (PROJECT.md "Data Layout on Disk" is the reference).
 Layout (current):
 
     data/<video_name>/
-    ├── state/      working state (unified CSV, notes, clothes, sidecars)
+    ├── state/      working state: <video_name>.db (SQLite, source of truth)
+    │               plus any not-yet-migrated legacy CSV/JSON sidecars and
+    │               their post-migration `*.migrated` copies
     ├── export/     publication-ready CSV + metadata JSON
     ├── frames/     frame0.jpg … frameN.jpg
     └── plots/      Plotly HTML from Analysis
@@ -92,7 +94,21 @@ class ProjectPaths:
 
     # --- files ----------------------------------------------------------------
     @property
+    def state_db(self) -> str:
+        """The working-state SQLite database — the CURRENT source of truth.
+
+        Everything the app used to spread over `<name>_unified.csv`,
+        `<name>_notes.csv`, `<name>_limb_parameters.csv`,
+        `<name>_last_position.json`, `<name>_metadata.json` and
+        `<name>_clothes.txt` lives in this one file
+        (`adapters.sqlite_repo.SqliteRepository`). The CSV/JSON paths below are
+        kept ONLY as migration + disaster-recovery inputs; nothing writes them.
+        """
+        return os.path.join(self.state_dir, f"{self.video_name}.db")
+
+    @property
     def unified_csv(self) -> str:
+        """Legacy journal (read-only migration source)."""
         return os.path.join(self.state_dir, f"{self.video_name}_unified.csv")
 
     @property

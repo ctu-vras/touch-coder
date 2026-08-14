@@ -11,7 +11,6 @@ from PIL import Image, ImageTk
 
 from adapters import config
 from adapters import video_probe
-from adapters.atomic_io import atomic_write
 from adapters.frame_buffer import (
     BufferContext,
     FrameBuffer,
@@ -169,6 +168,10 @@ class LabelingApp(tk.Tk):
         self.NEW_TEMPLATE = False
         self.clothes_diagram_scale = DEFAULT_CLOTH_DIAGRAM_SCALE
         self._cloth_app = None
+        # Working-state repository (state/<video>.db). Opened by load_video,
+        # held for as long as that project is open, closed by _close_state_repo.
+        # Tk-thread-bound by contract — never hand it to a worker thread.
+        self.state_repo = None
         self.labeling_timer = LabelingTimer()
         self._zone_masks = []
         self._zone_dir = None
@@ -1375,23 +1378,20 @@ class LabelingApp(tk.Tk):
             self.update_button_colors()
 
     # === Labeling-time accumulator (service_layer.project_service) =============
-    def _video_time_state_path(self) -> str:
-        return ProjectPaths(self.video_name).video_time_json
-
     def _current_video_time_s(self) -> float:
         return self.labeling_timer.current_s()
 
     def _persist_video_time(self):
         """Checkpoint the accumulator, session keeps running."""
-        if self.video is None or self.video_name is None:
+        if self.video is None or self.state_repo is None:
             return
-        self.labeling_timer.persist(self._video_time_state_path())
+        self.labeling_timer.persist(self.state_repo)
 
     def _finalize_video_time(self):
         """Checkpoint the accumulator and end the session."""
-        if self.video is None or self.video_name is None:
+        if self.video is None or self.state_repo is None:
             return
-        self.labeling_timer.finalize(self._video_time_state_path())
+        self.labeling_timer.finalize(self.state_repo)
 
     def _stop_video_timer_if_any(self):
         """Stop the labeling-time timer without persisting, discarding the
@@ -1544,9 +1544,12 @@ class LabelingApp(tk.Tk):
         if not self.video or not self.video.frames_dir:
             print("INFO: Save skipped (no video loaded).")
             return True
+        if self.state_repo is None:
+            print("ERROR: Save skipped — no state database is open.")
+            return False
         self._persist_video_time()
         self.preview_before_save(changed_only=True)
-        print("INFO: Saving (unified & export)...")
+        print("INFO: Saving (state DB & export)...")
 
         paths = ProjectPaths(self.video_name)
         os.makedirs(paths.state_dir, exist_ok=True)
@@ -1555,16 +1558,14 @@ class LabelingApp(tk.Tk):
         print(f"DEBUG: State dir:  {paths.state_dir}")
         print(f"DEBUG: Export dir: {paths.export_dir}")
         print(f"DEBUG: Frames dir: {self.video.frames_dir}")
-        print(f"DEBUG: Writing unified dataset -> {paths.unified_csv}")
+        print(f"DEBUG: Writing state database -> {paths.state_db}")
 
-        # 1) Journal append (changed-only) — the source of truth, UI thread.
-        save_service.persist_unified(
-            paths.unified_csv, self.video.total_frames, self.video.frames
+        # 1) Dirty frames -> state DB, one transaction. UI thread (the repo
+        #    enforces that itself); this is the source of truth.
+        save_service.persist_state(
+            self.state_repo, self.video.total_frames, self.video.frames
         )
 
-        clothes_path = self.video.clothes_file_path
-        if not clothes_path and self.video.dataNotes_path_to_csv:
-            clothes_path = paths.clothes_txt
         print(f"DEBUG: Writing export dataset -> {paths.export_csv}")
 
         # Non-tabular inputs gathered here: the button labels are Tk reads and
@@ -1573,7 +1574,7 @@ class LabelingApp(tk.Tk):
             program_version=self.video.program_version,
             video_name=self.video_name,
             labeling_mode=self.labeling_mode,
-            clothes_list=save_service.load_clothes_zones(clothes_path),
+            clothes_list=save_service.load_clothes_zones(self.state_repo),
             param_labels={
                 "Parameter_1": (self.par1_btn.cget("text") or "Par1"),
                 "Parameter_2": (self.par2_btn.cget("text") or "Par2"),
@@ -1771,32 +1772,30 @@ class LabelingApp(tk.Tk):
         self.video_name = video_name
 
         self.video.frames_dir = paths.frames_dir
-        # ORDERING: the labeling timer starts BEFORE any load work so the
-        # session is already accumulating; an extraction abort below rolls it
-        # back via _stop_video_timer_if_any().
-        self.labeling_timer.start(paths.video_time_json)
 
-        # --- Unified-first load (recovery ladder tiers 1+2 in the service) ---
-        # Open a progress window covering the full data-load phase (unified
-        # load + export-recovery) so the user sees progress on huge videos.
+        # --- Working state: open state/<video>.db, migrating the legacy
+        # CSV/JSON state on the first open. The progress window covers the whole
+        # phase because a first-time migration of a huge project reads every
+        # legacy row before writing the DB.
         data_progress_update, data_progress_close = self._open_data_progress_window()
         try:
             self._reset_zone_cache()
-            self.video.frames = project_service.load_frames_dataset(
-                paths, progress_cb=data_progress_update
+            self._close_state_repo()
+            self.state_repo = project_service.open_state(
+                paths,
+                fps=self.frame_rate,
+                program_version=self.video.program_version,
+                progress_cb=data_progress_update,
+            )
+            # ORDERING (unchanged): the labeling timer starts BEFORE the frame
+            # load so the session is already accumulating; an extraction abort
+            # below rolls it back via _stop_video_timer_if_any().
+            self.labeling_timer.start(self.state_repo)
+            self.video.frames = self.state_repo.load_frames(
+                progress_cb=data_progress_update
             )
         finally:
             data_progress_close()
-
-
-        # Always set these paths (other features derive folders from them)
-        for suffix in ['RH', 'LH', 'RL', 'LL']:
-            setattr(self.video, f"data{suffix}_path_to_csv", paths.limb_csv(suffix))
-
-        # Recovery ladder tier 3: if unified did not exist BUT legacy limb CSVs
-        # do, migrate them once into self.video.frames.
-        if not self.video.frames:
-            project_service.migrate_legacy_limb_csvs(self.video.frames, paths)
 
         # Names for parameters (update button text)
         load_parameter_names_into(
@@ -1842,7 +1841,7 @@ class LabelingApp(tk.Tk):
         self._timeline2_playhead_id = None
 
         print("INFO: load_video: restoring last position...", flush=True)
-        self.restore_last_position(paths)
+        self.restore_last_position()
 
         print("INFO: load_video: drawing first frame & timelines...", flush=True)
         t_draw = time.time()
@@ -1865,16 +1864,20 @@ class LabelingApp(tk.Tk):
             self._buffer_reset()
             print("INFO: Thread already running.")
 
-        # Notes
-        self.video.dataNotes_path_to_csv = paths.notes_csv
-        self.video.notes = project_service.load_notes(paths.notes_csv)
+        # Notes: the display-only fallback for pre-unified projects, now the
+        # state DB's `legacy_notes` table (never merged into bundle["Note"] —
+        # see adapters.sqlite_repo).
+        self.video.notes = self.state_repo.load_legacy_notes()
         self.update_note_entry()
 
-        # Clothes file presence => colorize button
-        self.video.clothes_file_path = paths.clothes_txt
+        # Clothes presence => colorize button
         theme.set_button_state(self.cloth_btn, None)
-        if project_service.clothes_file_has_data(self.video.clothes_file_path):
+        if self.state_repo.has_clothes():
             theme.set_button_state(self.cloth_btn, "ON")
+        # NOTE: self.clothes_diagram_scale stays the DISPLAY scale. The scale the
+        # dots were stored at lives in meta.clothes_diagram_scale and is only
+        # used as the rescale source (project_service.rescale_clothes_points),
+        # exactly as the sidecar's DiagramScale line was.
 
         self.load_video_btn.config(state=tk.DISABLED)
         for b in self.video.frames.values():
@@ -1893,12 +1896,9 @@ class LabelingApp(tk.Tk):
                 self._cloth_app.top_level.lift()
                 self._cloth_app.top_level.focus_force()
                 return
-            file_path = self.video.clothes_file_path
-            if not file_path and self.video_name:
-                file_path = ProjectPaths(self.video_name).clothes_txt
             scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
-            initial_points = project_service.load_clothes_points(
-                file_path, scale, DEFAULT_CLOTH_DIAGRAM_SCALE
+            initial_points = project_service.load_clothes_points_from_repo(
+                self.state_repo, scale, DEFAULT_CLOTH_DIAGRAM_SCALE
             )
             self.cloth_btn.config(state=tk.DISABLED)
 
@@ -1928,32 +1928,32 @@ class LabelingApp(tk.Tk):
         if diagram_scale:
             self.clothes_diagram_scale = float(diagram_scale)
         print("Data clothes updated:", self.data_clothes)
-        self.save_clothes_to_text()
+        self.save_clothes()
         theme.set_button_state(self.cloth_btn, "ON")
 
-    def save_clothes_to_text(self):
+    def save_clothes(self):
+        """Full replace of the clothes dots in the state DB (was the
+        `state/<video>_clothes.txt` sidecar).
+
+        The per-dot `zones` value stays the COMMA-JOINED string the sidecar
+        held, because the export metadata's "Zones Covered With Clothes" list is
+        a frozen contract built on that tokenization (see
+        `SqliteRepository.clothes_zone_list`).
+        """
         print("INFO: Saving clothes...")
-        if not self.video.dataRH_path_to_csv:
-            print("ERROR: Data path is not set"); return
-        paths = ProjectPaths(self.video_name)
-        os.makedirs(paths.state_dir, exist_ok=True)
-        text_file_path = paths.clothes_txt
-        self.video.clothes_file_path = text_file_path
+        if self.state_repo is None:
+            print("ERROR: No state database is open"); return
         scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
 
-        def _write_clothes_lines(f):
-            nonlocal scale
-            f.write("Coordinates and Zones for Clothing Items:\n")
-            f.write(f"DiagramScale: {scale}\n")
-            for dot_id, (x, y) in self.data_clothes.items():
-                if scale == 0:
-                    scale = DEFAULT_CLOTH_DIAGRAM_SCALE
-                zones = self.find_image_with_white_pixel(x / scale, y / scale)
-                zones_str = ','.join(zones)
-                f.write(f"Dot ID {dot_id}: X={x}, Y={y}, Zones={zones_str}\n")
+        rows = []
+        for dot_id, (x, y) in self.data_clothes.items():
+            if scale == 0:
+                scale = DEFAULT_CLOTH_DIAGRAM_SCALE
+            zones = self.find_image_with_white_pixel(x / scale, y / scale)
+            rows.append((dot_id, x, y, ','.join(zones)))
 
-        atomic_write(text_file_path, _write_clothes_lines)
-        print("INFO: Clothes saved")
+        self.state_repo.save_clothes(rows, scale)
+        print(f"INFO: Clothes saved ({len(rows)} dots)")
 
     
 
@@ -1975,23 +1975,35 @@ class LabelingApp(tk.Tk):
                 return
             self.save_last_position()
             self._finalize_video_time()
+        # ORDERING: the state DB closes only AFTER the final save, the last
+        # position and the labeling-time checkpoint — all three write to it.
+        self._close_state_repo()
         try:
             self.frame_buffer.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             print(f"WARN: loader pool shutdown failed: {e}")
         self.destroy()
 
-    def save_last_position(self):
-        if self.video is None or self.video_name is None:
+    def _close_state_repo(self):
+        """Release the state DB connection (called before opening another
+        project and on app close). Safe to call when nothing is open."""
+        if self.state_repo is None:
             return
-        project_service.write_last_position(
-            ProjectPaths(self.video_name),
-            self.video.current_frame,
-            self.video.total_frames,
+        self.state_repo.close()
+        self.state_repo = None
+
+    def save_last_position(self):
+        if self.video is None or self.state_repo is None:
+            return
+        self.state_repo.save_last_position(
+            self.video.current_frame, self.video.total_frames
         )
 
-    def restore_last_position(self, paths: ProjectPaths):
-        frame = project_service.read_last_position(paths, self.video.total_frames)
+    def restore_last_position(self):
+        """Resume where the researcher left off (state DB `meta.last_frame`)."""
+        if self.state_repo is None:
+            return
+        frame = self.state_repo.read_last_position(self.video.total_frames)
         if frame is None:
             return
         self.video.current_frame = frame

@@ -6,12 +6,19 @@ LabelingApp.load_video, plus the per-video labeling-time accumulator.
 The GUI keeps the mode dialog, file picker, progress windows and thread
 starting, and calls these functions preserving the audited ordering:
 
-    timer start -> unified load -> export recovery -> legacy migration
+    state DB open (migrating the legacy CSV/JSON state on first open)
+    -> timer start -> frame load
     -> frame extraction (an extraction abort rolls back the timer)
     -> position restore -> buffer-thread start -> Changed-flag reset
 
 Progress reporting is injected as a plain callback
 (progress_cb(count, total, stage, elapsed_s)).
+
+Persistence note: working state lives in ONE SQLite file per video
+(`adapters.sqlite_repo`, opened by `open_state`). The CSV/JSON functions in
+this module and in `adapters.unified_repo` are READERS only — kept permanently
+as the migration + disaster-recovery path (`service_layer.state_migration`).
+Nothing here writes a state CSV or a state JSON sidecar any more.
 """
 
 import json
@@ -23,12 +30,11 @@ import time
 import traceback
 from typing import Dict, Optional
 
-from adapters.atomic_io import atomic_write
 from adapters.frame_extractor import check_items_count, create_frames
+from adapters.sqlite_repo import SqliteRepository
 from adapters.unified_repo import (
     csv_to_dict,
     import_unified_from_export,
-    load_notes_csv,
     load_unified_dataset,
 )
 from domain.model import FrameBundle, empty_bundle
@@ -38,15 +44,19 @@ from service_layer.migration_service import migrate_project_dir
 DEFAULT_VIDEOS_DIR = VIDEOS_DIR
 
 
-# === Labeling-time accumulator (state/<name>_metadata.json) ===================
+# === Labeling-time accumulator ================================================
 #
-# BUG FIX (silent reset on restart): the writer used to store
+# The accumulator now lives in the state DB (`meta.labeling_time_seconds`).
+#
+# `load_labeling_time_seconds` below is the MIGRATION reader for the retired
+# `state/<name>_metadata.json` sidecar and is kept permanently.
+#
+# BUG FIX it still carries (silent reset on restart): the old writer stored
 # "Total Labeling Time (hours)" while the loader read
-# "Total Labeling Time (seconds)", so the accumulator restarted from 0 on
-# every app launch. The state file now stores SECONDS under
-# "Total Labeling Time (seconds)"; loading falls back to
-# "Total Labeling Time (hours)" * 3600 to migrate files written by the buggy
-# versions. The EXPORT metadata key "Total Labeling Time (hours)" is a frozen
+# "Total Labeling Time (seconds)", so the accumulator restarted from 0 on every
+# app launch. Files written by the fixed version hold SECONDS; loading falls
+# back to "Total Labeling Time (hours)" * 3600 for files written by the buggy
+# ones. The EXPORT metadata key "Total Labeling Time (hours)" is a frozen
 # contract (export_writer) and is unaffected.
 
 def load_labeling_time_seconds(path: str) -> float:
@@ -68,27 +78,16 @@ def load_labeling_time_seconds(path: str) -> float:
         return 0.0
 
 
-def write_labeling_time_seconds(path: str, total_seconds: float) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    payload = {
-        "Total Labeling Time (seconds)": round(float(total_seconds), 3),
-    }
-    try:
-        atomic_write(path, lambda f: json.dump(payload, f, indent=2, ensure_ascii=False))
-    except Exception as e:
-        print(f"WARNING: Failed to save labeling time: {e}")
-
-
 class LabelingTimer:
-    """Per-video labeling-time accumulator (state lived on LabelingApp as
-    _video_time_total_s / _video_session_start)."""
+    """Per-video labeling-time accumulator, persisted in the state DB's
+    `meta.labeling_time_seconds` (was `state/<name>_metadata.json`)."""
 
     def __init__(self):
         self.total_s = 0.0
         self.session_start = None
 
-    def start(self, state_path: str) -> None:
-        self.total_s = load_labeling_time_seconds(state_path)
+    def start(self, repo: SqliteRepository) -> None:
+        self.total_s = repo.load_labeling_time_seconds()
         self.session_start = time.monotonic()
 
     def current_s(self) -> float:
@@ -97,17 +96,17 @@ class LabelingTimer:
             return total
         return total + (time.monotonic() - self.session_start)
 
-    def persist(self, state_path: str) -> None:
+    def persist(self, repo: SqliteRepository) -> None:
         """Checkpoint the accumulator and keep the session running."""
         total = self.current_s()
-        write_labeling_time_seconds(state_path, total)
+        repo.save_labeling_time_seconds(total)
         self.total_s = total
         self.session_start = time.monotonic()
 
-    def finalize(self, state_path: str) -> None:
+    def finalize(self, repo: SqliteRepository) -> None:
         """Checkpoint the accumulator and stop the session."""
         total = self.current_s()
-        write_labeling_time_seconds(state_path, total)
+        repo.save_labeling_time_seconds(total)
         self.total_s = total
         self.session_start = None
 
@@ -182,10 +181,36 @@ def prepare_project(raw_video_name: str, labeling_mode: str) -> ProjectPaths:
     return paths
 
 
+def open_state(paths: ProjectPaths, *, fps=None, program_version=None,
+               progress_cb=None) -> SqliteRepository:
+    """Open this project's working-state DB and return the OPEN repository.
+
+    On the first open of a pre-SQLite project this imports every legacy
+    CSV/JSON state file into a fresh `state/<video>.db` and renames the sources
+    `*.migrated` (`service_layer.state_migration`); afterwards it just opens the
+    file. The caller owns closing it, and then calls `repo.load_frames()` — the
+    two steps stay separate so the GUI can keep starting its labeling timer
+    between them, exactly where it did before SQLite.
+    """
+    from service_layer import state_migration  # local: state_migration imports us
+
+    repo, migration = state_migration.migrate_state_to_sqlite(
+        paths, fps=fps, program_version=program_version, progress_cb=progress_cb
+    )
+    print(
+        f"INFO: open_state: {paths.state_db} ready "
+        f"(first-time migration={not migration.already_migrated})"
+    )
+    return repo
+
+
 def load_frames_dataset(paths: ProjectPaths, progress_cb=None) -> Dict[int, FrameBundle]:
-    """3-tier recovery ladder, tiers 1+2: unified CSV first; when that yields
-    nothing and an export exists, recover once from the export (in memory
-    only — the next Save materializes the unified file)."""
+    """MIGRATION / RECOVERY path — no longer part of a normal project open.
+
+    3-tier recovery ladder, tiers 1+2: unified CSV first; when that yields
+    nothing and an export exists, recover once from the export. Called by
+    `state_migration` on the first open of a pre-SQLite project (and available
+    for manual disaster recovery)."""
     unified_path = paths.unified_csv
     export_path = paths.export_csv
     print(f"INFO: load_video: unified_path={unified_path}", flush=True)
@@ -230,9 +255,9 @@ def load_frames_dataset(paths: ProjectPaths, progress_cb=None) -> Dict[int, Fram
 
 
 def migrate_legacy_limb_csvs(frames: Dict[int, FrameBundle], paths: ProjectPaths) -> None:
-    """3-tier recovery ladder, tier 3: merge legacy per-limb CSVs into the
-    in-memory unified store (mutates `frames` in place). Only called when
-    tiers 1+2 produced nothing."""
+    """MIGRATION / RECOVERY path — 3-tier recovery ladder, tier 3: merge legacy
+    per-limb CSVs into the in-memory store (mutates `frames` in place). Only
+    called when tiers 1+2 produced nothing."""
     print("INFO: No unified file found; attempting legacy CSV migration...")
     any_legacy = False
     for suffix in ['RH', 'LH', 'RL', 'LL']:
@@ -268,31 +293,11 @@ def extract_frames(video_path: str, paths: ProjectPaths, labeling_mode: str,
     )
 
 
-def load_notes(notes_path: str) -> dict:
-    if os.path.exists(notes_path):
-        notes = load_notes_csv(notes_path)
-        print("INFO: Notes loaded successfully.")
-        return notes
-    return {}
-
-
 # === Last position ============================================================
-def write_last_position(paths: ProjectPaths, frame: int, total_frames: int) -> None:
-    os.makedirs(paths.state_dir, exist_ok=True)
-    path = paths.last_position_json
-    try:
-        payload = {
-            "frame": int(frame),
-            "total_frames": int(total_frames),
-        }
-        atomic_write(path, lambda f: json.dump(payload, f))
-        print(f"INFO: Saved last position at {path}")
-    except Exception as e:
-        print(f"WARNING: Failed to save last position: {e}")
-
-
 def read_last_position(paths: ProjectPaths, total_frames: int) -> Optional[int]:
-    """Clamped resume frame from the last-position sidecar, or None."""
+    """MIGRATION reader for the retired `state/<name>_last_position.json`.
+    Clamped resume frame, or None. The live path is
+    `SqliteRepository.read_last_position`."""
     path = paths.last_position_json
     if not os.path.exists(path):
         return None
@@ -306,9 +311,30 @@ def read_last_position(paths: ProjectPaths, total_frames: int) -> Optional[int]:
         return None
 
 
-# === Clothes sidecar (read side) ==============================================
+# === Clothes ==================================================================
+def rescale_clothes_points(points: list, stored_scale: Optional[float],
+                           display_scale: float, default_scale: float) -> list:
+    """Rescale dot coordinates from the scale they were STORED at to the
+    current display scale.
+
+    Shared by the DB path (`SqliteRepository.load_clothes_rows` +
+    `clothes_diagram_scale`) and the legacy TXT reader below, so both keep the
+    identical fallback chain: a missing scale means 0.5 (the historical default
+    the sidecar was written at), and a non-positive one falls back to the
+    display scale.
+    """
+    if stored_scale is None:
+        stored_scale = 0.5
+    if stored_scale <= 0:
+        stored_scale = display_scale or default_scale
+    display_scale = display_scale or default_scale
+    scale_ratio = display_scale / stored_scale
+    return [(x * scale_ratio, y * scale_ratio) for x, y in points]
+
+
 def clothes_file_has_data(file_path: Optional[str]) -> bool:
-    """True when the clothes sidecar exists and holds more than its header."""
+    """MIGRATION reader: True when the legacy clothes sidecar exists and holds
+    more than its header. The live check is `SqliteRepository.has_clothes`."""
     if not file_path or not os.path.exists(file_path):
         return False
     with open(file_path, 'r', encoding="utf-8") as f:
@@ -317,8 +343,8 @@ def clothes_file_has_data(file_path: Optional[str]) -> bool:
 
 def load_clothes_points(file_path: Optional[str], display_scale: float,
                         default_scale: float) -> list:
-    """Parse dot coordinates from the clothes sidecar, rescaled from the
-    file's DiagramScale to the current display scale."""
+    """MIGRATION reader: dot coordinates from the legacy clothes sidecar,
+    rescaled from the file's DiagramScale to the current display scale."""
     if not file_path or not os.path.exists(file_path):
         return []
     file_scale = None
@@ -338,10 +364,14 @@ def load_clothes_points(file_path: Optional[str], display_scale: float,
                     x = float(match.group(1))
                     y = float(match.group(2))
                     points.append((x, y))
-    if file_scale is None:
-        file_scale = 0.5
-    if file_scale <= 0:
-        file_scale = display_scale or default_scale
-    display_scale = display_scale or default_scale
-    scale_ratio = display_scale / file_scale
-    return [(x * scale_ratio, y * scale_ratio) for x, y in points]
+    return rescale_clothes_points(points, file_scale, display_scale, default_scale)
+
+
+def load_clothes_points_from_repo(repo, display_scale: float,
+                                  default_scale: float) -> list:
+    """Live path: clothes dot coordinates from the state DB, rescaled exactly
+    as the legacy sidecar reader did."""
+    points = [(row[1], row[2]) for row in repo.load_clothes_rows()]
+    return rescale_clothes_points(
+        points, repo.clothes_diagram_scale(), display_scale, default_scale
+    )

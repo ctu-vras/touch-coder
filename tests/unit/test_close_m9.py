@@ -23,6 +23,9 @@ def _app(events, save_result=True):
         save_data=lambda: events.append("save") or save_result,
         save_last_position=lambda: events.append("last_position"),
         _finalize_video_time=lambda: events.append("finalize_time"),
+        # The working-state SQLite connection must close AFTER every writer
+        # (save, last position, labeling-time checkpoint) and BEFORE teardown.
+        _close_state_repo=lambda: events.append("close_state_repo"),
         frame_buffer=_Buffer(events),
         destroy=lambda: events.append("destroy"),
     )
@@ -58,6 +61,7 @@ def test_M9_confirm_saves_before_teardown(monkeypatch):
         "save",
         "last_position",
         "finalize_time",
+        "close_state_repo",
         ("shutdown", False, True),
         "destroy",
     ]

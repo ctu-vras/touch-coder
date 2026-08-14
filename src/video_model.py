@@ -37,7 +37,6 @@ class Video:
         self.last_green = [(10, 10),(5, 5),(50, 50)]
         self.play = False
         self.frame_rate = None
-        self.dataNotes_path_to_csv = None
 
         if sys.platform.startswith("win"):
             self.program_version = f"{PROGRAM_VERSION} (Windows)"
@@ -49,5 +48,6 @@ class Video:
         self.parameter1_name = None
         self.parameter2_name = None
         self.parameter3_name = None
-        self.clothes_file_path = None
+        # Display-only note fallback for pre-unified projects, loaded from the
+        # state DB's `legacy_notes` table (never part of bundle["Note"]).
         self.notes = {}
