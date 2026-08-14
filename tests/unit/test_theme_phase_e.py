@@ -53,7 +53,6 @@ def _timeline_app(canvas, video):
         option_var_1=SimpleNamespace(get=lambda: "RH"),
         perf=SimpleNamespace(time=lambda _name: nullcontext()),
         _assert_ui_thread=lambda: None,
-        is_pose_mode=lambda: False,
         parameter_color_at_frame=lambda _frame: None,
         limb_parameter_colors_at_frame=lambda _frame: (None, None, None),
         _update_timeline_playhead=LabelingApp._update_timeline_playhead,

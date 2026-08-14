@@ -8,8 +8,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # Update these paths/settings here instead of using CLI arguments.
-SOURCE_IMAGE = Path("icons/3d_zones/diagram.png")
-OUTPUT_DIR = Path("icons/3d_zones/generated_masks")
+SOURCE_IMAGE = Path("icons/diagram.png")
+OUTPUT_DIR = Path("icons/generated_masks")
 ARCHIVE_DIR = OUTPUT_DIR / "_merged_legacy"
 ZONE_NAME_PREFIX = "ZONE_"
 THRESHOLD = 200
@@ -19,33 +19,11 @@ INCLUDE_LINE_MASK = True
 
 # Merge regions after you inspect zone_index_preview.png.
 # Keys are output names, values are 1-based region indices to combine.
-MERGED_ZONE_GROUPS: dict[str, list[int]] = {
-    "FACE": [1, 2, 3, 4, 5, 6],
-}
+MERGED_ZONE_GROUPS: dict[str, list[int]] = {}
 
-# Stable names for single regions that should remain separate.
-MANUAL_ZONE_NAMES: dict[int, str] = {
-    7: "NECK",
-    8: "L_SHOULDER",
-    9: "R_SHOULDER",
-    10: "L_ELBOW",
-    11: "R_ELBOW",
-    12: "BELLY",
-    13: "L_WRIST",
-    14: "R_WRIST",
-    15: "R_HIP",
-    16: "L_HIP",
-    17: "R_KNEE",
-    18: "L_KNEE",
-    19: "BOX1",
-    20: "BOX2",
-    21: "BOX4",
-    22: "BOX3",
-    23: "R_ANKLE",
-    24: "L_ANKLE",
-    25: "BOX6",
-    26: "BOX5",
-}
+# Stable names for single regions that should remain separate
+# (unnamed regions fall back to ZONE_<index>).
+MANUAL_ZONE_NAMES: dict[int, str] = {}
 
 
 def load_diagram_mask(image_path: Path, threshold: int) -> tuple[list[list[bool]], int, int]:

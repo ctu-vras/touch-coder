@@ -10,7 +10,6 @@ def _stub(current_frame, frames):
         video=SimpleNamespace(current_frame=current_frame, frames=frames),
         _timeline_dirty=False,
         _timeline2_dirty=False,
-        _pose_timeline_state_cache=object(),
     )
 
 

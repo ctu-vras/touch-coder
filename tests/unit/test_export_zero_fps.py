@@ -9,8 +9,7 @@ See docs/reviews/2026-07-12/to_do/fix_M4.md.
 raises ZeroDivisionError — aborting the whole export AFTER the unified CSV was
 already written (a partial, inconsistent save).
 
-The pose exporter already guards this (`... if frame_rate else 0.0`); the touch
-exporter should match.
+The exporter should guard this (`... if frame_rate else 0.0`).
 
   RED before:  ZeroDivisionError from (f / 0).
   GREEN after: export succeeds; Time_ms falls back to 0.0 when fps is unknown.

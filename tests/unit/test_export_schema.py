@@ -2,20 +2,19 @@
 Export-schema lock (regression tripwire).
 
 External research pipelines read `export/<video>_export.csv` by column name and
-order. These tests pin the EXACT current columns of both the touch and 3D-pose
-exports. They are GREEN today and must stay green: any fix or feature that adds,
-removes, renames, or reorders an export column turns them RED — which is the
-signal that the pipeline contract is about to break.
+order. This test pins the EXACT current columns of the touch export. It is GREEN
+today and must stay green: any fix or feature that adds, removes, renames, or
+reorders an export column turns it RED — which is the signal that the pipeline
+contract is about to break.
 
 If a schema change is ever genuinely intended, it must be coordinated with the
-downstream pipeline and these golden lists updated deliberately in the same change.
+downstream pipeline and this golden list updated deliberately in the same change.
 
 Run:  uv run pytest tests/ -k schema
 """
 import pandas as pd
 
 from data_utils import export_from_unified
-from pose_mismatch_data import export_pose_dataset, POSE_JOINTS
 
 
 TOUCH_EXPORT_COLUMNS = [
@@ -32,13 +31,6 @@ TOUCH_EXPORT_COLUMNS = [
     "Note",
 ]
 
-POSE_EXPORT_COLUMNS = (
-    ["Frame", "Time_ms", "ScaleFactor", "HeadScaleFactor",
-     "Parameter_1", "Parameter_2", "Parameter_3"]
-    + [c for j in POSE_JOINTS for c in (f"{j}_Event", f"{j}_Opacity")]
-    + ["Note"]
-)
-
 
 def test_touch_export_schema_is_frozen(tmp_path):
     out = tmp_path / "vid_export.csv"
@@ -50,14 +42,4 @@ def test_touch_export_schema_is_frozen(tmp_path):
     assert cols == TOUCH_EXPORT_COLUMNS, (
         "Touch export schema drifted — downstream pipelines will break.\n"
         f"got:      {cols}\nexpected: {TOUCH_EXPORT_COLUMNS}"
-    )
-
-
-def test_pose_export_schema_is_frozen(tmp_path):
-    out = tmp_path / "vid_3d_export.csv"
-    export_pose_dataset({}, str(out), total_frames=2, frame_rate=30.0)
-    cols = list(pd.read_csv(out).columns)
-    assert cols == POSE_EXPORT_COLUMNS, (
-        "Pose export schema drifted — downstream pipelines will break.\n"
-        f"got:      {cols}\nexpected: {POSE_EXPORT_COLUMNS}"
     )

@@ -77,7 +77,6 @@ def test_diagram_dots_use_filled_and_hollow_sprites(monkeypatch):
         dot_size=6,
         diagram_scale=0.5,
         option_var_1=SimpleNamespace(get=lambda: "RH"),
-        is_pose_mode=lambda: False,
         on_radio_click=lambda: None,
         find_last_green=lambda _data: None,
     )

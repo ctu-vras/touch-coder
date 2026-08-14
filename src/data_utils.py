@@ -554,7 +554,7 @@ def export_from_unified(frames: Dict[int, FrameBundle],
 
     for f in range(total_frames + 1):
         b = frames.get(f, empty_bundle())
-        # 0-FPS probe (some containers) must not abort the export; matches export_pose_dataset.
+        # 0-FPS probe (some containers) must not abort the export.
         row = {"Frame": f, "Time_ms": (f / frame_rate) * 1000.0 if frame_rate else 0.0}
 
         # Limb blocks in order: LH, LL, RH, RL

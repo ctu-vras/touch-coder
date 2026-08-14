@@ -1,13 +1,10 @@
 # TinyTouch
 
-**TinyTouch** is a desktop annotation tool for behavioral researchers studying how infants learn to understand their own body through self-touch. It provides two labeling modes:
-
-1. **Touch Labeling** -- frame-by-frame annotation of which limb (LH / RH / LL / RL) touches which body zone, including onset/offset marking, gaze tracking, and customizable global / per-limb parameters.
-2. **3D Pose Quality Labeling** -- assessment of 3D pose-estimation accuracy by marking missing or problematic keypoints on joint zones, plus a per-frame scale slider that records how much the projected skeleton deviates from the actual body size.
+**TinyTouch** is a desktop annotation tool for behavioral researchers studying how infants learn to understand their own body through self-touch. It provides **Touch Labeling**: frame-by-frame annotation of which limb (LH / RH / LL / RL) touches which body zone, including onset/offset marking, gaze tracking, and customizable global / per-limb parameters.
 
 ## Purpose
 
-Researchers record videos of infants and use TinyTouch to produce structured CSV datasets describing every self-contact event. These datasets feed downstream analyses of how babies develop body awareness. The 3D mode extends this to evaluating skeleton-based pose-estimation models, letting annotators flag joints that are missing or poorly localized and rate the overall projection scale.
+Researchers record videos of infants and use TinyTouch to produce structured CSV datasets describing every self-contact event. These datasets feed downstream analyses of how babies develop body awareness.
 
 ## Tech Stack
 
@@ -33,8 +30,7 @@ touch-coder/
 │   ├── ui_components.py          # Tkinter layout, widgets, key/mouse bindings
 │   ├── video_model.py            # Video + per-frame data model (LimbView wrappers)
 │   ├── data_utils.py             # Unified-CSV I/O, legacy export schema, metadata sidecar
-│   ├── pose_mismatch_data.py     # 3D pose data model (joints, scale) + load/save/export
-│   ├── analysis.py               # Plotly-based analysis dashboards (touch mode only)
+│   ├── analysis.py               # Plotly-based analysis dashboards
 │   ├── frame_utils.py            # Frame extraction (ffmpeg → OpenCV fallback) + integrity check
 │   ├── config_utils.py           # config.json read / write, parameter-name binding
 │   ├── cloth_app.py              # Clothing-zone selector dialog (Toplevel)
@@ -44,8 +40,7 @@ touch-coder/
 ├── icons/                        # Body diagrams, limb images, zone masks
 │   ├── diagram0.png              # Default touch diagram (rendered on canvas)
 │   ├── zones3/                   # Touch-mode zone masks (one PNG per zone)
-│   ├── zones3_new_template/      # Alternate zone set (config: new_template = true)
-│   └── 3d/                       # 3D-mode diagram, outline, joint zone masks
+│   └── zones3_new_template/      # Alternate zone set (config: new_template = true)
 ├── Labeled_data/                 # Output (gitignored) -- one folder per video
 ├── tests/                        # Benchmark / dev scripts (e.g. frame extraction)
 ├── assets/, docs/, .github/      # Static assets, docs, CI workflow
@@ -61,7 +56,7 @@ TinyTouch is a single-process Tkinter app organized around one controller (`Labe
 - the `Video` model (raw video info + per-frame data dict),
 - the UI built by `ui_components.build_ui(app)` (frames, canvases, buttons, key bindings),
 - two daemon threads for I/O-bound work (frame buffering and playback advance),
-- persistence helpers from `data_utils` and `pose_mismatch_data`.
+- persistence helpers from `data_utils`.
 
 ### High-level data flow
 
@@ -74,7 +69,6 @@ User input (clicks / keys)
                                               ┌─► save_unified_dataset (changed-only journal append)
 On Save / Close ─► LabelingApp.save_data ─────┼─► export_from_unified  (full legacy schema)
                                               └─► write_export_metadata (JSON sidecar)
-                                                     └ pose mode uses save_pose_dataset / export_pose_dataset
 ```
 
 ### In-memory data model
@@ -97,19 +91,6 @@ Each `FrameRecord` holds aligned `X` / `Y` click lists, `Onset` (`"ON"`/`"OFF"`/
 
 `Video` exposes `dataLH / dataRH / dataLL / dataRL` as lightweight `LimbView` wrappers around the same shared `frames` dict, so legacy code that indexes a single limb still works.
 
-3D pose-mode state is a different bundle (see [src/pose_mismatch_data.py](src/pose_mismatch_data.py)):
-
-```python
-{
-  "Note": str | None,
-  "Params": {...},
-  "ScaleRaw": float, "ScaleFactor": float, "ScaleSet": bool,
-  "Joints": {joint_name: {"Event": "ON"|"OFF"|None, "X": int|None, "Y": int|None}},
-}
-```
-
-with 13 canonical joints: `L/R_ANKLE`, `L/R_KNEE`, `L/R_HIP`, `L/R_WRIST`, `L/R_ELBOW`, `L/R_SHOULDER`, `NECK`. `ScaleFactor` is clamped to `[0.7, 1.3]`.
-
 ### Background processes
 
 Two daemon threads start lazily after a video is loaded:
@@ -127,14 +108,13 @@ Frame counts are sanity-checked against `cv2.CAP_PROP_FRAME_COUNT` with a 0.1% t
 
 ## Labeling Modes
 
-Mode is chosen on every "Load Video" via a dialog (`ask_labeling_mode`) with two orthogonal axes:
+Mode is chosen on every "Load Video" via a dialog (`ask_labeling_mode`):
 
 - **Labeling mode** -- `Normal` or `Reliability` (the latter appends `_reliability` to the video name, reuses original frames, and keeps a separate dataset for inter-rater agreement).
-- **Annotation mode** -- `Touch` or `3D Mismatch` (the latter appends `_3d` to the video name and uses a different on-disk schema).
 
-Both choices are persisted in `config.json` (`last_labeling_mode`, `annotation_mode`).
+The choice is persisted in `config.json` (`last_labeling_mode`).
 
-### Touch Mode
+### Touch Annotation
 
 - Navigate frame-by-frame: arrow keys, mouse wheel, `<<` / `<` / `>` / `>>` buttons, Play / Stop, click on Timeline 1 / Timeline 2.
 - Pick a limb (RH / LH / RL / LL) via radio buttons; the diagram re-renders with that limb's overlays.
@@ -144,13 +124,6 @@ Both choices are persisted in `config.json` (`last_labeling_mode`, `annotation_m
 - Six "boxes" on the diagram act as catch-all zones (ground, prop, etc).
 - Two timelines visualize all touch events; the lower one is the global scrub bar.
 
-### 3D Pose Mode
-
-- The diagram shows a body outline overlaid with 13 joint zones (masks in [icons/3d/zones/](icons/3d/zones/)).
-- **Left-click** a joint = mark `ON` event (joint missing/problematic for this frame). **Right-click** = `OFF`.
-- A vertical scale slider (0.7x -- 1.3x) sets the projected-skeleton scale for the current frame; changes "carry" to subsequent frames until manually overridden.
-- Separate timeline visualization, separate CSV export, and Clothes / Sort / Analysis are disabled in this mode.
-
 ## Data Layout on Disk
 
 Each labeled video produces a self-contained folder:
@@ -158,12 +131,11 @@ Each labeled video produces a self-contained folder:
 ```
 Labeled_data/<video_name>/
 ├── data/                             # Working state (load/save round-trips here)
-│   ├── <video>_unified.csv           # Touch mode: in-memory FrameBundle dict serialized
-│   │                                 #             (changed-row journal; last Frame row wins)
-│   │   OR (in 3D mode) the unified pose CSV with ScaleRaw/Factor/Set + Joints JSON
+│   ├── <video>_unified.csv           # In-memory FrameBundle dict serialized
+│   │                                 # (changed-row journal; last Frame row wins)
 │   ├── <video>_clothes.txt           # Coordinates + auto-detected zones from Clothes dialog
 │   ├── <video>_notes.csv             # Per-frame freeform notes
-│   ├── <video>_limb_parameters.csv   # Limb-specific Parameter_1..3 (touch mode only)
+│   ├── <video>_limb_parameters.csv   # Limb-specific Parameter_1..3
 │   ├── <video>_last_position.json    # Resume position + per-video labeling-time accumulator
 │   └── ...                           # Legacy per-limb {RH,LH,RL,LL}.csv if migrated
 ├── export/                           # Final, "publication-ready" artifacts
@@ -171,7 +143,7 @@ Labeled_data/<video_name>/
 │   └── <video>_metadata.json         # Program version, FPS, mode, clothes zones, param labels,
 │                                     # total labeling time (hours)
 ├── frames/                           # frame0.jpg ... frameN.jpg (one per video frame)
-└── plots/                            # Plotly HTMLs from "Analysis" (touch mode only)
+└── plots/                            # Plotly HTMLs from "Analysis"
 ```
 
 The split between `data/<video>_unified.csv` and `export/<video>_export.csv` is deliberate:
@@ -200,19 +172,6 @@ Note
 
 For migration notes affecting external analysis pipelines, see [docs/EXPORT_NOTES.md](docs/EXPORT_NOTES.md).
 
-### Pose export schema
-
-`<video>_export.csv` columns (from `export_pose_dataset` in [src/pose_mismatch_data.py](src/pose_mismatch_data.py)):
-
-```
-Frame, Time_ms, ScaleFactor,
-Parameter_1, Parameter_2, Parameter_3,
-L_ANKLE_Event, R_ANKLE_Event, ..., NECK_Event,   # one column per joint
-Note
-```
-
-(One column per joint event; the unified CSV keeps full `Joints` and scale state JSON-encoded for round-trip fidelity.)
-
 ## Configuration
 
 [config.json](config.json) is read on startup and after every Settings dialog "Apply". Keys:
@@ -229,17 +188,16 @@ Note
 | `jump_seconds` | Fast-jump distance in seconds for `<<` / `>>` and Shift+Arrow. |
 | `perf_enabled` / `perf_log_every_s` / `perf_log_top_n` | Optional `PerfLogger` (see [src/perf_utils.py](src/perf_utils.py)). When on, prints rolling averages of timed code blocks (`background_update`, click handlers, etc.). |
 | `last_labeling_mode` | Last-chosen `Normal` / `Reliability`. |
-| `annotation_mode` | Last-chosen `touch` / `pose_3d`. |
 
 When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file()` copies the bundled default to the install directory the first time so users get a writable copy.
 
 ## Application Workflow
 
-1. **Load Video** -- pick `Normal` / `Reliability` and `Touch` / `3D Mismatch`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `Labeled_data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts.
-2. **Clothes** (touch mode only) -- mark which body zones are covered with clothes; saved to `<video>_clothes.txt` and surfaced in the export metadata.
+1. **Load Video** -- pick `Normal` / `Reliability`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `Labeled_data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts.
+2. **Clothes** -- mark which body zones are covered with clothes; saved to `<video>_clothes.txt` and surfaced in the export metadata.
 3. **Annotate** -- pick a limb, click onsets/offsets, set gaze and parameters, type notes. Edits stay in memory until Save.
 4. **Save** -- `Save` button (or auto on Close / before Load) writes the unified CSV (incremental), the export CSV (full), and the metadata sidecar. The `Changed` flags are cleared.
-5. **Analysis** (touch mode only) -- runs `analysis.do_analysis` over the export CSV: per-limb summary stats, transition heatmaps, touch-trajectory plots, histograms, and a master HTML opened in the browser. Output lands in `plots/`.
+5. **Analysis** -- runs `analysis.do_analysis` over the export CSV: per-limb summary stats, transition heatmaps, touch-trajectory plots, histograms, and a master HTML opened in the browser. Output lands in `plots/`.
 6. **Close** -- final save, persists labeling-time accumulator and last frame position.
 
 ## Local Build
