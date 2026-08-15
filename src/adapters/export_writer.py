@@ -104,4 +104,4 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     atomic_write(out_csv, lambda f: df.to_csv(f, index=False))
 
     # CSV remains clean (no preamble). Metadata is written separately by caller.
-    print(f"DEBUG: Export → {out_csv} (rows={len(rows)})")
+    print(f"DEBUG: Export -> {out_csv} (rows={len(rows)})")

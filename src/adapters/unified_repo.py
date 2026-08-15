@@ -55,7 +55,7 @@ def _read_unified_journal(csv_path: str) -> pd.DataFrame:
         if last_newline < 0:
             raise
         print(
-            f"WARNING: Ignoring crash-torn final unified row → {csv_path}",
+            f"WARNING: Ignoring crash-torn final unified row -> {csv_path}",
             flush=True,
         )
         return pd.read_csv(io.BytesIO(data[: last_newline + 1]))
@@ -67,25 +67,38 @@ def load_unified_dataset(csv_path: str, progress_cb=None) -> Dict[int, FrameBund
     same frame overwrites an earlier one)."""
     frames: Dict[int, FrameBundle] = {}
     if not (csv_path and os.path.exists(csv_path)):
-        print(f"DEBUG: Unified not found → {csv_path}", flush=True)
+        print(f"DEBUG: Unified not found -> {csv_path}", flush=True)
         return frames
+    # DELIBERATE: the diagnostics live OUTSIDE the try below. This function is
+    # the first rung of the disaster-recovery ladder and its `except Exception`
+    # means "assume there is no data" — a one-way decision, because the caller
+    # (state_migration) then renames the sources `*.migrated`. A print must
+    # never be able to trigger it. It once could: the log line below used to
+    # contain a Unicode arrow, and on a redirected stdout (cp1252 locale
+    # encoding) the resulting UnicodeEncodeError was caught as "unreadable CSV"
+    # and the researcher's whole journal was imported as ZERO frames.
     try:
         size = os.path.getsize(csv_path)
-        print(f"DEBUG: Unified exists ({size} bytes) → {csv_path}", flush=True)
-        if size == 0:
-            print("DEBUG: Unified is empty (0 bytes) — starting with empty frames", flush=True)
-            return frames
-        t0 = time.time()
-        print("DEBUG: load_unified_dataset: pd.read_csv starting...", flush=True)
+    except OSError as exc:
+        print(f"ERROR: Could not stat unified CSV ({exc}); starting empty", flush=True)
+        return frames
+    print(f"DEBUG: Unified exists ({size} bytes) -> {csv_path}", flush=True)
+    if size == 0:
+        print("DEBUG: Unified is empty (0 bytes); starting with empty frames", flush=True)
+        return frames
+
+    t0 = time.time()
+    print("DEBUG: load_unified_dataset: pd.read_csv starting...", flush=True)
+    try:
         df = _read_unified_journal(csv_path)
-        print(f"DEBUG: load_unified_dataset: pd.read_csv done in {time.time() - t0:.2f}s "
-              f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
     except pd.errors.EmptyDataError:
         print("DEBUG: Unified had no columns (EmptyDataError) — starting with empty frames", flush=True)
         return frames
     except Exception as e:
         print(f"ERROR: Failed to read unified CSV: {e} — starting empty", flush=True)
         return frames
+    print(f"DEBUG: load_unified_dataset: pd.read_csv done in {time.time() - t0:.2f}s "
+          f"(rows={len(df)}, cols={len(df.columns)})", flush=True)
 
     total_rows = len(df)
     log_every = max(10000, total_rows // 20) if total_rows else 10000
@@ -177,7 +190,7 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
     """
     frames: Dict[int, FrameBundle] = {}
     if not (export_csv_path and os.path.exists(export_csv_path)):
-        print(f"DEBUG: import_unified_from_export: file does not exist → {export_csv_path}", flush=True)
+        print(f"DEBUG: import_unified_from_export: file does not exist -> {export_csv_path}", flush=True)
         return frames
     try:
         size = os.path.getsize(export_csv_path)
@@ -378,7 +391,7 @@ def import_unified_from_export(export_csv_path: str, progress_cb=None) -> Dict[i
             f"total coordinate pairs dropped={dropped_pairs}",
             flush=True,
         )
-    print(f"DEBUG: import_unified_from_export → frames={len(frames)} "
+    print(f"DEBUG: import_unified_from_export -> frames={len(frames)} "
           f"from {export_csv_path} in {time.time() - iter_start:.1f}s", flush=True)
     return frames
 

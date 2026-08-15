@@ -100,3 +100,63 @@ def test_M6_legacy_notes_table_round_trips_utf8(tmp_path):
         assert repo.load_legacy_notes() == {7: NOTE}
     finally:
         repo.close()
+
+
+# === log-line encoding (the arrow that ate a migration) =======================
+#
+# Attached to a real Windows console Python writes through the console API and
+# any character prints. REDIRECT the process (`TinyTouch.exe > log.txt`, a CI
+# runner, a wrapper script) and Python falls back to the locale encoding —
+# cp1252 / cp1250 — where an unencodable character raises UnicodeEncodeError
+# from inside `print()` itself.
+#
+# That is not cosmetic. `adapters.unified_repo.load_unified_dataset` wraps the
+# journal read in `except Exception: return {}` ("assume there is no data"), and
+# its own DEBUG line used to contain a Unicode arrow. On a redirected stdout the
+# print raised, the guard read it as "unreadable CSV", and the one-time
+# legacy -> SQLite migration imported ZERO frames before renaming the sources
+# `*.migrated`. So: literals handed to `print()` stay inside cp1252.
+#
+# Only LITERALS are checked. Interpolated values (a Czech note, an exotic path)
+# can still be unencodable; hardening those is `main._harden_console_encoding`'s
+# job, not something a static check can promise.
+
+import ast
+import os
+
+_SRC_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "src")
+)
+
+
+def _print_literals(tree):
+    """Every string constant that appears inside a `print(...)` call."""
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "print"):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                yield inner.lineno, inner.value
+
+
+def test_M6_print_literals_are_cp1252_safe():
+    offenders = []
+    for dirpath, _dirnames, filenames in os.walk(_SRC_ROOT):
+        for filename in sorted(filenames):
+            if not filename.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, filename)
+            with open(path, "r", encoding="utf-8") as handle:
+                tree = ast.parse(handle.read(), filename=path)
+            for lineno, text in _print_literals(tree):
+                try:
+                    text.encode("cp1252")
+                except UnicodeEncodeError:
+                    rel = os.path.relpath(path, _SRC_ROOT)
+                    offenders.append(f"{rel}:{lineno}: {text!r}")
+    assert offenders == [], (
+        "these log literals cannot be written to a redirected stdout on "
+        "Windows (cp1252); use ASCII in log text:\n  " + "\n  ".join(offenders)
+    )

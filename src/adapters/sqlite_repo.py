@@ -228,13 +228,13 @@ class SqliteRepository:
             self._create_schema()
             print(
                 f"INFO: sqlite_repo: created state DB (schema v{SCHEMA_VERSION}) "
-                f"→ {db_path}"
+                f"-> {db_path}"
             )
         else:
             self._upgrade_from(version)
             print(
                 f"INFO: sqlite_repo: opened state DB (schema v{self._user_version()}) "
-                f"→ {db_path} ({os.path.getsize(db_path)} bytes)"
+                f"-> {db_path} ({os.path.getsize(db_path)} bytes)"
             )
 
     # === plumbing =============================================================
@@ -332,7 +332,7 @@ class SqliteRepository:
         self._check_thread()
         try:
             self._conn.close()
-            print(f"INFO: sqlite_repo: closed state DB → {self._path}")
+            print(f"INFO: sqlite_repo: closed state DB -> {self._path}")
         except Exception as exc:  # never block app shutdown on this
             print(f"WARN: sqlite_repo: close failed for {self._path}: {exc}")
 
@@ -499,7 +499,7 @@ class SqliteRepository:
         print(
             f"DEBUG: sqlite_repo: loaded frames={total} limb_records={recs_n} "
             f"clicks={clicks_n} frame_params={params_n} limb_params={lp_n} "
-            f"in {time.time() - t0:.2f}s ← {self._path}"
+            f"in {time.time() - t0:.2f}s <- {self._path}"
         )
         return frames
 
@@ -523,7 +523,7 @@ class SqliteRepository:
         if not dirty:
             print(
                 f"DEBUG: sqlite_repo: save skipped — no dirty frames "
-                f"(total_frames={total_frames}) → {self._path}"
+                f"(total_frames={total_frames}) -> {self._path}"
             )
             self.set_meta(META_TOTAL_FRAMES, total_frames)
             return 0
@@ -542,7 +542,7 @@ class SqliteRepository:
         print(
             f"DEBUG: sqlite_repo: saved dirty frames={len(dirty)} "
             f"(total_frames={total_frames}) in {time.time() - t0:.3f}s "
-            f"→ {self._path}"
+            f"-> {self._path}"
         )
         return len(dirty)
 
@@ -569,7 +569,7 @@ class SqliteRepository:
             print(f"WARN: sqlite_repo: {message}")
         if len(anomalies) > 20:
             print(f"WARN: sqlite_repo: … and {len(anomalies) - 20} more anomalies")
-        print(f"DEBUG: sqlite_repo: imported frames={written} → {self._path}")
+        print(f"DEBUG: sqlite_repo: imported frames={written} -> {self._path}")
         return written
 
     def _write_frame_unlocked(self, frame: int, bundle: FrameBundle,
@@ -658,7 +658,7 @@ class SqliteRepository:
         self.set_meta_many(
             {META_LAST_FRAME: int(frame), META_TOTAL_FRAMES: int(total_frames)}
         )
-        print(f"INFO: sqlite_repo: saved last position frame={frame} → {self._path}")
+        print(f"INFO: sqlite_repo: saved last position frame={frame} -> {self._path}")
 
     def read_last_position(self, total_frames: int) -> Optional[int]:
         """Clamped resume frame, or None when the DB has never stored one."""
@@ -698,7 +698,7 @@ class SqliteRepository:
             self._set_meta_unlocked(META_CLOTHES_SCALE, float(diagram_scale))
         print(
             f"INFO: sqlite_repo: saved clothes dots={len(rows)} "
-            f"scale={diagram_scale} → {self._path}"
+            f"scale={diagram_scale} -> {self._path}"
         )
 
     def load_clothes_rows(self) -> List[Tuple[int, float, float, str]]:

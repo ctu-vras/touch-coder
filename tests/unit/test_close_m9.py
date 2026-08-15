@@ -27,6 +27,9 @@ def _app(events, save_result=True):
         # (save, last position, labeling-time checkpoint) and BEFORE teardown.
         _close_state_repo=lambda: events.append("close_state_repo"),
         frame_buffer=_Buffer(events),
+        # Repeating after() timers must be cancelled before the root is
+        # destroyed, or Tcl reports "invalid command name" on every exit.
+        _cancel_pending_timers=lambda: events.append("cancel_timers"),
         destroy=lambda: events.append("destroy"),
     )
 
@@ -63,6 +66,7 @@ def test_M9_confirm_saves_before_teardown(monkeypatch):
         "finalize_time",
         "close_state_repo",
         ("shutdown", False, True),
+        "cancel_timers",
         "destroy",
     ]
 

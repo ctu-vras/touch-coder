@@ -397,7 +397,13 @@ class LabelingApp(tk.Tk):
             if getattr(self, "loading_label", None):
                 self.loading_label.set(color, text)
 
-        self.after(0, _apply)
+        try:
+            self.after(0, _apply)
+        except (RuntimeError, tk.TclError) as e:
+            # Called from the buffering thread, which can still be mid-tick when
+            # on_close() destroys the root; `after` then raises "main thread is
+            # not in main loop" and would kill the daemon with a traceback.
+            print(f"DEBUG: buffer status update dropped during teardown: {e}")
 
     def _is_ui_thread(self) -> bool:
         """True when called on the Tk main thread (recorded in __init__)."""
@@ -594,6 +600,7 @@ class LabelingApp(tk.Tk):
     # === Diagram Init & Click Handling =========================================
     def init_diagram(self):
         # set up periodic dots refresh
+        self._dot_refresh_after_id = None
         self._reset_zone_cache()
         self._load_zone_masks()
         self.periodic_print_dot()
@@ -642,7 +649,10 @@ class LabelingApp(tk.Tk):
 
     def periodic_print_dot(self):
         self._render_diagram_dots()
-        self.after(300, self.periodic_print_dot)
+        # Keep the id so the timer can be cancelled on close — otherwise the
+        # reschedule below fires into an already-destroyed interpreter and Tcl
+        # reports `invalid command name "...periodic_print_dot"` on every exit.
+        self._dot_refresh_after_id = self.after(300, self.periodic_print_dot)
 
     def on_diagram_click(self, event, is_onset):
         if self.video is None:
@@ -1982,7 +1992,24 @@ class LabelingApp(tk.Tk):
             self.frame_buffer.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             print(f"WARN: loader pool shutdown failed: {e}")
+        self._cancel_pending_timers()
         self.destroy()
+
+    def _cancel_pending_timers(self):
+        """Cancel our own repeating `after()` timers before the root goes away.
+
+        Without this the diagram-refresh timer (and any live arrow-hold
+        watchdog) fires into a destroyed interpreter and Tcl prints
+        `invalid command name "...periodic_print_dot"` on every close.
+        """
+        self._cancel_arrow_hold_state()
+        after_id = getattr(self, "_dot_refresh_after_id", None)
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception as e:
+                print(f"WARN: could not cancel the diagram refresh timer: {e}")
+            self._dot_refresh_after_id = None
 
     def _close_state_repo(self):
         """Release the state DB connection (called before opening another

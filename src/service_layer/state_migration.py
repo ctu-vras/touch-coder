@@ -260,12 +260,12 @@ def migrate_state_to_sqlite(paths: ProjectPaths, *, fps=None,
         result.created_empty = True
         print(
             f"INFO: state_migration: no legacy sources — created an empty state DB "
-            f"→ {paths.state_db}"
+            f"-> {paths.state_db}"
         )
     print(
         f"INFO: state_migration: DONE frames={result.frames_imported} "
         f"clothes_dots={result.clothes_dots} renamed={len(result.sources_migrated)} "
-        f"skipped={len(result.sources_skipped)} → {paths.state_db}"
+        f"skipped={len(result.sources_skipped)} -> {paths.state_db}"
     )
     return repo, result
 
@@ -294,7 +294,7 @@ def _read_legacy_notes(paths: ProjectPaths) -> Dict[int, str]:
     if not os.path.exists(path):
         return {}
     notes = load_notes_csv(path)
-    print(f"INFO: state_migration: notes CSV rows={len(notes)} ← {path}")
+    print(f"INFO: state_migration: notes CSV rows={len(notes)} <- {path}")
     return notes
 
 
@@ -311,7 +311,7 @@ def _read_legacy_limb_params(paths: ProjectPaths) -> List[Tuple[int, str, str, O
         key = LIMB_PARAM_COLUMN_TO_KEY[column]
         for (limb, frame), state in states.items():
             rows.append((int(frame), str(limb), key, state))
-    print(f"INFO: state_migration: limb-parameter CSV states={len(rows)} ← {path}")
+    print(f"INFO: state_migration: limb-parameter CSV states={len(rows)} <- {path}")
     return rows
 
 
@@ -352,7 +352,7 @@ def _rename_migrated(path: str) -> Tuple[bool, str]:
         return False, "target exists"
     try:
         os.rename(path, target)
-        print(f"INFO: state_migration: renamed {path} → {target}")
+        print(f"INFO: state_migration: renamed {path} -> {target}")
         return True, ""
     except OSError as exc:
         print(f"WARN: state_migration: could not rename {path}: {exc}")

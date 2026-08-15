@@ -165,6 +165,11 @@ class FrameBuffer:
         self.buffer_ready = False
         self._advance_pending = False   # a requested advance awaits the UI thread
 
+        # Shutdown latch. Both daemon loops below poll it, so `shutdown()`
+        # actually ENDS them instead of leaving them spinning against a
+        # destroyed Tk root (see shutdown()).
+        self._stopped = Event()
+
     # === Buffer access (UI thread) ============================================
     def __contains__(self, frame_number) -> bool:
         return frame_number in self._buffer
@@ -193,15 +198,52 @@ class FrameBuffer:
             self._inflight.clear()
             self._gen += 1
 
+    @property
+    def stopped(self) -> bool:
+        """True once `shutdown()` was called — both loops are winding down."""
+        return self._stopped.is_set()
+
     def shutdown(self, *, wait=False, cancel_futures=True):
+        """Stop the two daemon loops, then the loader pool.
+
+        The latch is set FIRST and the buffering thread is woken immediately:
+        `background_update` marshals its priority-frame repaint through
+        `schedule_on_ui` (i.e. `Tk.after`), and the app calls this from
+        `on_close()` one line before `destroy()`. Without the latch the thread
+        keeps looping, calls `after()` on a dead interpreter and dies with an
+        unhandled `RuntimeError: main thread is not in main loop` printed to
+        stderr on every exit.
+        """
+        self._stopped.set()
+        self._priority_event.set()  # break the 10 ms wait right away
         self._loader_pool.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def _schedule_ui_or_stop(self, fn, what) -> bool:
+        """Marshal `fn` to the UI thread; latch shutdown if the UI is already gone.
+
+        `shutdown()` runs one line before `Tk.destroy()`, so this thread can be
+        mid-decode when the interpreter disappears. `Tk.after` then raises
+        (`RuntimeError: main thread is not in main loop`), which would kill the
+        daemon with an unhandled traceback on stderr instead of ending the
+        session quietly. Mirrors the guard `_request_advance` already has.
+        """
+        try:
+            self._schedule_on_ui(fn)
+            return True
+        except Exception as exc:
+            self._stopped.set()
+            print(f"INFO: frame_buffer: {what} dropped — the UI is gone ({exc!r}); "
+                  f"buffering stops")
+            return False
 
     # === Buffering thread =====================================================
     def background_update(self):
-        while True:
+        while not self._stopped.is_set():
             # Sleep up to 10 ms unless a jump pokes us awake earlier.
             self._priority_event.wait(timeout=0.01)
             self._priority_event.clear()
+            if self._stopped.is_set():
+                return
             ctx = self._get_buffer_context()
             if ctx is None:
                 continue
@@ -227,7 +269,9 @@ class FrameBuffer:
                             current_frame, frames_dir, display_w, display_h, downscale, gen
                         )
                     if current_frame in self._buffer:
-                        self._schedule_on_ui(self._on_priority_frame_loaded)
+                        self._schedule_ui_or_stop(
+                            self._on_priority_frame_loaded, "priority repaint"
+                        )
                         current_frame_loaded = True
 
                 # 2) Honour an explicit priority hint (e.g. _request_buffered_step
@@ -299,7 +343,7 @@ class FrameBuffer:
 
     # === Playback thread ======================================================
     def background_update_play(self):
-        while True:
+        while not self._stopped.is_set():
             ctx = self._get_playback_context()
             if ctx is not None and ctx.playing:
                 direction = 1 if ctx.direction >= 0 else -1
