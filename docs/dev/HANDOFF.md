@@ -1,7 +1,7 @@
 # Fix Implementation Handoff (TinyTouch)
 
 You are implementing **one fix** in this repository. Alongside these instructions you were
-given a **fix plan file** (`fix_<ID>.md`, from `docs/reviews/<date>/to_do/`). That plan is
+given a **fix plan file** (`fix_<ID>.md`, from `../reviews/<date>/to_do/`). That plan is
 your spec. These instructions define *how to work*; the plan defines *what to build*.
 
 This is the desktop-app counterpart of the Docker-stack handoffs used in other projects —
@@ -15,11 +15,12 @@ Tkinter app you launch by hand. Adjust expectations accordingly.
    - No CLIs/argparse (rule 3) — config file (`config.json`) or top-of-file globals.
    - Observability first (rule 0) — no silent failures; log every meaningful action with
      context. This is frequently what the review findings are *about*.
-2. **`PROJECT.md`** — architecture, data model (`FrameBundle` / pose bundle), on-disk layout,
-   the two modes, the save/export/recovery pipeline, the background threads.
+2. **[`PROJECT.md`](../../PROJECT.md)** — architecture, the layered structure, the `FrameBundle`
+   data model, the on-disk layout, the two labeling modes, the save/export/recovery
+   pipeline, the background threads.
 3. **The fix plan file you were given** — problem, chosen approach, steps, edge cases,
    testing plan, interactions.
-4. **The finding's section in `docs/reviews/<date>/review.md`** for surrounding context.
+4. **The finding's section in `../reviews/<date>/review.md`** for surrounding context.
 
 ## Contract
 
@@ -36,10 +37,11 @@ Tkinter app you launch by hand. Adjust expectations accordingly.
 
 ## Verification (red/green + manual)
 
-The app splits cleanly into a **testable pure-function core** (I/O, parsing, data model in
-`data_utils.py`, `pose_mismatch_data.py`, `config_utils.py`,
-`frame_utils.check_items_count`) and a **GUI shell** (Tkinter callbacks, threads, canvas
-rendering). Each finding's plan says which half it lives in.
+The app splits cleanly into a **testable core** (`src/domain/`, `src/service_layer/` and the
+non-Tk parts of `src/adapters/`) and a **GUI shell** (`src/gui/`, `src/labeling_app.py` —
+Tkinter callbacks, threads, canvas rendering). Each finding's plan says which half it lives
+in. Tests are laid out as `tests/unit/`, `tests/integration/` and `tests/e2e/`; the e2e
+suite needs a real display and is excluded by default via the `gui` marker.
 
 - **Automatable half — red/green with pytest.** If the plan specifies a red test, write it
   in `tests/`, confirm it is **red before** your change and **green after**:
@@ -60,17 +62,18 @@ rendering). Each finding's plan says which half it lives in.
 ## Versioning
 
 Do **not** bump `program_version` for a fix. Version bumps happen **only at release time**,
-per [docs/RELEASING.md](RELEASING.md) (`src/video_model.py` `program_version` + a `v*` git
+per [RELEASING.md](../RELEASING.md) (`src/video_model.py` `PROGRAM_VERSION` + a `v*` git
 tag). A fix leaves the version untouched.
 
 ## Boundaries
 
 - **The export CSV schema is FROZEN.** External research pipelines consume
-  `export/<video>_export.csv` (and the 3D `_3d` variant) by column name and order. You may
+  `export/<video>_export.csv` by column name and order (see [DATA_FORMAT.md](../DATA_FORMAT.md)). You may
   **not** add, remove, rename, or reorder any export column, or change a column's value
   encoding, unless the plan's **"Export schema impact"** section explicitly authorises it
   (which requires coordinating the downstream pipeline). The schema-lock tests
-  (`tests/test_export_schema.py`) pin the current columns; if your change turns them red, you
+  (`tests/unit/test_export_schema.py`, plus the byte-level `tests/unit/test_export_golden_master.py`)
+  pin the current columns; if your change turns them red, you
   have broken the contract — stop. A finding that *looks* like it wants a new column (e.g. M3
   gaze/`_Look`) is resolved by removing dead code, not by extending the schema.
 - Do **not** commit or push — leave all changes in the working tree. (End with a one-line
@@ -96,5 +99,5 @@ tag). A fix leaves the version untouched.
    - Verification results with real output (pytest run showing red→green; app/log
      observations for the manual half), mapped to the plan's checklist.
    - **Export schema impact:** state explicitly `none` (and confirm
-     `tests/test_export_schema.py` is still green), or — only if the plan authorised it —
+     `tests/unit/test_export_schema.py` is still green), or — only if the plan authorised it —
      describe exactly which columns changed and how the downstream pipeline was coordinated.

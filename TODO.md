@@ -1,7 +1,11 @@
 # TODO
+- parameter 1 in the header or not?
 
 ## Notes / ideas (freeform)
 
+- merge branches
+- docs
+- rename repo to tinytouch
 - position of the version
 - description in config
 - how to delete .db for the videos and when?

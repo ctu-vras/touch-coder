@@ -2,6 +2,16 @@
 
 **TinyTouch** is a desktop annotation tool for behavioral researchers studying how infants learn to understand their own body through self-touch. It provides **Touch Labeling**: frame-by-frame annotation of which limb (LH / RH / LL / RL) touches which body zone, including onset/offset marking, gaze tracking, and customizable global / per-limb parameters.
 
+This is the developer-facing document. See also:
+
+| Document | Audience |
+| --- | --- |
+| [README.md](README.md) | Users — install and quick start |
+| [docs/ANNOTATION_GUIDE.md](docs/ANNOTATION_GUIDE.md) | Annotators — the coding manual |
+| [docs/DATA_FORMAT.md](docs/DATA_FORMAT.md) | Data consumers — the frozen export specification |
+| [docs/RELEASING.md](docs/RELEASING.md) | Maintainers — cutting a release |
+| [docs/dev/HANDOFF.md](docs/dev/HANDOFF.md) | Contributors implementing a review fix plan |
+
 ## Purpose
 
 Researchers record videos of infants and use TinyTouch to produce structured CSV datasets describing every self-contact event. These datasets feed downstream analyses of how babies develop body awareness.
@@ -24,10 +34,10 @@ The full pinned list lives in [requirements.txt](requirements.txt).
 ```
 touch-coder/
 ├── src/                          # Application source
-│   ├── main.py                   # Entry point: instantiates LabelingApp and runs mainloop
-│   ├── labeling_app.py           # Main controller (~3k LOC): video, annotation, persistence,
-│   │                             # background buffer thread, playback thread, save/export
-│   ├── video_model.py            # Video entity (LimbView wrappers over the frames dict)
+│   ├── main.py                   # Entry point: layout migration, then LabelingApp.mainloop()
+│   ├── labeling_app.py           # Main controller (~2.3k LOC): video, annotation, persistence,
+│   │                             # frame buffer + playback wiring, save/export orchestration
+│   ├── video_model.py            # Video entity + PROGRAM_VERSION (LimbView wrappers over frames)
 │   ├── perf_utils.py             # Optional perf timer + periodic summary logging
 │   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
 │   ├── domain/                   # PURE rules: no I/O, no Tk, no plotting, no config
@@ -66,21 +76,40 @@ touch-coder/
 │           └── zones3_new_template/  # Alternate zone set (config: new_template = true)
 ├── data/                         # Output (gitignored) -- one folder per video
 ├── videos/                       # Source videos (gitignored except cat3.mp4 sample)
-├── tests/                        # Benchmark / dev scripts (e.g. frame extraction)
+├── tests/                        # pytest suite: unit/ + integration/ + e2e/ (see "Testing")
+├── scripts/bench/                # Standalone benchmarks (e.g. frame-extraction timing)
 ├── assets/, docs/, .github/      # REPO-ONLY static assets, docs, CI workflow
 │                                 # (assets/icons_unused/ = quarantined images)
 ├── config.json                   # User-configurable settings (see "Configuration")
+├── pytest.ini                    # testpaths, the `gui` marker, default deselection
 ├── requirements.txt              # Pinned Python dependencies
 └── TinyTouch.spec                # PyInstaller build spec
 ```
 
 ## Architecture
 
+The codebase follows the layering of *Architecture Patterns with Python*: four layers with a
+one-way dependency rule.
+
+| Layer | May import | Holds | Must never |
+| --- | --- | --- | --- |
+| `domain/` | stdlib, pandas (as a data container only) | Data shapes and pure rules: `FrameRecord` / `FrameBundle`, `ProjectPaths`, zone hit test, episode reconstruction and statistics | Touch the filesystem, Tk, plotly, cv2, adapters or services |
+| `adapters/` | `domain`, third-party I/O libraries | The I/O edges: SQLite, CSV/JSON writers and readers, cv2/ffmpeg, plotly figures, config file, atomic writes | Contain a rule that could live in `domain` |
+| `service_layer/` | `domain`, `adapters` | Use cases: the save Unit of Work, project open, annotation mutations, analysis run, migrations | Import Tk or build a figure |
+| `gui/` + `labeling_app.py` | everything below | Tkinter only: widgets, bindings, canvases, dialogs, threads | Reimplement a rule or a file format |
+
+The domain rule is enforced mechanically: `tests/unit/test_touch_stats.py`
+(`test_domain_layer_imports_nothing_from_the_outer_layers`) AST-parses every file under
+`src/domain/` and fails on a banned import. Two conventions ride on top of it: the services
+never read `config.json` (the GUI passes its `AppConfig` snapshot down as arguments), and
+`adapters.plotting` never computes a statistic — it receives finished domain objects, so
+the numbers are reproducible without plotly.
+
 TinyTouch is a single-process Tkinter app organized around one controller (`LabelingApp`, a `tk.Tk` subclass) that owns:
 
 - the `Video` model (raw video info + per-frame data dict),
 - the UI built by `ui_components.build_ui(app)` (frames, canvases, buttons, key bindings),
-- two daemon threads for I/O-bound work (frame buffering and playback advance),
+- a `FrameBuffer` (`adapters.frame_buffer`) owning the read-ahead and playback threads,
 - the working-state repository (`adapters.sqlite_repo`) plus the save / project
   services that orchestrate it.
 
@@ -124,12 +153,23 @@ Each `FrameRecord` holds aligned `X` / `Y` click lists, `Onset` (`"ON"`/`"OFF"`/
 
 ### Background processes
 
-Two daemon threads start lazily after a video is loaded:
+[`adapters.frame_buffer.FrameBuffer`](src/adapters/frame_buffer.py) owns two daemon loops plus
+a 3-worker decode pool; they start lazily after a video is loaded. The GUI is reached only
+through the callbacks injected at construction (`schedule_on_ui`, `on_status_change`,
+`apply_play_advance`, …), so no worker ever touches a Tk widget — the buffering loop reads a
+`BufferContext` snapshot instead of calling `winfo_width()`.
 
-- **`background_update`** -- keeps a sliding window of decoded JPEG frames around the current frame in `self.img_buffer` (read-ahead 50, look-back 30, hard cap ±200, byte budget `BUFFER_MAX_BYTES = 1 GB`). It also flips the on-screen `Buffer Loaded` / `Buffer Loading` indicator.
-- **`background_update_play`** -- when Play is pressed, advances `current_frame` only after the buffer reports ready, throttled by `PLAYBACK_BUFFER_PAUSE_S` to avoid stutter.
+- **Buffering loop** -- keeps decoded JPEG frames around the current frame, with an
+  asymmetric, velocity-aware window: base read-ahead 50 / look-back 30, widened in the
+  direction of the last navigation step (at least `2 × jump_frame_count`) and halved on the
+  other side. Eviction keeps at least ±200 frames and scales with the window; the byte
+  budget is `BUFFER_MAX_BYTES = 1 GB`. It also flips the on-screen `Buffer: Loaded` /
+  `Buffer: Loading` chip.
+- **Playback loop** -- when Play is pressed, advances `current_frame` only once the next
+  `PLAYBACK_BUFFER_AHEAD = 3` frames are buffered, pausing `PLAYBACK_BUFFER_PAUSE_S = 1.0` s
+  when they are not, so playback stalls rather than stutters.
 
-Frame extraction (`frame_utils.create_frames`) runs synchronously inside a small Tk progress window the first time a video is opened:
+Frame extraction (`adapters.frame_extractor.create_frames`) runs synchronously inside a small Tk progress window the first time a video is opened:
 
 1. **Reliability mode** -- if frames already exist for the *non-reliability* original of the same video, copy them over instead of re-extracting.
 2. **ffmpeg path** -- bundled via `imageio-ffmpeg`, called as `ffmpeg -i video -q:v 2 -start_number 0 frames/frame%d.jpg` (fast).
@@ -147,13 +187,15 @@ The choice is persisted in `config.json` (`last_labeling_mode`).
 
 ### Touch Annotation
 
-- Navigate frame-by-frame: arrow keys, mouse wheel, `<<` / `<` / `>` / `>>` buttons, Play / Stop, click on Timeline 1 / Timeline 2.
+- Navigate frame-by-frame: `←` / `→`, mouse wheel, `<<` / `<` / `>` / `>>` buttons, `Space` or Play / Stop, click on either timeline. `Shift`+arrow and `<<` / `>>` jump by `jump_seconds` worth of frames. All key bindings live in `gui.ui_components._bind_navigation` and are suppressed while the note entry has focus (`_guard_key`).
 - Pick a limb (RH / LH / RL / LL) via radio buttons; the diagram re-renders with that limb's overlays.
-- **Left-click** on the diagram = touch-onset (green dot), **right-click** = touch-offset (red dot), **middle-click** or `d` = remove nearest dot.
-- Zones under each click are auto-detected from per-zone PNG masks under [src/resources/icons/zones3/](src/resources/icons/zones3/) (or [src/resources/icons/zones3_new_template/](src/resources/icons/zones3_new_template/) when `new_template = true`). Both directories are loaded by directory scan (`adapters.zone_masks.load_zone_masks`), so *every* PNG in them is live -- adding a file adds a zone.
-- Track infant gaze (`Looking: Yes / No`) and up to 3 global + 3 per-limb parameters (button labels are user-editable in Settings → persisted to `config.json`).
+- **Left-click** on the diagram = touch-onset (green dot), **right-click** = touch-offset (red dot), **middle-click** or `d` = remove the dot nearest the pointer (within ~20 display px).
+- Zones under each click are auto-detected from per-zone PNG masks under [src/resources/icons/zones3/](src/resources/icons/zones3/) (or [src/resources/icons/zones3_new_template/](src/resources/icons/zones3_new_template/) when `new_template = true`). Both directories are loaded by directory scan (`adapters.zone_masks.load_zone_masks`), so *every* PNG in them is live -- adding a file adds a zone. Masks are black-on-white; a hit is pixel `== 0`, first match in sorted filename order wins, a miss yields the `NN` sentinel (`domain.touch.zones_at`).
+- Track infant gaze and up to 3 global + 3 per-limb parameters. Each button is a three-state toggle (`unset → ON → OFF → unset`, `domain.touch.cycle_param_state`); gaze is global `Par1`. Button labels are user-editable in Settings → persisted to `config.json` and written into the export metadata, but the export COLUMN names never change.
 - Six "boxes" on the diagram act as catch-all zones (ground, prop, etc).
-- Two timelines visualize all touch events; the lower one is the global scrub bar.
+- Two timelines visualize all touch events; the upper, slimmer one is the global scrub bar and the taller one is the 100-frame detail view for the selected limb.
+
+The annotator-facing version of all of this is [docs/ANNOTATION_GUIDE.md](docs/ANNOTATION_GUIDE.md).
 
 ## Data Layout on Disk
 
@@ -179,7 +221,7 @@ them.
 
 ### Legacy layout & automatic migration
 
-Before v8.1 the same tree was named `Labeled_data/<video_name>/data/...` and
+Up to and including `v8.0.0` the same tree was named `Labeled_data/<video_name>/data/...` and
 source videos lived in `Videos/`. Those names are gone from the app's path
 logic; the only code that still knows them is
 [src/service_layer/migration_service.py](src/service_layer/migration_service.py),
@@ -247,7 +289,11 @@ byte-identical to the export produced from the original CSVs
 
 ### Touch export schema
 
-`<video>_export.csv` columns (from `export_from_unified` in [src/adapters/export_writer.py](src/adapters/export_writer.py)):
+The full, normative specification — every column, every cell encoding, the metadata
+sidecar, and the semantic conventions downstream analysis must follow — is
+**[docs/DATA_FORMAT.md](docs/DATA_FORMAT.md)**. Summary for orientation only:
+
+`<video>_export.csv` columns (from `export_from_unified` in [src/adapters/export_writer.py](src/adapters/export_writer.py)), one row per frame `0..total_frames` inclusive:
 
 ```
 Frame, Time_ms,
@@ -260,28 +306,42 @@ LH_Parameter_1..3, LL_Parameter_1..3, RH_Parameter_1..3, RL_Parameter_1..3,
 Note
 ```
 
-`{limb}_X`/`Y` are comma-separated coordinate lists (multiple clicks per frame allowed); `{limb}_Zones` is a JSON list-of-lists aligned with the click list.
+Note the limb block order is **LH, LL, RH, RL** — not the `domain.model.LIMBS` order
+(`LH, RH, LL, RL`) the rest of the app uses. `{limb}_X`/`Y` are comma-separated coordinate lists (multiple clicks per frame allowed); `{limb}_Zones` is a JSON list-of-lists aligned with the click list.
 
-For migration notes affecting external analysis pipelines, see [docs/EXPORT_NOTES.md](docs/EXPORT_NOTES.md).
+**This schema and its byte-level encoding are FROZEN.** Three test files pin it:
+`tests/unit/test_export_schema.py` (column set + order),
+`tests/unit/test_export_golden_master.py` (a checked-in fixture compared byte for byte) and
+`tests/unit/test_export_metadata.py` (sidecar keys, order and formatting). Changing any of
+them means breaking published research datasets, and requires coordinating with the
+downstream pipeline first.
 
 ## Configuration
 
-[config.json](config.json) is read on startup and after every Settings dialog "Apply". Keys:
+[config.json](config.json) is read on startup and after every Settings dialog "Apply". It is
+parsed once into an `AppConfig` snapshot ([src/adapters/config.py](src/adapters/config.py))
+that the GUI holds and passes down; nothing below the GUI re-reads the file. Unknown keys
+survive a Settings round-trip (`AppConfig.raw` keeps the full parsed dict). Keys:
 
-| Key | Purpose |
-| --- | --- |
-| `diagram_scale` | Diagram render scale (1.0 = native). |
-| `dot_size` | Click-marker radius on the diagram. |
-| `new_template` | Use the alternate touch zone set + diagram. |
-| `minimal_touch_length` | Visualization threshold (ms) for "minimal touch length" label. |
-| `parameter1..3` | Display labels for the three global parameter buttons. |
-| `limb_parameter1..3` | Display labels for the three per-limb parameter buttons. |
-| `video_downscale` | Display-only video downscale factor (1 = full, 2 = half). Affects rendering speed only. |
-| `jump_seconds` | Fast-jump distance in seconds for `<<` / `>>` and Shift+Arrow. |
-| `perf_enabled` / `perf_log_every_s` / `perf_log_top_n` | Optional `PerfLogger` (see [src/perf_utils.py](src/perf_utils.py)). When on, prints rolling averages of timed code blocks (`background_update`, click handlers, etc.). |
-| `last_labeling_mode` | Last-chosen `Normal` / `Reliability`. |
+| Key | Settings UI | Purpose |
+| --- | --- | --- |
+| `diagram_scale` | yes | Diagram render scale (1.0 = native). Display only — stored click coordinates are always at native scale. |
+| `dot_size` | yes | Click-marker radius on the diagram. |
+| `new_template` | no | Use the alternate touch zone set + diagram. |
+| `minimal_touch_length` | no | Visualization threshold (ms) shown as the "Minimal Touch Length" readout, converted to frames. **Filters nothing**, in the app or in Analysis. |
+| `parameter1..3` | yes | Display labels for the three global parameter buttons. |
+| `limb_parameter1..3` | yes | Display labels for the three per-limb parameter buttons. |
+| `video_downscale` | yes | Display-only video downscale factor (1 = full, 2 = half). Affects rendering speed only. |
+| `jump_seconds` | yes | Fast-jump distance in seconds for `<<` / `>>` and Shift+Arrow; multiplied by the frame rate at load time into `jump_frame_count`. |
+| `realtime_arrow_hold` | yes | Holding an arrow key plays at the video's frame rate instead of stepping. |
+| `perf_enabled` / `perf_log_every_s` / `perf_log_top_n` | no | Optional `PerfLogger` (see [src/perf_utils.py](src/perf_utils.py)). When on, prints rolling averages of timed code blocks (buffer loop, click handlers, etc.). |
+| `max_display_width` / `max_display_height` | no | Optional hard caps on the rendered video size (`0` = unlimited). |
+| `last_labeling_mode` | no | Last-chosen `Normal` / `Reliability`; written by the mode dialog. |
 
-When the app is run from a PyInstaller bundle, `config_utils._ensure_config_file()` copies the bundled default to the install directory the first time so users get a writable copy.
+Defaults for every key live in `adapters.config.CONFIG_DEFAULTS`, so a missing or corrupt
+`config.json` degrades to defaults with a WARN instead of failing. When the app is run from
+a PyInstaller bundle, `adapters.config._ensure_config_file()` copies the bundled default to
+the install directory the first time so users get a writable copy.
 
 ## Application Workflow
 
@@ -322,12 +382,42 @@ Rules that downstream research depends on -- documented at length in
 | **Transitions are pairwise** | A touch with 2 start zones and 2 end zones contributes 4 heatmap counts, so heatmap totals exceed the touch count. Stated in the heatmap subtitle. |
 | **`minimal_touch_length` is not a filter** | It is a GUI display threshold only; analysis counts every closed touch, 1-frame ones included. |
 | **Frame rate may be unusable** | `None` / `0` / negative fps (some containers report 0) never crashes: frame-based results are produced in full, every seconds-based value is empty, and the duration histogram switches to frame buckets. |
+| **Zoneless ends fall back to `NN`** | Only for transitions, so a touch with no zone on an edge still appears in the matrix. `zone_touch_count` never gets the sentinel — it counts observed zones only. |
 | **fps provenance** | An explicitly passed, usable frame rate wins; otherwise `"Frame Rate"` from `export/<name>_metadata.json`; otherwise frame-only mode. The winning source is logged. |
+
+These rules are also stated for external readers in
+[docs/DATA_FORMAT.md](docs/DATA_FORMAT.md#3-semantic-conventions); keep the two in step.
+
+The written artifacts and their file names are a contract too (`write_master_html` links
+them and users bookmark them): `heatmap_<LIMB>.html`, `touch_trajectory.html`,
+`analysis_table_frames.csv`, `analysis_table_seconds.csv`, `table.html`, `histogram.html`,
+`histogram_2.html`, `master_<name>.html`.
+
+## Testing
+
+```bash
+uv run pytest                 # 288 passed, 1 skipped, 3 deselected
+uv run pytest -m gui          # the excluded end-to-end GUI tests (needs a display)
+```
+
+[pytest.ini](pytest.ini) sets `testpaths = tests` and `addopts = -m "not gui"`, so the
+default run is headless. The suite is a pyramid:
+
+| Directory | Scope |
+| --- | --- |
+| `tests/unit/` | Pure rules and single adapters: export encoding, config, SQLite repository, touch statistics, zone detection, thread-boundary guards, theme. |
+| `tests/integration/` | Several layers together: the analysis pipeline end to end, the directory-layout migration, the legacy-state → SQLite migration, the load/save lifecycle. |
+| `tests/e2e/` | A real Tk root driven through `tests/e2e/gui_driver.py` — smoke test, annotate/save/export, upgrade path. Marked `gui` and deselected by default. |
+
+The two migration guarantees worth knowing: `tests/integration/test_sqlite_migration.py`
+asserts that the export produced from a migrated DB is byte-identical to the export
+produced from the original CSVs, and the three export-lock test files described above pin
+the published format.
 
 ## Local Build
 
 ```bash
-pyinstaller TinyTouch.spec
+uv run pyinstaller TinyTouch.spec
 ```
 
 Produces a standalone executable in `dist/`. The spec bundles two `datas` entries, and their destinations must stay in step with [src/gui/resource_utils.py](src/gui/resource_utils.py):
@@ -348,7 +438,7 @@ A GitHub Actions workflow ([.github/workflows/build.yml](.github/workflows/build
 Quick reference:
 
 ```bash
-# Bump src/video_model.py program_version, commit, push to master, then:
-git tag v7.7.0
-git push origin v7.7.0
+# Bump PROGRAM_VERSION in src/video_model.py, commit, push to master, then:
+git tag v8.1.0
+git push origin v8.1.0
 ```

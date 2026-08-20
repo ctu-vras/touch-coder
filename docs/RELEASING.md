@@ -42,20 +42,23 @@ Run through this before tagging. None of these are enforced by CI — they're so
 
 ## Bump version
 
-The `program_version` string is **hardcoded** in [src/video_model.py](../src/video_model.py) (around lines 67-72):
+The version is the `PROGRAM_VERSION` constant near the top of
+[src/video_model.py](../src/video_model.py); the per-OS suffix is appended at runtime:
 
 ```python
-if sys.platform.startswith("win"):
-    self.program_version = "7.6.0 (Windows)"
-elif sys.platform.startswith("linux"):
-    self.program_version = "7.6.0 (Linux)"
-else:
-    self.program_version = "7.6.0 (Unknown OS)"
+PROGRAM_VERSION = "8.0.0"
+...
+    if sys.platform.startswith("win"):
+        self.program_version = f"{PROGRAM_VERSION} (Windows)"
+    elif sys.platform.startswith("linux"):
+        self.program_version = f"{PROGRAM_VERSION} (Linux)"
+    else:
+        self.program_version = f"{PROGRAM_VERSION} (Unknown OS)"
 ```
 
-**This string is stamped into every export's metadata JSON sidecar** (`data/<video>/export/<video>_metadata.json`, `Program Version` field). Researchers reading old datasets rely on it to know which TinyTouch produced them, so it must match the git tag you're about to push.
+**This string is stamped into every export's metadata JSON sidecar** (`data/<video>/export/<video>_metadata.json`, `Program Version` field — see [DATA_FORMAT.md](DATA_FORMAT.md)). Researchers reading old datasets rely on it to know which TinyTouch produced them, so it must match the git tag you're about to push.
 
-Edit the three lines, commit, then push to master **before** tagging:
+Edit the constant, commit, then push to master **before** tagging:
 
 ```bash
 # After editing src/video_model.py
@@ -79,7 +82,8 @@ Rules for tag names:
 
 - **Must start with `v`** (e.g. `v7.7.0`). Tags without `v` won't trigger any build.
 - **Tags ending in `-legacy` are skipped** by every job — the legacy build runs on regular tags, this suffix is reserved.
-- Use `MAJOR.MINOR.PATCH` semver. The latest tag at time of writing was `v7.6.0`.
+- Use `MAJOR.MINOR.PATCH` semver. Check the current latest tag with
+  `git tag --list --sort=-v:refname | head -1` rather than trusting this document.
 
 If you tagged the wrong commit, see [Re-tagging](#re-tagging).
 
@@ -166,7 +170,7 @@ TinyTouch follows [semver](https://semver.org/) loosely:
 - **MINOR** (`7.6.x` → `7.7.0`) — new user-facing feature, new mode, new config key. Existing datasets keep working.
 - **PATCH** (`7.6.0` → `7.6.1`) — bug fixes, performance, internal refactors. Behavior is the same from the user's point of view.
 
-Recent history (most recent first): `v7.6.0`, `v7.5.7`, `v7.5.6`, `v7.5.5`, ...
+Recent history (most recent first): `v8.0.0`, `v7.8.0`, `v7.7.1`, `v7.7.0`, `v7.6.0`, ...
 
 ## Common pitfalls
 
