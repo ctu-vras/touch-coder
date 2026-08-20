@@ -4,19 +4,17 @@ The locale-dependent cases are red before the fix on cp1252 Windows.  They may
 already pass on UTF-8-default platforms, but the legacy notes fallback remains
 independently testable everywhere.
 
-Working state moved into `state/<video>.db`, so the notes and limb-parameter
-CSVs no longer have writers — they are migration inputs only. The reader-side
-encoding invariants still matter (those files are exactly what the migration
-must decode), so they are asserted against hand-built bytes instead of a
-round-trip through a retired writer. SQLite stores text as UTF-8 by definition,
-which is re-asserted on the live path so the guarantee is not just implied.
+Working state lives in `state/<video>.db`. The legacy notes and
+limb-parameter CSV readers were deleted in 9.0 with the rest of the migration,
+so their encoding tests went with them; what remains is the CURRENT text I/O:
+config.json and the SQLite store (UTF-8 by definition, re-asserted so the
+guarantee is not just implied).
 """
 
 import json
 
 from adapters import config as config_utils
 from adapters.sqlite_repo import SqliteRepository
-from adapters.unified_repo import load_limb_parameters, load_notes_csv
 from domain.model import empty_bundle
 
 
@@ -31,39 +29,6 @@ def test_M6_config_reads_utf8(tmp_path, monkeypatch):
     monkeypatch.setattr(config_utils, "get_config_path", lambda: str(config_path))
 
     assert config_utils.load_config()["parameter1"] == NOTE
-
-
-def test_M6_notes_utf8_and_cp1252_fallback(tmp_path, capsys):
-    utf8_path = tmp_path / "utf8_notes.csv"
-    cp1252_path = tmp_path / "legacy_notes.csv"
-    csv_text = f"Frame,Note\r\n7,{NOTE}\r\n"
-    utf8_path.write_bytes(csv_text.encode("utf-8"))
-    cp1252_path.write_bytes(csv_text.encode("cp1252"))
-
-    assert load_notes_csv(utf8_path) == {7: NOTE}
-    assert load_notes_csv(cp1252_path) == {7: NOTE}
-
-    warning = capsys.readouterr().out
-    assert str(cp1252_path) in warning
-    assert "retrying as cp1252" in warning
-
-
-def test_M6_limb_parameters_csv_is_read_as_utf8(tmp_path):
-    """REPLACES the round-trip through `save_limb_parameters` (deleted with the
-    other state writers — it had no app caller). The invariant that mattered was
-    always the READ: a limb-parameters CSV holding non-ASCII must decode as
-    UTF-8 rather than the Windows ANSI codepage.
-    """
-    path = tmp_path / "limb_parameters.csv"
-    path.write_bytes(
-        f"Limb,Frame,Parameter,State\r\nLH,4,Parameter_1,{NOTE}\r\n".encode("utf-8")
-    )
-
-    parameter1, parameter2, parameter3 = load_limb_parameters(path)
-
-    assert parameter1 == {("LH", 4): NOTE}
-    assert parameter2 == {}
-    assert parameter3 == {}
 
 
 def test_M6_state_db_round_trips_utf8_notes_and_params(tmp_path):
@@ -88,18 +53,6 @@ def test_M6_state_db_round_trips_utf8_notes_and_params(tmp_path):
         assert loaded["LH"]["LimbParams"] == {"Par1": NOTE}
     finally:
         second.close()
-
-
-def test_M6_legacy_notes_table_round_trips_utf8(tmp_path):
-    """The migrated notes sidecar keeps its diacritics inside the DB."""
-    repo = SqliteRepository(str(tmp_path / "state" / "vid.db"))
-    try:
-        with repo.transaction():
-            repo.import_legacy_notes({7: NOTE})
-
-        assert repo.load_legacy_notes() == {7: NOTE}
-    finally:
-        repo.close()
 
 
 # === log-line encoding (the arrow that ate a migration) =======================

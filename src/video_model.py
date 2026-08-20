@@ -47,6 +47,3 @@ class Video:
         self.parameter1_name = None
         self.parameter2_name = None
         self.parameter3_name = None
-        # Display-only note fallback for pre-unified projects, loaded from the
-        # state DB's `legacy_notes` table (never part of bundle["Note"]).
-        self.notes = {}

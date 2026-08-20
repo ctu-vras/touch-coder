@@ -1,7 +1,6 @@
 import sys
 
 from labeling_app import LabelingApp
-from service_layer.migration_service import migrate_layout
 
 
 def _harden_console_encoding():
@@ -14,7 +13,9 @@ def _harden_console_encoding():
     unusual character in a video path or a box-drawing character raises
     UnicodeEncodeError from inside `print`. That exception then surfaces
     wherever the log line happened to be, which has already cost one silent
-    data-loss bug (see `adapters.unified_repo.load_unified_dataset`).
+    data-loss bug: a DEBUG line with a Unicode arrow raised inside the retired
+    `unified_repo.load_unified_dataset`, whose `except Exception` guard read it
+    as "unreadable CSV" and migrated zero frames.
     """
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -26,8 +27,5 @@ def _harden_console_encoding():
 if __name__ == "__main__":
     _harden_console_encoding()
     print("Labeling App starting...")
-    # Bring a pre-rename on-disk layout (Labeled_data/, <video>/data/, Videos/)
-    # up to date before anything reads a path. Idempotent and never raises.
-    migrate_layout()
     app = LabelingApp()
     app.mainloop()

@@ -40,7 +40,6 @@ def build_ui(app):
     # (constructed in LabelingApp.__init__), not on the widget tree.
     app.play = False
     app.play_thread_on = False
-    app.notes_file_path = None
     app.progress = {}
     app.frame_rate = None
     app.last_mouse_x = 0

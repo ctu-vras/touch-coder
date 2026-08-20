@@ -1,39 +1,54 @@
-"""M1 regression guards for canonical cleared limb-parameter state."""
+"""M1 regression guards for canonical cleared limb-parameter state.
+
+`toggle_limb_parameter` once stored the literal string `"None"` instead of a
+real `None`, so both live paths that read a limb parameter back must normalize
+it: the state DB on load and the exporter on write.
+
+The two tests that pinned this through `load_unified_dataset` /
+`import_unified_from_export` went with those readers in 9.0. The invariant did
+not go anywhere, so it is pinned here on the rule itself plus the SQLite
+round-trip that replaced the journal.
+"""
 
 import csv
-import json
 
 from adapters.export_writer import export_from_unified
-from adapters.unified_repo import (
-    import_unified_from_export,
-    load_unified_dataset,
-)
-from domain.model import empty_bundle
+from adapters.sqlite_repo import SqliteRepository
+from domain.model import _normalize_param_state, empty_bundle
 
 
-def test_M1_load_unified_normalizes_none_string(tmp_path):
-    path = tmp_path / "vid_unified.csv"
-    limb = {
-        "X": [10],
-        "Y": [20],
-        "Onset": "ON",
-        "Bodypart": "LH",
-        "Look": "No",
-        "Zones": [["FACE"]],
-        "Touch": None,
-        "LimbParams": {"Par1": "None", "Par2": "ON", "Par3": None},
-    }
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh, fieldnames=["Frame", "Note", "Params", "LH", "RH", "LL", "RL"]
-        )
-        writer.writeheader()
-        writer.writerow({"Frame": 4, "Params": "{}", "LH": json.dumps(limb)})
+def test_M1_normalize_param_state_rule():
+    """The pure rule: only None / '' / the string 'None' clear a parameter."""
+    assert _normalize_param_state("None") is None
+    assert _normalize_param_state("") is None
+    assert _normalize_param_state(None) is None
+    assert _normalize_param_state("ON") == "ON"
+    assert _normalize_param_state("OFF") == "OFF"
 
-    frames = load_unified_dataset(str(path))
 
-    assert frames[4]["LH"]["LimbParams"]["Par1"] is None
-    assert frames[4]["LH"]["LimbParams"]["Par2"] == "ON"
+def test_M1_state_db_normalizes_none_string(tmp_path):
+    """A bundle carrying the legacy `"None"` string must come back as a real
+    None from the state DB — the live replacement for the journal loader."""
+    bundle = empty_bundle()
+    bundle["LH"]["LimbParams"] = {"Par1": "None", "Par2": "ON", "Par3": None}
+    bundle["Changed"] = True
+
+    db = str(tmp_path / "state" / "vid.db")
+    repo = SqliteRepository(db)
+    try:
+        repo.save_frames({4: bundle}, total_frames=5)
+    finally:
+        repo.close()
+
+    repo = SqliteRepository(db)
+    try:
+        limb_params = repo.load_frames()[4]["LH"]["LimbParams"]
+    finally:
+        repo.close()
+
+    assert limb_params["Par1"] is None
+    assert limb_params["Par2"] == "ON"
+    assert limb_params["Par3"] is None
 
 
 def test_M1_export_writes_empty_for_none_string(tmp_path):
@@ -55,15 +70,3 @@ def test_M1_export_writes_empty_for_none_string(tmp_path):
     with out.open(newline="", encoding="utf-8") as fh:
         row = next(csv.DictReader(fh))
     assert row["LH_Parameter_1"] == ""
-
-
-def test_M1_import_export_normalizes(tmp_path):
-    path = tmp_path / "vid_export.csv"
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["Frame", "LH_Parameter_1"])
-        writer.writeheader()
-        writer.writerow({"Frame": 2, "LH_Parameter_1": "None"})
-
-    frames = import_unified_from_export(str(path))
-
-    assert frames[2]["LH"]["LimbParams"]["Par1"] is None

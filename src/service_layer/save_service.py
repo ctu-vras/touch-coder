@@ -49,7 +49,7 @@ class MetadataInputs:
 def load_clothes_zones(repo: Optional[SqliteRepository]):
     """Clothes-zone list for the export metadata, or None without a repo.
 
-    Reproduces the retired `unified_repo.extract_zones_from_file` exactly
+    Reproduces the retired sidecar reader `extract_zones_from_file` exactly
     (set-deduplicated, UNSORTED, a multi-zone dot contributing its whole
     comma-joined string as one entry) because
     `export/<video>_metadata.json` is a frozen contract.

@@ -15,13 +15,12 @@ the previous complete file or the new complete file — never a half-written one
 On ANY exception before the replace the temp file is discarded and the original
 is left untouched.
 
-Live callers: `adapters.export_writer` (export CSV + metadata sidecar) and the
-clothes/last-position writers' successor is SQLite, so this is the only
-file-write primitive left. Its sibling `durable_append` was deleted with the
-unified-CSV journal — appending is exactly what SQLite replaced, and the
+Live callers: `adapters.export_writer` (export CSV + metadata sidecar) and
+`adapters.config` (config.json). Working state goes through SQLite, so this is
+the only file-write primitive left. Its sibling `durable_append` was deleted with
+the unified-CSV journal — appending is exactly what SQLite replaced — and the
 `keep_backup` `.bak` path went with it (it existed only for the two journal
-writers; the state DB's recovery point is the `*.migrated` sources plus the
-export CSV).
+writers).
 """
 
 import os

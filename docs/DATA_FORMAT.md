@@ -386,13 +386,23 @@ header row. That metadata now lives in `<video>_metadata.json` and the CSV start
 header. Readers that need to handle both layouts should skip 6 lines when the first line is
 not the header — this is what `src/adapters/export_reader.py` does.
 
-### Folder layout renamed (after v8.0.0)
+### Folder layout renamed, working state moved to SQLite (v9.0.0)
 
 The output root was renamed `Labeled_data/` → `data/`, the per-video working-state folder
-`<video>/data/` → `<video>/state/`, and the source-video folder `Videos/` → `videos/`.
-TinyTouch migrates an old tree automatically on startup (directory renames only). Scripts
-with hardcoded `Labeled_data/...` paths need updating; the export file **name** and its
-position inside `export/` are unchanged.
+`<video>/data/` → `<video>/state/`, and the source-video folder `Videos/` → `videos/`. At
+the same time the working state became a single SQLite database,
+`state/<video>.db`, replacing the `<video>_unified.csv` journal and its five CSV/JSON/TXT
+sidecars.
+
+**There is no automatic migration.** v9.0.0 reads the new layout only. Opening a project
+created by v8.0.0 or earlier produces an EMPTY project — and because every save rewrites
+the export CSV from the in-memory store, the first save then overwrites
+`export/<video>_export.csv` with empty rows. Treat pre-v9 project folders as read-only
+archives and keep copies of their `*_export.csv` files.
+
+Scripts with hardcoded `Labeled_data/...` paths need updating. The export file **name**,
+its position inside `export/`, and its schema are unchanged — v9 still reads exports
+written by every earlier version, including the pre-v8 preamble layout above.
 
 ### 3D pose mode removed (after v8.0.0)
 

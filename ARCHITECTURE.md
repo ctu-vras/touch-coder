@@ -32,7 +32,7 @@ The full pinned list lives in [requirements.txt](requirements.txt).
 ```
 touch-coder/
 ├── src/                          # Application source
-│   ├── main.py                   # Entry point: layout migration, then LabelingApp.mainloop()
+│   ├── main.py                   # Entry point: builds and runs LabelingApp.mainloop()
 │   ├── labeling_app.py           # Main controller (~2.3k LOC): video, annotation, persistence,
 │   │                             # frame buffer + playback wiring, save/export orchestration
 │   ├── app_info.py               # Application version metadata
@@ -46,7 +46,6 @@ touch-coder/
 │   │   └── touch_stats.py        # Episode reconstruction + touch statistics (Analysis core)
 │   ├── adapters/                 # I/O edges: files, cv2/ffmpeg, plotly, config.json
 │   │   ├── sqlite_repo.py        # Working-state DB per video (SOURCE OF TRUTH)
-│   │   ├── unified_repo.py       # Legacy state READERS (migration / recovery only)
 │   │   ├── export_writer.py      # Legacy export schema + metadata sidecar (write)
 │   │   ├── export_reader.py      # Export CSV read, incl. legacy 6-line preamble
 │   │   ├── plotting.py           # Every plotly figure / CSV table / master HTML
@@ -60,9 +59,7 @@ touch-coder/
 │   │   ├── save_service.py       # The save Unit of Work
 │   │   ├── project_service.py    # Video load / project preparation, labeling timer
 │   │   ├── annotation_service.py # Click / parameter mutations on the frames dict
-│   │   ├── analysis_service.py   # Analysis: read -> validate -> compute -> write
-│   │   ├── migration_service.py  # Legacy directory-layout migration
-│   │   └── state_migration.py    # Legacy state CSV/JSON -> SQLite (once per project)
+│   │   └── analysis_service.py   # Analysis: read -> validate -> compute -> write
 │   ├── gui/                      # Tkinter only
 │   │   ├── ui_components.py      # Layout, widgets, key/mouse bindings
 │   │   ├── theme.py              # Colors / fonts / widget styling
@@ -76,7 +73,6 @@ touch-coder/
 ├── data/                         # Output (gitignored) -- one folder per video
 ├── videos/                       # Source videos (gitignored except cat3.mp4 sample)
 ├── tests/                        # pytest suite: unit/ + integration/ + e2e/ (see "Testing")
-├── scripts/bench/                # Standalone benchmarks (e.g. frame-extraction timing)
 ├── assets/, docs/, .github/      # REPO-ONLY static assets, docs, CI workflow
 ├── config.json                   # User-configurable settings (see "Configuration")
 ├── pytest.ini                    # testpaths, the `gui` marker, default deselection
@@ -93,7 +89,7 @@ one-way dependency rule.
 | --- | --- | --- | --- |
 | `domain/` | stdlib, pandas (as a data container only) | Data shapes and pure rules: `FrameRecord` / `FrameBundle`, `ProjectPaths`, zone hit test, episode reconstruction and statistics | Touch the filesystem, Tk, plotly, cv2, adapters or services |
 | `adapters/` | `domain`, third-party I/O libraries | The I/O edges: SQLite, CSV/JSON writers and readers, cv2/ffmpeg, plotly figures, config file, atomic writes | Contain a rule that could live in `domain` |
-| `service_layer/` | `domain`, `adapters` | Use cases: the save Unit of Work, project open, annotation mutations, analysis run, migrations | Import Tk or build a figure |
+| `service_layer/` | `domain`, `adapters` | Use cases: the save Unit of Work, project open, annotation mutations, analysis run | Import Tk or build a figure |
 | `gui/` + `labeling_app.py` | everything below | Tkinter only: widgets, bindings, canvases, dialogs, threads | Reimplement a rule or a file format |
 
 The domain rule is enforced mechanically: `tests/unit/test_touch_stats.py`
@@ -202,9 +198,7 @@ Each labeled video produces a self-contained folder:
 ```
 data/<video_name>/
 ├── state/                            # Working state (load/save round-trips here)
-│   ├── <video>.db                    # SQLite — THE source of truth (see below)
-│   └── *.migrated                    # Pre-SQLite CSV/JSON sources, kept forever
-│                                     # after the one-time import (never deleted)
+│   └── <video>.db                    # SQLite — THE source of truth (see below)
 ├── export/                           # Final, "publication-ready" artifacts
 │   ├── <video>_export.csv            # Flat schema (see below) -- the file analysis reads
 │   └── <video>_metadata.json         # Program version, FPS, mode, clothes zones, param labels,
@@ -217,20 +211,26 @@ Every one of these paths is derived from the `ProjectPaths` dataclass in
 [src/domain/project.py](src/domain/project.py) -- no other module hand-builds
 them.
 
-### Legacy layout & automatic migration
+### Supported data layout (no migration path)
 
-Up to and including `v8.0.0` the same tree was named `Labeled_data/<video_name>/data/...` and
-source videos lived in `Videos/`. Those names are gone from the app's path
-logic; the only code that still knows them is
-[src/service_layer/migration_service.py](src/service_layer/migration_service.py),
-which runs from `main.py` before the Tk app is built (whole-tree pass) and again
-from `project_service.prepare_project` for the video being opened. It performs
-directory renames only -- `Labeled_data/` -> `data/`, `<video>/data/` ->
-`<video>/state/`, `Videos/` -> `videos/` -- via `os.rename`, so no frames tree is
-ever copied. It is idempotent, logs every move and every skip reason, and on a
-name collision it leaves BOTH copies in place with a `WARN` rather than
-overwriting or merging. Older TinyTouch versions cannot read the new layout; the
-export CSV format itself is unchanged.
+Up to and including `v8.0.0` the same tree was named
+`Labeled_data/<video_name>/data/...`, source videos lived in `Videos/`, and the
+working state was a `<video>_unified.csv` journal plus five CSV/JSON/TXT
+sidecars. An automatic converter for both existed during 9.0 development and was
+**removed before release** — hence the major version bump. This build reads the
+layout above and `state/<video>.db` only.
+
+There is therefore no upgrade path from `8.0.x` data. Opening a pre-9.0 project
+does not fail loudly: `open_state` finds no `state/<video>.db`, creates an empty
+one, and the project shows **zero annotations** while the real data sits unread
+in `<video>_unified.csv`. Because `save_service.run_export` rewrites the export
+CSV from the in-memory store on every save, the first Save then overwrites
+`export/<video>_export.csv` with empty rows. Treat 8.0.x project folders as
+read-only archives and keep a copy of their export CSVs.
+
+The export CSV format itself is unchanged across the rename, and
+`adapters.export_reader` still tolerates the pre-8.x 6-line preamble, so
+Analysis reads old exports fine.
 
 ### Working state: `state/<video>.db`
 
@@ -241,14 +241,18 @@ labeling-time accumulator.
 
 | Table | Holds |
 | --- | --- |
-| `meta` | `video_name`, `fps`, `last_frame`, `total_frames`, `labeling_time_seconds`, `clothes_diagram_scale`, migration provenance |
+| `meta` | `video_name`, `fps`, `last_frame`, `total_frames`, `labeling_time_seconds`, `clothes_diagram_scale` |
 | `frames` | one row per frame present in the store (its EXISTENCE is data) + `note` |
 | `frame_params` | global `Par1..3`; absent row = key absent, `state IS NULL` = key present but None |
 | `limb_records` | per-limb `onset` + a `has_limb_params` flag; a limb with nothing to store has NO row and is rebuilt as `empty_record(limb)` |
 | `clicks` | `click_index` IS the `X`/`Y`/`Zones` alignment; `x`/`y` NULL = zone bucket with no click, `zones` NULL = click with no bucket |
 | `limb_params` | per-limb `Par1..3`, same NULL semantics as `frame_params` |
 | `clothes_dots` | dot id, x, y, comma-joined zone string (frozen sidecar tokenization) |
-| `legacy_notes`, `legacy_limb_params` | quarantined pre-unified sidecar rows — stored so nothing is lost, NOT merged into the bundles (they never reached the export, and promoting them would change published datasets) |
+
+Databases created during 9.0 development may also carry two now-unused tables,
+`legacy_notes` and `legacy_limb_params`, plus `migrated_at` / `migrated_sources`
+rows in `meta`. Nothing reads or writes them; `CREATE TABLE IF NOT EXISTS` simply
+no longer lists them, so they are inert leftovers rather than schema.
 
 Operational choices, all deliberate:
 
@@ -263,27 +267,20 @@ The split between the state DB and `export/<video>_export.csv` stays deliberate:
 - **State DB** is the source of truth for round-trips, written incrementally.
 - **Export CSV** is rewritten from scratch each save with one row per frame in the canonical legacy column order. Downstream consumers (Analysis, external tooling) read this file.
 
-### First open of a pre-SQLite project
+### Opening a project
 
-[src/service_layer/state_migration.py](src/service_layer/state_migration.py) runs
-once per project, from `project_service.open_state`. If `state/<video>.db` is
-missing it reads every legacy source with the **existing readers** — which all
-stay in the codebase permanently as the migration + disaster-recovery path —
-writes them into a fresh DB in ONE transaction, then renames each consumed
-source to `<name>.migrated`. Nothing is ever deleted; on a rename collision both
-copies are kept with a `WARN`. If the import raises, the partial DB is discarded
-and no source is renamed, so the next attempt starts from the same inputs. Once
-the DB exists it wins: a legacy file that reappears is never re-imported.
+`project_service.open_state` constructs `SqliteRepository(paths.state_db)`,
+which creates the schema when the file is new, so the same call is both the
+create path for a brand-new project and the open path for an existing one. It
+then re-stamps the provenance meta (`video_name`, `fps`,
+`created_by_version`) on every open, which is cheap and keeps an orphaned DB
+self-describing. `repo.load_frames()` stays a separate step so the GUI can start
+its labeling timer between the two.
 
-The recovery ladder is unchanged: `state/<video>_unified.csv`
-(`load_unified_dataset`, still resolving duplicate rows last-writer-wins and
-tolerating a crash-torn final row) → `export/<video>_export.csv`
-(`import_unified_from_export`) → legacy per-limb CSVs (`csv_to_dict`). The export
-CSV is a published artifact and a recovery input, so it is never renamed.
-
-The migration is verified end-to-end: the export produced from a migrated DB is
-byte-identical to the export produced from the original CSVs
-(`tests/integration/test_sqlite_migration.py`).
+`SCHEMA_VERSION` stays at 1: the removed migration never changed the shape of a
+table this build reads, so no DB needs upgrading. `_upgrade_from` still refuses to
+open a database written by a NEWER build rather than silently dropping fields on
+the next save.
 
 ### Touch export schema
 
@@ -404,13 +401,14 @@ default run is headless. The suite is a pyramid:
 | Directory | Scope |
 | --- | --- |
 | `tests/unit/` | Pure rules and single adapters: export encoding, config, SQLite repository, touch statistics, zone detection, thread-boundary guards, theme. |
-| `tests/integration/` | Several layers together: the analysis pipeline end to end, the directory-layout migration, the legacy-state → SQLite migration, the load/save lifecycle. |
-| `tests/e2e/` | A real Tk root driven through `tests/e2e/gui_driver.py` — smoke test, annotate/save/export, upgrade path, loading a second video mid-session, close during extraction. Marked `gui` and deselected by default. |
+| `tests/integration/` | Several layers together: the analysis pipeline end to end, the load/save lifecycle. |
+| `tests/e2e/` | A real Tk root driven through `tests/e2e/gui_driver.py` — smoke test, annotate/save/export, loading a second video mid-session, close during extraction. Marked `gui` and deselected by default. |
 
-The two migration guarantees worth knowing: `tests/integration/test_sqlite_migration.py`
-asserts that the export produced from a migrated DB is byte-identical to the export
-produced from the original CSVs, and the three export-lock test files described above pin
-the published format.
+The guarantee worth knowing: the three export-lock test files described above pin the
+published format. Note what is NOT pinned any more — with
+`import_unified_from_export` gone there is no test that reads an export CSV back
+into an equivalent store, so a change that silently drops a field from the
+export will be caught by the golden-master bytes but not by a round-trip.
 
 ## Local Build
 
@@ -435,6 +433,6 @@ Quick reference:
 
 ```bash
 # Bump PROGRAM_VERSION in src/app_info.py, commit, push to master, then:
-git tag v8.1.0
-git push origin v8.1.0
+git tag v9.0.0
+git push origin v9.0.0
 ```

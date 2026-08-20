@@ -19,9 +19,8 @@ flagged/
 /data/**
 !/data/.gitkeep
 
-# Pre-rename output root. Kept ignored so a not-yet-migrated working copy never
-# offers real research data for commit; delete this rule once no local
-# Labeled_data/ trees are left (migration_service moves them into data/).
+# Pre-v9 output root. v9 does not read or convert these trees; the rule stays
+# only so an old local copy can never offer real research data for commit.
 /Labeled_data/**
 
 # Ignore local environments and packaged executables
@@ -29,8 +28,8 @@ flagged/
 *.env
 *.exe
 
-# Ignore benchmark output data (extracted frames)
-scripts/bench/data/
+# Ignore local benchmark and experiment scripts
+/scripts/
 
 # Ignore pytest cache
 .pytest_cache/

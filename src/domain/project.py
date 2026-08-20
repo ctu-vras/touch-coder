@@ -4,19 +4,17 @@ Canonical on-disk layout of one labeled-video project. Every path under
 `data/<video_name>/` is derived here — no other module may hand-build these
 strings (ARCHITECTURE.md "Data Layout on Disk" is the reference).
 
-Layout (current):
+Layout:
 
     data/<video_name>/
     ├── state/      working state: <video_name>.db (SQLite, source of truth)
-    │               plus any not-yet-migrated legacy CSV/JSON sidecars and
-    │               their post-migration `*.migrated` copies
     ├── export/     publication-ready CSV + metadata JSON
     ├── frames/     frame0.jpg … frameN.jpg
     └── plots/      Plotly HTML from Analysis
 
-Legacy names still found on disk (`Labeled_data/<name>/data/`) are handled once
-at startup / on video load by `service_layer.migration_service`; nothing here
-reads or writes the old names.
+This is the only layout the app knows. The pre-9.0 names (`Labeled_data/`,
+`<name>/data/`, `Videos/`) and the retired CSV/JSON state sidecars are not
+recognized any more — the migration that converted them was removed in 9.0.
 """
 
 import os
@@ -29,11 +27,6 @@ FRAMES_SUBDIR = "frames"
 PLOTS_SUBDIR = "plots"
 VIDEOS_DIR = "videos"
 RELIABILITY_SUFFIX = "_reliability"
-
-# Pre-rename names, kept ONLY so the migration service can recognize old trees.
-LEGACY_DATA_DIR = "Labeled_data"
-LEGACY_STATE_SUBDIR = "data"
-LEGACY_VIDEOS_DIR = "Videos"
 
 
 @dataclass(frozen=True)
@@ -95,21 +88,16 @@ class ProjectPaths:
     # --- files ----------------------------------------------------------------
     @property
     def state_db(self) -> str:
-        """The working-state SQLite database — the CURRENT source of truth.
+        """The working-state SQLite database — the source of truth.
 
-        Everything the app used to spread over `<name>_unified.csv`,
+        Everything the app once spread over `<name>_unified.csv`,
         `<name>_notes.csv`, `<name>_limb_parameters.csv`,
         `<name>_last_position.json`, `<name>_metadata.json` and
         `<name>_clothes.txt` lives in this one file
-        (`adapters.sqlite_repo.SqliteRepository`). The CSV/JSON paths below are
-        kept ONLY as migration + disaster-recovery inputs; nothing writes them.
+        (`adapters.sqlite_repo.SqliteRepository`). Those names have no
+        properties here any more: nothing reads or writes them.
         """
         return os.path.join(self.state_dir, f"{self.video_name}.db")
-
-    @property
-    def unified_csv(self) -> str:
-        """Legacy journal (read-only migration source)."""
-        return os.path.join(self.state_dir, f"{self.video_name}_unified.csv")
 
     @property
     def export_csv(self) -> str:
@@ -118,30 +106,3 @@ class ProjectPaths:
     @property
     def export_metadata(self) -> str:
         return os.path.join(self.export_dir, f"{self.video_name}_metadata.json")
-
-    @property
-    def notes_csv(self) -> str:
-        return os.path.join(self.state_dir, f"{self.video_name}_notes.csv")
-
-    @property
-    def limb_params_csv(self) -> str:
-        return os.path.join(self.state_dir, f"{self.video_name}_limb_parameters.csv")
-
-    @property
-    def last_position_json(self) -> str:
-        return os.path.join(self.state_dir, f"{self.video_name}_last_position.json")
-
-    @property
-    def video_time_json(self) -> str:
-        """Labeling-time accumulator sidecar (state/<name>_metadata.json —
-        distinct from the export metadata under export/)."""
-        return os.path.join(self.state_dir, f"{self.video_name}_metadata.json")
-
-    @property
-    def clothes_txt(self) -> str:
-        return os.path.join(self.state_dir, f"{self.video_name}_clothes.txt")
-
-    def limb_csv(self, limb: str) -> str:
-        """Legacy per-limb CSV (pre-unified migration source), e.g.
-        state/<name>RH.csv."""
-        return os.path.join(self.state_dir, f"{self.video_name}{limb}.csv")

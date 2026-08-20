@@ -26,6 +26,13 @@ Three builds are published per release: `windows-x64` (Windows 10/11, 64-bit), `
 (current distributions) and `linux-legacy-x64` (older glibc; built on Debian Bullseye). On
 Linux, launch from a terminal so you can see the log.
 
+> **Upgrading from 8.0.x or earlier:** this version reads only the current project
+> layout (`data/<video>/state/<video>.db`). Older folders — `Labeled_data/…`, a
+> `<video>_unified.csv` working file, source videos in `Videos/` — are **not
+> converted**, and opening one shows an empty project rather than an error. Keep those
+> folders as archives, keep a copy of their `*_export.csv` files (which this version
+> still reads for Analysis), and start new labeling in a fresh project.
+
 <details>
 <summary><b>Run from source</b></summary>
 

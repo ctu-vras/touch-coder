@@ -719,7 +719,7 @@ class LabelingApp(tk.Tk):
         print(f"Base:   {paths.video_dir}")
         print(f"State:  {paths.state_dir}")
         print(f"Export: {paths.export_dir}")
-        print(f"Unified CSV (will write changed-only): {paths.unified_csv}")
+        print(f"State DB (writes changed frames only): {paths.state_db}")
         print(f"Export  CSV (will write all frames):   {paths.export_csv}")
 
         lines = preview_lines_for_save(self.video.frames, self.video.total_frames, changed_only=changed_only)
@@ -1569,11 +1569,7 @@ class LabelingApp(tk.Tk):
 
         b = self.video.frames.get(idx)
         if isinstance(b, dict):
-            note_text = (b.get("Note") or "")  # bundle-first
-
-        # Fallback (only if you still have legacy self.video.notes around)
-        if not note_text and hasattr(self.video, "notes"):
-            note_text = self.video.notes.get(idx, "") or ""
+            note_text = (b.get("Note") or "")
 
         self._set_note_entry_text(note_text)
 
@@ -1927,17 +1923,15 @@ class LabelingApp(tk.Tk):
 
         video.frames_dir = paths.frames_dir
 
-        # --- Working state: open state/<video>.db, migrating the legacy
-        # CSV/JSON state on the first open. The progress window covers the whole
-        # phase because a first-time migration of a huge project reads every
-        # legacy row before writing the DB.
+        # --- Working state: open (or create) state/<video>.db. The progress
+        # window covers the whole phase because `load_frames` below reads every
+        # row of a long project.
         data_progress_update, data_progress_close = self._open_data_progress_window()
         try:
             self.state_repo = project_service.open_state(
                 paths,
                 fps=self.frame_rate,
                 program_version=video.program_version,
-                progress_cb=data_progress_update,
             )
             # ORDERING (unchanged): the labeling timer starts BEFORE the frame
             # load so the session is already accumulating; an extraction abort
@@ -2049,10 +2043,6 @@ class LabelingApp(tk.Tk):
         if not self.background_thread.is_alive():
             self.background_thread.start()
 
-        # Notes: the display-only fallback for pre-unified projects, now the
-        # state DB's `legacy_notes` table (never merged into bundle["Note"] —
-        # see adapters.sqlite_repo).
-        self.video.notes = self.state_repo.load_legacy_notes()
         self.update_note_entry()
 
         # Clothes presence => colorize button

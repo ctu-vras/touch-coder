@@ -7,37 +7,32 @@ Full persistence lifecycle: the cross-module safety net for the refactor.
       -> mutate one frame, save again    (REPLACE in place, no duplicate rows)
       -> reopen the DB, load             == the mutated state
       -> export_from_unified             (frozen legacy schema)
-      -> delete the state DB             (simulates the recovery path)
-      -> import_unified_from_export      == everything the export preserves
 
 Each stage runs the REAL production functions against tmp_path files, so any
-refactor that breaks a seam between the repository and the export writer turns
-this red even when every per-function unit test still passes.
+refactor that breaks the seam between the repository and the export writer
+turns this red even when every per-function unit test still passes.
 
-The second test keeps the LEGACY leg alive: a pre-SQLite project's unified-CSV
-journal, loaded by the reader that still ships, must produce the same store the
-repository does — that equality is what makes the migration safe.
+Two legs were removed in 9.0 with the legacy readers they depended on:
 
-What the export -> import leg provably preserves (asserted below):
-X/Y click lists, Onset, Zones aligned with clicks, global params, limb params,
-and Notes (incl. UTF-8). What it LOSES — asserted explicitly so the loss stays
-a documented decision, not an accident:
+  * export -> `import_unified_from_export` (state recovery from an export CSV);
+  * unified-CSV journal -> `load_unified_dataset` compared against the DB.
 
-  * `Changed` flags (never serialized by any backend);
-  * `Touch` (not an export column; import always leaves it None);
-  * Zone buckets with NO matching click (import realigns zones to the click
-    list, so a zones-without-coordinates record comes back empty — note the
-    state DB itself KEEPS them, asserted in stage 2);
-  * dict SHAPE: import materializes a bundle for EVERY exported row (no gaps),
-    Params/LimbParams come back as full Par1..Par3 dicts padded with None (or
-    are dropped entirely when all-None), and Bodypart is reset to the limb key.
+Consequence worth knowing: nothing now asserts that the export CSV can be read
+back into an equivalent store, so an export-format change that silently drops a
+field will not be caught here. The export BYTES stay pinned by
+tests/unit/test_export_golden_master.py, test_export_schema.py and
+test_export_metadata.py — a schema regression is still caught, a round-trip
+asymmetry is not.
+
+What the state DB preserves that the export never did (asserted in stage 1):
+zone buckets with NO matching click. `Changed` flags and `Touch` are not
+serialized by any backend.
 """
 import copy
-import os
+import csv
 
 from adapters.export_writer import export_from_unified
 from adapters.sqlite_repo import SqliteRepository
-from adapters.unified_repo import import_unified_from_export, load_unified_dataset
 from domain.model import empty_bundle
 
 TOTAL_FRAMES = 10
@@ -101,7 +96,7 @@ def _clear_changed(frames):
         bundle.pop("Changed", None)
 
 
-def test_full_lifecycle_state_db_roundtrip_and_export_recovery(tmp_path):
+def test_full_lifecycle_state_db_roundtrip_and_export(tmp_path):
     db = str(tmp_path / "state" / "vid.db")
     export = str(tmp_path / "export" / "vid_export.csv")
 
@@ -140,118 +135,24 @@ def test_full_lifecycle_state_db_roundtrip_and_export_recovery(tmp_path):
     assert loaded_b[7] == loaded_a[7]
     assert set(loaded_b) == {2, 5, 7}
 
-    # --- Stage 3: export, delete the DB, recover via import -----------------
+    # --- Stage 3: export the loaded store ------------------------------------
+    # The repo -> exporter seam, which is the one this file exists to guard.
+    # (The export BYTES are pinned by tests/unit/test_export_golden_master.py;
+    # here we only assert the seam produces a complete, well-formed table.)
     export_from_unified(
         loaded_b, export, program_version=8.0, video_name="vid",
         labeling_mode="Normal", frame_rate=25.0, clothes_list=None,
         total_frames=TOTAL_FRAMES,
     )
     repo.close()
-    os.remove(db)  # the recovery scenario: the state DB is gone
-    assert not os.path.exists(db)
 
-    recovered = import_unified_from_export(export)
+    with open(export, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
 
-    # Import materializes EVERY exported row — no gaps (shape difference vs
-    # the state store, which only held labeled frames).
-    assert set(recovered) == set(range(TOTAL_FRAMES + 1))
-
-    # PRESERVED: clicks, onsets, zones-aligned-to-clicks, per limb.
-    for f in (2, 5, 7):
-        for limb in ("LH", "RH", "LL", "RL"):
-            src, rec = loaded_b[f][limb], recovered[f][limb]
-            assert rec["X"] == src["X"], (f, limb)
-            assert rec["Y"] == src["Y"], (f, limb)
-            assert rec["Onset"] == (src.get("Onset") or ""), (f, limb)
-            if src["X"]:  # zones survive only where clicks exist (see below)
-                assert rec["Zones"] == src["Zones"], (f, limb)
-
-    # PRESERVED: notes, incl. UTF-8 and commas.
-    assert recovered[2]["Note"] == "začátek ěšč"
-    assert recovered[5]["Note"] == "opraveno"
-    assert recovered[7]["Note"] == "params only, with a comma"
-    assert recovered[3]["Note"] is None
-
-    # PRESERVED: global params — but padded to the full Par1..3 shape.
-    assert recovered[2]["Params"] == {"Par1": "ON", "Par2": None, "Par3": None}
-    assert recovered[7]["Params"] == {"Par1": "OFF", "Par2": "ON", "Par3": None}
-    # An all-empty params frame comes back as {} (not a None-padded dict).
-    assert recovered[5]["Params"] == {}
-
-    # PRESERVED: limb params (padded), with legacy 'None' already scrubbed by
-    # the earlier state-DB load.
-    assert recovered[2]["LH"]["LimbParams"] == {"Par1": "ON", "Par2": None, "Par3": None}
-    assert recovered[5]["RL"]["LimbParams"] == {"Par1": None, "Par2": "OFF", "Par3": None}
-    # A limb whose params were all None gets NO LimbParams key at all.
-    assert "LimbParams" not in recovered[2]["RH"]
-
-    # LOST (documented, intentional): zone buckets with no matching click —
-    # import realigns Zones to the X/Y pair list, so frame 7's clickless
-    # LL bucket [['GHOST']] is dropped.
-    assert loaded_b[7]["LL"]["Zones"] == [["GHOST"]]
-    assert recovered[7]["LL"]["Zones"] == []
-
-    # LOST (documented): Touch is not an export column — always None after
-    # import — and Changed flags never round-trip through any backend.
-    for f in recovered:
-        assert "Changed" not in recovered[f]
-        for limb in ("LH", "RH", "LL", "RL"):
-            assert recovered[f][limb]["Touch"] is None
-            # Bodypart is reconstructed from the column prefix, not stored.
-            assert recovered[f][limb]["Bodypart"] == limb
-
-
-def test_state_db_and_legacy_journal_agree_on_the_same_session(tmp_path):
-    """The seam the migration rests on: the retired journal's reader and the
-    state DB must produce the SAME in-memory store for the same session, and
-    the same export bytes from it.
-
-    `load_unified_dataset` still ships (it is the migration input), so this can
-    be asserted directly — build a journal with the legacy row format, load it,
-    push it through the repository, and compare both sides.
-    """
-    import json
-
-    journal = tmp_path / "state" / "vid_unified.csv"
-    journal.parent.mkdir(parents=True, exist_ok=True)
-    frames_a = _build_frames_a()
-    rows = ["Frame,Note,Params,LH,RH,LL,RL\n"]
-    for frame in sorted(frames_a):
-        b = frames_a[frame]
-        cells = [
-            str(frame),
-            "" if b.get("Note") is None else b["Note"],
-            json.dumps(b.get("Params", {})),
-            json.dumps(b["LH"]), json.dumps(b["RH"]),
-            json.dumps(b["LL"]), json.dumps(b["RL"]),
-        ]
-        rows.append(",".join('"' + c.replace('"', '""') + '"' for c in cells) + "\n")
-    journal.write_text("".join(rows), encoding="utf-8")
-
-    from_journal = load_unified_dataset(str(journal))
-
-    repo = SqliteRepository(str(tmp_path / "state" / "vid.db"))
-    try:
-        for bundle in from_journal.values():
-            bundle["Changed"] = True
-        repo.save_frames(from_journal, TOTAL_FRAMES)
-        for bundle in from_journal.values():
-            bundle.pop("Changed")
-        from_db = repo.load_frames()
-    finally:
-        repo.close()
-
-    # The journal blobs carry Bodypart verbatim; the DB reconstructs it. Every
-    # other field must match exactly.
-    assert from_db == from_journal
-
-    journal_export = tmp_path / "from_journal.csv"
-    db_export = tmp_path / "from_db.csv"
-    for store, out in ((from_journal, journal_export), (from_db, db_export)):
-        export_from_unified(
-            store, str(out), program_version=8.0, video_name="vid",
-            labeling_mode="Normal", frame_rate=25.0, clothes_list=None,
-            total_frames=TOTAL_FRAMES,
-        )
-
-    assert db_export.read_bytes() == journal_export.read_bytes()
+    # One row per frame 0..TOTAL_FRAMES, labeled or not.
+    assert [int(r["Frame"]) for r in rows] == list(range(TOTAL_FRAMES + 1))
+    # The labeled frames carried their clicks and notes into the table.
+    assert rows[2]["LH_X"] and rows[2]["LH_Y"]
+    assert rows[2]["Note"] == "začátek ěšč"
+    assert rows[5]["Note"] == "opraveno"
+    assert rows[3]["Note"] == ""

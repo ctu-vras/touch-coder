@@ -407,17 +407,12 @@ def _teardown_app(application):
 def app_factory(workspace):
     """Build real `LabelingApp` roots; every one is torn down afterwards.
 
-    A factory (not just a single fixture) because the upgrade-path test has to
-    destroy one root and construct a second one in the same sandbox. Keep the
-    count minimal — one root per test unless the scenario genuinely needs two.
-
-    Mirrors `src/main.py` exactly: `migrate_layout()` (the whole-tree layout
-    pass) runs BEFORE the Tk app is constructed, because that is where the app
-    itself does it and the upgrade-path test depends on that ordering.
+    A factory (not just a single fixture) because a test may need to destroy
+    one root and construct a second one in the same sandbox. Keep the count
+    minimal — one root per test unless the scenario genuinely needs two.
     """
     from gui import theme
     from labeling_app import LabelingApp
-    from service_layer.migration_service import migrate_layout
 
     built = []
     callback_errors = []
@@ -434,7 +429,6 @@ def app_factory(workspace):
         # `_tkinter.create()` below and the new root died with
         # `Can't find a usable init.tcl`. Deterministic either way now.
         gc.collect()
-        migrate_layout()
         application = LabelingApp()
         # Hide FIRST, resize second: build_ui already called geometry('1200x1000')
         # on-screen, and we must not let it appear even for one frame.

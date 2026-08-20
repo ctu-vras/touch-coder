@@ -3,11 +3,11 @@ adapters/sqlite_repo.py
 The working-state repository: ONE SQLite database per labeled video at
 `data/<video>/state/<video>.db`.
 
-This replaces the append-only unified-CSV journal plus its five sidecars
+This replaced the append-only unified-CSV journal plus its five sidecars
 (notes CSV, limb-parameters CSV, last-position JSON, labeling-time JSON,
-clothes TXT). Those readers still live in `adapters.unified_repo` /
-`service_layer.project_service` as the migration + disaster-recovery path
-(see `service_layer.state_migration`); only their WRITERS are gone.
+clothes TXT). Their readers, and the one-time import that fed them into this
+schema, were removed in 9.0 — so this is the only state format the app knows and
+there is no path back from a pre-9.0 project (see ARCHITECTURE.md).
 
 Why SQLite instead of the journal
 ---------------------------------
@@ -150,31 +150,6 @@ CREATE TABLE IF NOT EXISTS clothes_dots (
     zones  TEXT NOT NULL DEFAULT ''  -- comma-joined, frozen sidecar semantics
 );
 
--- Pre-unified `<video>_notes.csv`. The app has NEVER merged this file into
--- bundle["Note"]: it loaded it into `video.notes` and used it only as a
--- display fallback in the note entry box, so its contents have never reached
--- the export. Merging it now would silently add notes to published datasets
--- (and resurrect notes the user deleted), so it keeps its own table and its
--- own read path. Stored rather than dropped: nothing is lost, and a researcher
--- can promote a note deliberately by re-saving the frame.
-CREATE TABLE IF NOT EXISTS legacy_notes (
-    frame INTEGER PRIMARY KEY,
-    note  TEXT NOT NULL
-);
-
--- Pre-unified `<video>_limb_parameters.csv`. It has had NO reader and NO
--- writer in the app for several versions (the states live in the journal's
--- limb blobs), so folding it into LimbParams would likewise change exports
--- that have been stable for years. Quarantined here so the bytes survive the
--- sidecar's retirement.
-CREATE TABLE IF NOT EXISTS legacy_limb_params (
-    frame INTEGER NOT NULL,
-    limb  TEXT    NOT NULL,
-    key   TEXT    NOT NULL,
-    state TEXT,
-    PRIMARY KEY (frame, limb, key)
-);
-
 PRAGMA user_version = {SCHEMA_VERSION};
 """
 
@@ -186,8 +161,6 @@ META_LAST_FRAME = "last_frame"
 META_TOTAL_FRAMES = "total_frames"
 META_LABELING_TIME = "labeling_time_seconds"
 META_CLOTHES_SCALE = "clothes_diagram_scale"
-META_MIGRATED_AT = "migrated_at"
-META_MIGRATED_SOURCES = "migrated_sources"
 
 
 class SchemaVersionError(RuntimeError):
@@ -308,25 +281,10 @@ class SqliteRepository:
 
     def transaction(self) -> "SqliteRepository._Transaction":
         """One explicit `BEGIN IMMEDIATE ... COMMIT`, rolled back on any
-        exception. Public so `state_migration` can wrap a whole import in a
-        single transaction."""
+        exception. Public so a caller can wrap several writes (e.g. clothes
+        rows plus their scale) in a single transaction."""
         self._check_thread()
         return self._Transaction(self._conn)
-
-    def _require_transaction(self, what: str) -> None:
-        """Guard for the `import_*` / `stage_*` methods, which deliberately do
-        NOT open their own transaction so the migration can commit everything
-        at once. Outside a transaction the connection is in autocommit mode and
-        each row would land separately — a partial import that survived a
-        crash. Fail instead of writing one."""
-        self._check_thread()
-        if not self._conn.in_transaction:
-            raise RuntimeError(
-                f"{what} must be called inside `with repo.transaction():` — "
-                "outside one, autocommit would let a partial import survive a "
-                "crash. (Use save_frames / save_clothes for interactive saves; "
-                "they own their transaction.)"
-            )
 
     def close(self) -> None:
         self._check_thread()
@@ -354,14 +312,6 @@ class SqliteRepository:
         with self.transaction():
             for key, value in mapping.items():
                 self._set_meta_unlocked(key, value)
-
-    def stage_meta(self, mapping: Dict[str, object]) -> None:
-        """`set_meta_many` WITHOUT opening a transaction — for callers that are
-        already inside `transaction()` (the migration writes frames, sidecars
-        and meta as one commit)."""
-        self._require_transaction("stage_meta")
-        for key, value in mapping.items():
-            self._set_meta_unlocked(key, value)
 
     def _set_meta_unlocked(self, key: str, value) -> None:
         stored = None if value is None else str(value)
@@ -546,32 +496,6 @@ class SqliteRepository:
         )
         return len(dirty)
 
-    def import_frames(self, frames: Dict[int, FrameBundle], total_frames: int) -> int:
-        """Write EVERY frame in `frames` regardless of its `Changed` flag.
-
-        Used by the CSV -> SQLite migration, which must persist the full
-        recovered store in one shot. The caller owns the transaction so the
-        whole migration (frames + sidecars + meta) commits or rolls back
-        together.
-        """
-        self._require_transaction("import_frames")
-        anomalies: List[str] = []
-        written = 0
-        for frame in sorted(frames):
-            bundle = frames[frame]
-            if not isinstance(bundle, dict):
-                print(f"WARN: sqlite_repo: skipping frame {frame} — not a bundle dict")
-                continue
-            self._write_frame_unlocked(frame, bundle, anomalies)
-            written += 1
-        self._set_meta_unlocked(META_TOTAL_FRAMES, total_frames)
-        for message in anomalies[:20]:
-            print(f"WARN: sqlite_repo: {message}")
-        if len(anomalies) > 20:
-            print(f"WARN: sqlite_repo: … and {len(anomalies) - 20} more anomalies")
-        print(f"DEBUG: sqlite_repo: imported frames={written} -> {self._path}")
-        return written
-
     def _write_frame_unlocked(self, frame: int, bundle: FrameBundle,
                               anomalies: List[str]) -> None:
         """Replace one frame's rows. DELETE cascades to every child table, so
@@ -720,77 +644,18 @@ class SqliteRepository:
             self._conn.execute("SELECT 1 FROM clothes_dots LIMIT 1").fetchone()
         )
 
-    def import_clothes(self, rows: Iterable[Tuple[int, float, float, str]]) -> int:
-        """Insert clothes dots INSIDE the caller's transaction (migration only;
-        the interactive path uses `save_clothes`, which owns its own)."""
-        self._require_transaction("import_clothes")
-        rows = list(rows)
-        self._conn.executemany(
-            "INSERT INTO clothes_dots (dot_id, x, y, zones) VALUES (?, ?, ?, ?)",
-            [(int(d), float(x), float(y), str(z or "")) for d, x, y, z in rows],
-        )
-        return len(rows)
-
     def clothes_zone_list(self) -> Optional[List[str]]:
         """Zone names for the export metadata's "Zones Covered With Clothes".
 
-        Deliberately reproduces `unified_repo.extract_zones_from_file`
-        byte-for-byte: de-duplicated via a set, returned as an UNSORTED list,
-        and a multi-zone dot contributes its comma-joined string as ONE entry.
-        The export metadata JSON is a frozen contract — sorting or splitting
-        here would change published sidecars.
+        Deliberately reproduces the retired sidecar reader
+        (`extract_zones_from_file`) byte-for-byte: de-duplicated via a set,
+        returned as an UNSORTED list, and a multi-zone dot contributing its
+        comma-joined string as ONE entry. The export metadata JSON is a frozen
+        contract — sorting or splitting here would change published sidecars.
         """
         self._check_thread()
         zones = {row[3] for row in self.load_clothes_rows()}
         return list(zones) if zones else None
-
-    # === quarantined pre-unified sidecars =====================================
-    def import_legacy_notes(self, notes: Dict[int, str]) -> int:
-        """Store `<video>_notes.csv` rows verbatim, inside the caller's
-        transaction. See the `legacy_notes` DDL comment for why these do NOT
-        become `bundle["Note"]`."""
-        self._require_transaction("import_legacy_notes")
-        rows = [(int(f), str(t)) for f, t in notes.items() if t]
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO legacy_notes (frame, note) VALUES (?, ?)", rows
-        )
-        return len(rows)
-
-    def load_legacy_notes(self) -> Dict[int, str]:
-        """The display-only note fallback that `video.notes` used to hold —
-        the exact replacement for `project_service.load_notes`."""
-        self._check_thread()
-        return {
-            row["frame"]: row["note"]
-            for row in self._conn.execute(
-                "SELECT frame, note FROM legacy_notes ORDER BY frame"
-            )
-        }
-
-    def import_legacy_limb_params(
-        self, rows: Iterable[Tuple[int, str, str, Optional[str]]]
-    ) -> int:
-        """Store `<video>_limb_parameters.csv` rows verbatim, inside the
-        caller's transaction. Nothing reads them back — see the DDL comment."""
-        self._require_transaction("import_legacy_limb_params")
-        rows = list(rows)
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO legacy_limb_params (frame, limb, key, state) "
-            "VALUES (?, ?, ?, ?)",
-            [(int(f), str(l), str(k), s) for f, l, k, s in rows],
-        )
-        return len(rows)
-
-    def load_legacy_limb_params(self) -> List[Tuple[int, str, str, Optional[str]]]:
-        self._check_thread()
-        return [
-            (row["frame"], row["limb"], row["key"], row["state"])
-            for row in self._conn.execute(
-                "SELECT frame, limb, key, state FROM legacy_limb_params "
-                "ORDER BY frame, limb, key"
-            )
-        ]
-
 
 # === helpers ==================================================================
 def _record_is_empty(rec: dict) -> bool:

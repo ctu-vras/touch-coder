@@ -26,7 +26,6 @@ import threading
 import pytest
 
 from adapters.sqlite_repo import SCHEMA_VERSION, SchemaVersionError, SqliteRepository
-from adapters.unified_repo import extract_zones_from_file
 from domain.model import empty_bundle, empty_record
 
 
@@ -530,25 +529,22 @@ def test_clothes_round_trip_and_full_replace(repo):
     assert repo.clothes_diagram_scale() == 0.5
 
 
-def test_clothes_zone_list_matches_the_retired_sidecar_reader(repo, tmp_path):
+def test_clothes_zone_list_keeps_the_frozen_sidecar_tokenization(repo):
     """`export/<video>_metadata.json` is a frozen contract, so the DB's zone
-    list must equal what `extract_zones_from_file` produced from the same dots:
+    list must keep the shape the retired `extract_zones_from_file` produced:
     set-deduplicated, UNSORTED, and a multi-zone dot contributing its whole
-    comma-joined string as ONE entry."""
+    comma-joined string as ONE entry.
+
+    The expectation is spelled out literally rather than compared against that
+    reader, which went with the rest of the legacy sidecar path in 9.0 - a
+    golden value pins the contract with no second implementation to drift.
+    """
     dots = [(2, 145.0, 287.0, "L"), (3, 206.0, 295.0, "K"),
             (4, 144.0, 367.0, "L"), (5, 212.0, 387.0, "A,B")]
-    sidecar = tmp_path / "vid_clothes.txt"
-    sidecar.write_text(
-        "Coordinates and Zones for Clothing Items:\nDiagramScale: 1.0\n"
-        + "".join(f"Dot ID {d}: X={x}, Y={y}, Zones={z}\n" for d, x, y, z in dots),
-        encoding="utf-8",
-    )
     repo.save_clothes(dots, 1.0)
 
-    assert sorted(repo.clothes_zone_list()) == sorted(
-        extract_zones_from_file(str(sidecar))
-    )
-    # "A,B" is ONE entry, not two zones (the frozen tokenization).
+    # Dot 4 repeats "L" -> de-duplicated; dot 5's "A,B" stays ONE entry.
+    assert sorted(repo.clothes_zone_list()) == ["A,B", "K", "L"]
     assert "A,B" in repo.clothes_zone_list()
 
 
@@ -556,33 +552,10 @@ def test_clothes_zone_list_is_none_without_dots(repo):
     assert repo.clothes_zone_list() is None
 
 
-def test_legacy_notes_are_quarantined_not_promoted(repo):
-    """The notes sidecar was only ever a DISPLAY fallback (`video.notes`); its
-    text has never reached `bundle["Note"]` nor the export. Promoting it now
-    would silently add notes to published datasets."""
-    with repo.transaction():
-        repo.import_legacy_notes({7: "Dívá se", 9: "second"})
-
-    assert repo.load_legacy_notes() == {7: "Dívá se", 9: "second"}
-    assert repo.load_frames() == {}          # NOT turned into bundles
-
-
-def test_legacy_limb_params_are_quarantined(repo):
-    """The limb-parameters sidecar has had no app reader for versions; its rows
-    are stored so nothing is lost, but they are not folded into LimbParams."""
-    with repo.transaction():
-        repo.import_legacy_limb_params([(4, "LH", "Par1", "ON"),
-                                        (4, "LH", "Par2", None)])
-
-    assert repo.load_legacy_limb_params() == [(4, "LH", "Par1", "ON"),
-                                              (4, "LH", "Par2", None)]
-    assert repo.load_frames() == {}
-
-
 # === helpers ==================================================================
 def _row_counts(repo):
     tables = ("frames", "frame_params", "limb_records", "clicks", "limb_params",
-              "clothes_dots", "legacy_notes", "legacy_limb_params")
+              "clothes_dots")
     return {
         t: repo._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
         for t in tables

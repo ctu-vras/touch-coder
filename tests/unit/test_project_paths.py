@@ -4,9 +4,9 @@ tests pin the CURRENT scheme (post folder rename):
 
     data/<video_name>/{state,export,frames,plots}/
 
-The old scheme was `Labeled_data/<video_name>/data/...`; migrating an old tree
-is migration_service's job (tests/integration/test_layout_migration.py) and
-nothing here may resolve to a legacy name.
+The pre-9.0 scheme was `Labeled_data/<video_name>/data/...`. Nothing here may
+resolve to one of those legacy names, and no legacy state-sidecar path exists
+on ProjectPaths any more (the migration that read them was removed in 9.0).
 """
 import os
 
@@ -14,13 +14,13 @@ import pytest
 
 from domain.project import (
     DATA_DIR,
-    LEGACY_DATA_DIR,
-    LEGACY_STATE_SUBDIR,
     RELIABILITY_SUFFIX,
     STATE_SUBDIR,
     VIDEOS_DIR,
     ProjectPaths,
 )
+
+LEGACY_DATA_DIR = "Labeled_data"   # pre-9.0 root, no longer a domain constant
 
 
 def _parts(path):
@@ -33,9 +33,6 @@ def test_layout_constants_are_the_new_names():
     assert STATE_SUBDIR == "state"
     assert VIDEOS_DIR == "videos"
     assert RELIABILITY_SUFFIX == "_reliability"
-    # Legacy names still exist, but only for the migration service to match on.
-    assert LEGACY_DATA_DIR == "Labeled_data"
-    assert LEGACY_STATE_SUBDIR == "data"
 
 
 # === Directories ==============================================================
@@ -54,9 +51,7 @@ def test_no_path_resolves_under_a_legacy_folder_name():
     p = ProjectPaths("cat3")
     paths = [
         p.video_dir, p.state_dir, p.export_dir, p.frames_dir, p.plots_dir,
-        p.unified_csv, p.export_csv, p.export_metadata, p.notes_csv,
-        p.limb_params_csv, p.last_position_json, p.video_time_json,
-        p.clothes_txt, p.limb_csv("RH"),
+        p.state_db, p.export_csv, p.export_metadata,
     ]
     for path in paths:
         segments = _parts(path)
@@ -74,12 +69,7 @@ def test_base_dir_is_overridable_for_tests(tmp_path):
 
 # === File composition =========================================================
 @pytest.mark.parametrize("attr, subdir, filename", [
-    ("unified_csv", "state", "cat3_unified.csv"),
-    ("notes_csv", "state", "cat3_notes.csv"),
-    ("limb_params_csv", "state", "cat3_limb_parameters.csv"),
-    ("last_position_json", "state", "cat3_last_position.json"),
-    ("video_time_json", "state", "cat3_metadata.json"),
-    ("clothes_txt", "state", "cat3_clothes.txt"),
+    ("state_db", "state", "cat3.db"),
     ("export_csv", "export", "cat3_export.csv"),
     ("export_metadata", "export", "cat3_metadata.json"),
 ])
@@ -88,19 +78,20 @@ def test_files_land_in_the_right_subdir(attr, subdir, filename):
     assert _parts(getattr(p, attr)) == ["data", "cat3", subdir, filename]
 
 
-def test_legacy_limb_csv_lives_in_state():
+def test_no_legacy_state_sidecar_paths_remain():
+    """The six retired sidecars must not be reachable through ProjectPaths.
+    Their readers are gone; a surviving path property would invite a caller to
+    hand-build the format again."""
     p = ProjectPaths("cat3")
-    for limb in ("RH", "LH", "RL", "LL"):
-        assert _parts(p.limb_csv(limb)) == ["data", "cat3", "state", f"cat3{limb}.csv"]
+    for attr in ("unified_csv", "notes_csv", "limb_params_csv",
+                 "last_position_json", "video_time_json", "clothes_txt",
+                 "limb_csv"):
+        assert not hasattr(p, attr), attr
 
 
-def test_video_time_json_and_export_metadata_are_distinct_files():
-    """Same basename, different folders — a regression here would make the
-    labeling-time accumulator overwrite the export sidecar."""
+def test_state_db_and_export_metadata_live_in_different_subdirs():
     p = ProjectPaths("cat3")
-    assert os.path.basename(p.video_time_json) == os.path.basename(p.export_metadata)
-    assert p.video_time_json != p.export_metadata
-    assert _parts(p.video_time_json)[2] == STATE_SUBDIR
+    assert _parts(p.state_db)[2] == STATE_SUBDIR
     assert _parts(p.export_metadata)[2] == "export"
 
 
@@ -110,7 +101,7 @@ def test_for_video_appends_reliability_suffix():
     assert p.video_name == "cat3_reliability"
     assert p.is_reliability is True
     assert _parts(p.state_dir) == ["data", "cat3_reliability", "state"]
-    assert _parts(p.unified_csv)[-1] == "cat3_reliability_unified.csv"
+    assert _parts(p.state_db)[-1] == "cat3_reliability.db"
 
 
 def test_for_video_normal_mode_leaves_name_alone():
