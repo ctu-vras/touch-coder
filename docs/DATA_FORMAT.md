@@ -105,7 +105,8 @@ An empty bucket list is the two-byte cell `[]` and is **not** quoted. Note the a
 `{limb}_Zones`.
 
 In practice TinyTouch writes at most **one** zone name per bucket: the mask hit test
-returns the first matching mask only, or the sentinel `NN`. Two-element buckets occur only
+returns a single winning mask (see "Zone names" for how overlaps resolve), or the sentinel
+`NN`. Two-element buckets occur only
 in hand-edited or legacy data; readers should still handle them.
 
 **Onset (`{limb}_Onset`).** Exactly `ON`, `OFF`, or the empty string. The value describes
@@ -270,14 +271,36 @@ Special names:
 - `BOX1` … `BOX6` — the six catch-all boxes drawn beside the body diagram. They have no
   fixed anatomical meaning; teams assign them (ground, prop, caregiver, ...) by convention.
 - `OUTSIDE` — the click fell in the region masked as outside the body.
-- `LINE` — the click fell on a boundary line between zones.
+- `LINE` — the click fell exactly on a boundary line between zones, so the intended zone is
+  genuinely **ambiguous**. It is recorded only when no other mask claims the pixel (see the
+  precedence below), which makes it a meaningful "cannot tell" marker rather than an
+  artifact of zone naming.
 - `NN` — **no mask matched**. This is a sentinel produced by the hit test, not a mask file.
   It appears in `{limb}_Zones` cells and, for transitions only, stands in for an episode
   edge that carries no zone at all.
 
 Masks are grayscale PNGs where the zone is drawn in **black on white**; a click hits a zone
-when the mask pixel under it is 0. Masks are loaded in sorted filename order and the
-**first** match wins, so overlapping masks resolve deterministically.
+when the mask pixel under it is 0. The masks OVERLAP — 1.4% (default set) / 2.2%
+(alternate set) of the diagram is claimed by two or more of them, nearly all of it the
+`LINE` mask lying on top of the zones it separates — so the winner is decided by
+**precedence** (highest first):
+
+1. any real anatomical zone,
+2. `BOX1`–`BOX6`,
+3. `OUTSIDE`,
+4. `LINE`,
+5. `NN`, only when no mask matched at all.
+
+Ties within one level fall back to sorted filename order, so the result is always
+deterministic; in the shipped mask sets that only ever happens on the borders two boxes
+share.
+
+> **Datasets written by TinyTouch 8.0.0 and earlier** used plain "first mask in sorted
+> filename order wins", which made the outcome depend on the zone's NAME: an edge click on `Q` was
+> recorded as `LINE` while the identical click on `F` was recorded as `F`. The change affects
+> 0.6% (default) / 1.1% (alternate) of the diagram area; every changed pixel previously read
+> `LINE` and now reads the zone that actually covers it (mostly `OUTSIDE`). Nothing else in
+> the format changed.
 
 ---
 
@@ -382,7 +405,7 @@ version containing it is the `v8.0.0` tag. The touch export described above is u
 ## See also
 
 - [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) — how the data is produced, for annotators.
-- [../PROJECT.md](../PROJECT.md) — architecture, on-disk layout, internal state database.
+- [../ARCHITECTURE.md](../ARCHITECTURE.md) — architecture, on-disk layout, internal state database.
 - [`src/adapters/export_writer.py`](../src/adapters/export_writer.py) — the writer; this
   document describes its output.
 - [`src/domain/touch_stats.py`](../src/domain/touch_stats.py) — the normative

@@ -44,9 +44,13 @@ _REQUIRED_ATTRIBUTES = (
 )
 
 _EXPECTED_BUTTON_LABELS = (
-    "Load Video", "Save", "Settings", "Analysis", "Clothes",
+    "Load Video", "Settings", "Clothes", "Analysis", "Save",
     "<<", "<", ">", ">>", "Play", "Stop",
     "Save Note", "Select Frame",
+)
+
+_EXPECTED_TOP_BUTTON_ORDER = (
+    "Load Video", "Settings", "Clothes", "Analysis", "Save",
 )
 
 
@@ -71,6 +75,15 @@ def _assert_expected_buttons_exist(app):
         assert find_button(app, label) is not None
 
 
+def _assert_top_buttons_are_ordered(app):
+    labels = tuple(
+        child.cget("text")
+        for child in app.load_video_btn.master.winfo_children()
+        if child.winfo_class() == "TButton"
+    )
+    assert labels == _EXPECTED_TOP_BUTTON_ORDER
+
+
 def _assert_zone_masks_loaded(app):
     """The diagram's hit-test data must actually be on disk and readable."""
     assert app._zone_masks, "no zone masks were loaded"
@@ -85,6 +98,7 @@ def test_app_builds_wires_and_closes_cleanly(app, capfd):
     _assert_panels_exist(app)
     _assert_every_button_is_wired(app)
     _assert_expected_buttons_exist(app)
+    _assert_top_buttons_are_ordered(app)
     _assert_zone_masks_loaded(app)
 
     # Analysis / Clothes stay disabled until a video is loaded.

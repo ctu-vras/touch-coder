@@ -2,13 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
-AGENTS.md
 # Ignore distribution/build directories
 build/
 dist/
-AGENTS.md
-CLAUDE.md
-.mcp.json
 
 # Ignore flagged folder (if not needed in the repo)
 flagged/
@@ -28,7 +24,7 @@ flagged/
 # Labeled_data/ trees are left (migration_service moves them into data/).
 /Labeled_data/**
 
-# Ignore config and environment files
+# Ignore local environments and packaged executables
 
 *.env
 *.exe
@@ -42,16 +38,10 @@ scripts/bench/data/
 # Ignore log files
 *.log
 
-# Ignore text files that aren't documentation
-*.txt
-!requirements.txt
-!README.txt
-
 # Ignore hidden system files
 .DS_Store
 Thumbs.db
 
-docs/books/**
 # Ignore virtual environments
 .venv/
 venv/
@@ -62,5 +52,23 @@ TinyTouch_env/
 /data/*/sorted_frames/
 /data/*/sorted_frames/**
 
-.claude
-AGENTS.md
+# Ignore editor-specific project metadata
+/.idea/
+
+# Keep local assistant and internal working files out of the public repository
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.claude/
+/.mcp.json
+/TODO.md
+/DONE.md
+/docs/books/
+/docs/plans/
+/docs/reviews/
+/docs/dev/HANDOFF.md
+
+# Local reference assets that are not part of the application or documentation
+/assets/icons_unused/
+/assets/tutorial.mp4
+/surprise.txt

@@ -139,5 +139,5 @@ window that runs alongside the application: it carries the log.
 ## Documentation
 
 [Annotation guide](docs/ANNOTATION_GUIDE.md) for annotators, [data format](docs/DATA_FORMAT.md)
-for data consumers, [PROJECT.md](PROJECT.md) for developers, and a
+for data consumers, [ARCHITECTURE.md](ARCHITECTURE.md) for developers, and a
 [full index](docs/README.md) of everything else.

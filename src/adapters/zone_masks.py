@@ -29,7 +29,7 @@ def zones_dir(new_template: bool = False) -> str:
 def list_zone_names(new_template: bool = False) -> list:
     """Zone NAMES for the active template, sorted for display.
 
-    Directory scan (adding a PNG adds a zone — see PROJECT.md), so this is I/O
+    Directory scan (adding a PNG adds a zone — see ARCHITECTURE.md), so this is I/O
     and belongs in an adapter. The `NN` sentinel is always included because a
     click that hits no mask is recorded as `NN` and must have a heatmap row.
     An unreadable directory yields just `[NN]` with a WARN rather than raising:
@@ -54,10 +54,11 @@ def load_zone_masks(directory):
     """Load every readable grayscale mask image in `directory`.
 
     Returns an ordered list of (zone_name, image) tuples — the zone name is
-    the filename minus its last extension. Filenames are sorted so mask
-    precedence (first match wins on overlapping masks, see zones_at) is
-    deterministic across filesystems instead of depending on os.listdir order.
-    Unreadable / non-image files are skipped silently.
+    the filename minus its last extension. Filenames are SORTED, which is what
+    makes `zones_at`'s same-tier tie-break (first match in this list wins)
+    alphabetical and reproducible instead of dependent on os.listdir order.
+    Overlaps ACROSS tiers are decided by `domain.touch.zone_precedence`, not by
+    this order. Unreadable / non-image files are skipped silently.
     """
     masks = []
     if not os.path.isdir(directory):

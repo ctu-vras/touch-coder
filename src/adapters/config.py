@@ -1,8 +1,8 @@
 """
 adapters/config.py
 config.json read/write (moved from config_utils.py). The on-disk JSON format
-is pinned by tests (roundtrip, key order, \\uXXXX escaping) — do not change
-how load_config/save_config serialize.
+is pinned by tests (roundtrip, key order, literal-UTF-8 encoding) — do not
+change how load_config/save_config serialize.
 
 The old `load_parameter_names_into` was split: the config-reading half is
 `load_parameter_labels()` here; the Video-entity mutation + Tk button wiring
@@ -64,8 +64,19 @@ def load_config():
 
 
 def save_config(config: dict) -> None:
+    """Write the WHOLE config dict back, preserving key order.
+
+    `ensure_ascii=False` so a non-ASCII parameter label is stored as literal
+    UTF-8 instead of `\\uXXXX` escapes — config.json is a file users open and
+    edit, and this matches `adapters.export_writer`, which already writes the
+    metadata sidecar as literal UTF-8. Values round-trip identically either
+    way (`json.load` decodes escapes); this is purely on-disk readability.
+    """
     config_path = _ensure_config_file()
-    atomic_write(config_path, lambda file: json.dump(config, file, indent=2, sort_keys=False))
+    atomic_write(
+        config_path,
+        lambda file: json.dump(config, file, indent=2, sort_keys=False, ensure_ascii=False),
+    )
 
 
 def load_config_flags():

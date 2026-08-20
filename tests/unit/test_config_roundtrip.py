@@ -10,10 +10,11 @@ Pinned here before the refactor:
     config written by a newer app version survives an open/save in this one;
   * key order is preserved on disk (json.dump(sort_keys=False) + insertion-
     ordered dicts);
-  * non-ASCII parameter labels survive. NOTE the asymmetry with the export
-    metadata: save_config does NOT pass ensure_ascii=False, so the file bytes
-    are \\uXXXX escapes — but json.load decodes them, so the VALUE roundtrip
-    is still exact. That on-disk escaping is current behavior and is pinned.
+  * non-ASCII parameter labels survive AND are stored as literal UTF-8:
+    save_config passes ensure_ascii=False, so the file bytes are the real
+    characters, matching what the export-metadata writer has always done.
+    The VALUE roundtrip is exact either way (json.load decodes \\uXXXX
+    escapes); the on-disk BYTES are what is pinned here.
 
 The config path is resolved via `get_config_path()`; we monkeypatch it (same
 pattern as test_config_corrupt) so the developer's real config.json is never
@@ -92,15 +93,21 @@ def test_key_order_preserved_on_disk(config_path):
     assert list(on_disk.keys()) == list(FULL_CONFIG.keys())
 
 
-def test_utf8_labels_roundtrip_even_though_file_escapes_them(config_path):
-    """Current behavior: json.dump WITHOUT ensure_ascii=False -> the file holds
-    ASCII \\u escapes, yet the loaded VALUE is byte-identical to what was saved.
-    (Contrast with export metadata, which writes literal UTF-8.)"""
+def test_utf8_labels_are_stored_as_literal_utf8(config_path):
+    """save_config passes ensure_ascii=False -> the file holds the real UTF-8
+    bytes, not ASCII \\uXXXX escapes.
+
+    This flipped deliberately: config.json was the only file in the app that
+    escaped non-ASCII (`adapters.export_writer` has always written the metadata
+    sidecar as literal UTF-8), and clients do open config.json to read the
+    parameter labels. Only the BYTES changed -- json.load decodes escapes, so
+    the round-tripped VALUE was exact before and is still exact (last assert).
+    """
     save_config(dict(FULL_CONFIG))
 
     raw = config_path.read_bytes()
-    assert "Pohled ěščřž".encode("utf-8") not in raw
-    assert b"\\u011b" in raw  # ě escaped on disk
+    assert "Pohled ěščřž".encode("utf-8") in raw
+    assert b"\\u011b" not in raw  # no escape for the ě any more
 
     assert load_config()["parameter2"] == "Pohled ěščřž"
 

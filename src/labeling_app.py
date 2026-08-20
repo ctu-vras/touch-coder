@@ -25,7 +25,7 @@ from domain.model import (
     preview_lines_for_save,
 )
 from domain.project import ProjectPaths
-from domain.touch import find_last_open_onset, zones_at
+from domain.touch import NO_ZONE, find_last_open_onset, zones_at
 from gui import theme
 from gui.cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
 from gui.resource_utils import asset_path
@@ -666,6 +666,19 @@ class LabelingApp(tk.Tk):
         current_frame = self.video.current_frame
         option = self.option_var_1.get()
 
+        # OBSERVABILITY: an unmatched click is not an error the app can fix, but
+        # it silently enters the dataset as the NN sentinel (~0.1% of the canvas
+        # matches no mask at all, plus anything outside the mask bounds). Say so
+        # here, where the frame and limb are known, so the annotator can go back
+        # and re-place the dot instead of finding NN rows after the study.
+        if zone_results == [NO_ZONE]:
+            print(
+                f"WARN: click hit no zone mask - recorded as '{NO_ZONE}' "
+                f"frame={current_frame} limb={option} onset={onset} "
+                f"x={x_pos:.1f} y={y_pos:.1f} (diagram pixels); "
+                "delete the dot and click further inside a zone"
+            )
+
         setattr(self.video, f"is_touch{option}", True)
 
         print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={zone_results}")
@@ -758,8 +771,9 @@ class LabelingApp(tk.Tk):
 
     def find_image_with_white_pixel(self, x, y):
         # NOTE: historically misleading name — the masks are BLACK shapes on
-        # white, so a hit is pixel == 0 (see domain.touch.zones_at, which pins
-        # the first-match + ['NN'] sentinel semantics the exports rely on).
+        # white, so a hit is pixel == 0. domain.touch.zones_at owns the rule:
+        # overlapping masks resolve by precedence (real zone > BOX* > OUTSIDE >
+        # LINE) and a miss is the ['NN'] sentinel the exports rely on.
         with self.perf.time("find_image_with_white_pixel"):
             if not getattr(self, "_zone_masks", None):
                 self._load_zone_masks()

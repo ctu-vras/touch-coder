@@ -95,7 +95,7 @@ Clicking either timeline jumps to that frame.
 
 **Right** — the body diagram, the limb selector, the parameter buttons and the note box.
 
-**Top bar** — Load Video, Save, Settings, Analysis, Clothes on the left; the navigation
+**Top bar** — Load Video, Settings, Clothes, Analysis, Save on the left; the navigation
 buttons, Play/Stop and the frame/time counters on the right.
 
 **Bottom strip** — the mode chip, the buffer indicator, the minimal-touch-length readout,
@@ -205,15 +205,20 @@ Special zones:
   scheme and write it down, because the export only records `BOX3`, not what you meant by
   it.
 - **`OUTSIDE`** — you clicked in the area masked as off-body.
-- **`LINE`** — you clicked exactly on a boundary line between two zones. Nudge the click a
-  pixel or two into the intended zone.
+- **`LINE`** — you clicked exactly on a boundary line between two zones, and *no zone at all
+  covers that pixel*, so TinyTouch genuinely cannot tell which one you meant. Nudge the click
+  a pixel or two into the intended zone.
 - **`NN`** — **no zone matched at all.** Almost always a misclick outside the diagram's
   masked area. `NN` clicks are kept in the data and show up in the analysis, so treat `NN`
-  in a finished dataset as a defect to be corrected, not as a category.
+  in a finished dataset as a defect to be corrected, not as a category. Every `NN` click is
+  also announced with a `WARN` line in the console, naming the frame and limb, so you can
+  fix it while you are still on the video.
 
-If two zone masks overlap, the first one in alphabetical filename order wins, so the
-resolution is at least deterministic — but a click well inside the zone you mean avoids the
-question entirely.
+The zone masks overlap slightly, so a click can match several. The winner is decided by
+precedence, not by name: **a real body zone beats a box, a box beats `OUTSIDE`, and
+`OUTSIDE` beats `LINE`.** That is why `LINE` and `NN` really mean "nothing claimed this
+pixel" and are worth chasing down — they are never just an artifact of which zone happens
+to sort first.
 
 ---
 

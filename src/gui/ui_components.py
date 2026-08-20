@@ -134,15 +134,6 @@ def _build_controls(app):
     )
     app.load_video_btn.pack(side="left", padx=5)
 
-    save_btn = ttk.Button(
-        left_top,
-        text="Save",
-        command=app.save_data,
-        style="Tool.TButton",
-        takefocus=0,
-    )
-    save_btn.pack(side="left", padx=5)
-
     settings_btn = ttk.Button(
         left_top,
         text="Settings",
@@ -151,6 +142,15 @@ def _build_controls(app):
         takefocus=0,
     )
     settings_btn.pack(side="left", padx=5)
+
+    app.cloth_btn = ttk.Button(
+        left_top,
+        text="Clothes",
+        command=app.open_cloth_app,
+        style="Tool.TButton",
+        takefocus=0,
+    )
+    app.cloth_btn.pack(side="left", padx=5)
 
     app.analysis_btn = ttk.Button(
         left_top,
@@ -161,14 +161,14 @@ def _build_controls(app):
     )
     app.analysis_btn.pack(side="left", padx=5)
 
-    app.cloth_btn = ttk.Button(
+    save_btn = ttk.Button(
         left_top,
-        text="Clothes",
-        command=app.open_cloth_app,
+        text="Save",
+        command=app.save_data,
         style="Tool.TButton",
         takefocus=0,
     )
-    app.cloth_btn.pack(side="left", padx=5)
+    save_btn.pack(side="left", padx=5)
 
     back_10_frame_btn = ttk.Button(
         right_top_buttons,

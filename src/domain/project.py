@@ -2,7 +2,7 @@
 domain/project.py
 Canonical on-disk layout of one labeled-video project. Every path under
 `data/<video_name>/` is derived here — no other module may hand-build these
-strings (PROJECT.md "Data Layout on Disk" is the reference).
+strings (ARCHITECTURE.md "Data Layout on Disk" is the reference).
 
 Layout (current):
 

@@ -71,10 +71,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from domain.model import LIMBS
+from domain.touch import NO_ZONE, is_catch_all_zone
 
-# Sentinel zone used by the labeler when a click hits no mask, and as the
-# transition fallback for an episode edge that carries no zone at all.
-NO_ZONE = "NN"
+# `NO_ZONE` ("NN") is defined in domain.touch — the labeler's hit test writes it
+# and this module reuses it as the transition fallback for an episode edge that
+# carries no zone at all. Re-exported here because importers (adapters.zone_masks,
+# the tests) have always read it from this module.
 
 # Columns every export must have for analysis to mean anything. `{limb}_X` /
 # `{limb}_Y` are NOT required: they only feed the trajectory plot, so a file
@@ -198,10 +200,14 @@ def _dedup(values) -> Tuple[str, ...]:
 
 def zone_sort_key(zone: str):
     """Zone ordering for axes/matrices: real zones first (shortest name, then
-    alphabetical), then the catch-alls (`BOX*`, `OUTSIDE`, `LINE`, `NN`)."""
+    alphabetical), then the catch-alls (`BOX*`, `OUTSIDE`, `LINE`, `NN`).
+
+    "Catch-all" is `domain.touch.is_catch_all_zone` — the SAME predicate the
+    click hit test uses to rank overlapping masks, so the axis order and the
+    hit-test precedence can never disagree about what counts as anatomy.
+    """
     z = str(zone)
-    special = z.startswith("BOX") or z in {"OUTSIDE", "LINE", NO_ZONE}
-    return (1 if special else 0, len(z), z)
+    return (1 if is_catch_all_zone(z) else 0, len(z), z)
 
 
 def fps_is_usable(fps) -> bool:

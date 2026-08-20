@@ -61,7 +61,7 @@ distinction the exporter or the GUI can observe is representable here:
   they survive a round-trip); `zones` is NULL for a click with no bucket.
   `zones = '[]'` is therefore an EMPTY bucket, distinct from "no bucket".
 
-Fields deliberately NOT stored (see the module report / PROJECT.md):
+Fields deliberately NOT stored (see ARCHITECTURE.md):
 `Bodypart` is reconstructed from the limb key (every writer sets it to exactly
 that and nothing reads it), `Touch` is always `None` (no writer, no reader, no
 export column), the retired per-limb `Look` is dropped, and `Changed` is a

@@ -1,7 +1,7 @@
 """
 Red/green regression guard for finding M4 (division by zero on 0-FPS video).
 
-See docs/reviews/2026-07-12/to_do/fix_M4.md.
+This guards the zero-FPS fallback used by the export path.
 
 `export_from_unified` computes `Time_ms = (f / frame_rate) * 1000.0` with no guard
 (data_utils.py, ~line 520). Some containers make OpenCV's CAP_PROP_FPS probe return
