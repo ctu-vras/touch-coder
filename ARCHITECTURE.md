@@ -343,7 +343,7 @@ the install directory the first time so users get a writable copy.
 
 ## Application Workflow
 
-1. **Load Video** -- pick `Normal` / `Reliability`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `videos/` and the project tree is created under `data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts.
+1. **Load Video** -- pick `Normal` / `Reliability`, then select a video file (mp4/mov/avi/mkv/flv/wmv). The video is copied into `videos/` and the project tree is created under `data/<video>/` so the working set is self-contained, frames are extracted (or copied for Reliability), prior state is loaded, and the buffering thread starts. Loading **another video mid-session** is supported: `LabelingApp._unload_current_video` first persists the open project exactly like Close does (save, last position, labeling time), then detaches it in the one order that cannot mix two projects' data — video dropped (idling the worker threads) → frame buffer emptied (generation bump) → state DB closed — before the new project is opened. The new session is built against a local `Video` and published only after its frames exist; a failure mid-load falls back to the clean "no video loaded" state, and cancelling either dialog leaves the open project untouched.
 2. **Clothes** -- mark which body zones are covered with clothes; stored in the state DB's `clothes_dots` and surfaced in the export metadata.
 3. **Annotate** -- pick a limb, click onsets/offsets, set gaze and parameters, type notes. Edits stay in memory until Save.
 4. **Save** -- `Save` button (or auto on Close / before Load) writes the dirty frames to the state DB (one transaction), then the export CSV (full) and the metadata sidecar. The `Changed` flags are cleared.
@@ -394,7 +394,7 @@ them and users bookmark them): `heatmap_<LIMB>.html`, `touch_trajectory.html`,
 ## Testing
 
 ```bash
-uv run pytest                 # 288 passed, 1 skipped, 3 deselected
+uv run pytest                 # 317 passed, 7 deselected
 uv run pytest -m gui          # the excluded end-to-end GUI tests (needs a display)
 ```
 
@@ -405,7 +405,7 @@ default run is headless. The suite is a pyramid:
 | --- | --- |
 | `tests/unit/` | Pure rules and single adapters: export encoding, config, SQLite repository, touch statistics, zone detection, thread-boundary guards, theme. |
 | `tests/integration/` | Several layers together: the analysis pipeline end to end, the directory-layout migration, the legacy-state → SQLite migration, the load/save lifecycle. |
-| `tests/e2e/` | A real Tk root driven through `tests/e2e/gui_driver.py` — smoke test, annotate/save/export, upgrade path. Marked `gui` and deselected by default. |
+| `tests/e2e/` | A real Tk root driven through `tests/e2e/gui_driver.py` — smoke test, annotate/save/export, upgrade path, loading a second video mid-session, close during extraction. Marked `gui` and deselected by default. |
 
 The two migration guarantees worth knowing: `tests/integration/test_sqlite_migration.py`
 asserts that the export produced from a migrated DB is byte-identical to the export

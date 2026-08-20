@@ -221,6 +221,13 @@ class LabelingApp(tk.Tk):
         self._display_h = 0                   # thread (workers must not call winfo_*)
         self._last_step_sign = 0              # +1 forward / -1 backward / 0 none
 
+        # While True, _buffer_context/_playback_context return None so the two
+        # worker threads idle. Held for the whole load_video swap: the workers
+        # must not observe (or repaint from) a half-published video, and their
+        # first tick for a new video only happens after load_video returned —
+        # the same ordering the very first load has by construction.
+        self._suspend_frame_workers = False
+
         # Frame buffer + playback engine (adapters.frame_buffer). The engine
         # owns the buffer lock/generation and the loader pool; every UI touch
         # is marshaled through the injected schedule_on_ui, and ALL writes to
@@ -1293,7 +1300,7 @@ class LabelingApp(tk.Tk):
         this hands over the geometry cache maintained on the main thread
         (on_resize + load_video).
         """
-        if self.video is None or self.video.frames_dir is None:
+        if self._suspend_frame_workers or self.video is None or self.video.frames_dir is None:
             return None
         return BufferContext(
             frames_dir=self.video.frames_dir,
@@ -1308,7 +1315,7 @@ class LabelingApp(tk.Tk):
 
     def _playback_context(self):
         """Per-tick state snapshot for the playback thread."""
-        if self.video is None:
+        if self._suspend_frame_workers or self.video is None:
             return None
         return PlaybackContext(
             playing=bool(self.play),
@@ -1703,6 +1710,15 @@ class LabelingApp(tk.Tk):
 
     # === Video Load & Init =====================================================
     def ask_labeling_mode(self):
+        """Modal mode picker. Returns "Normal" / "Reliability", or None when
+        the window is closed without confirming.
+
+        Deliberately side-effect free on the app: the caller commits the mode
+        (self.labeling_mode + the mode chip) only once the load is actually
+        going ahead, so cancelling a load can never leave the OPEN video
+        tagged with a half-switched mode (its export metadata records
+        self.labeling_mode on every save).
+        """
         mode_window = tk.Toplevel(self)
         mode_window.title("Select Mode")
         mode_window.geometry("420x220")
@@ -1737,11 +1753,13 @@ class LabelingApp(tk.Tk):
             takefocus=0,
         ).pack()
 
+        chosen = {"mode": None}
+
         def set_mode():
-            self.labeling_mode = labeling_var.get()
-            color = theme.STATUS_WARN if self.labeling_mode == 'Reliability' else theme.STATUS_OK
-            self.mode_label.set(color, self.labeling_mode)
-            cfg["last_labeling_mode"] = self.labeling_mode
+            chosen["mode"] = labeling_var.get()
+            # The preference default is fine to persist right away; it does
+            # not touch the open video's state.
+            cfg["last_labeling_mode"] = chosen["mode"]
             config.save_config(cfg)
             mode_window.destroy()
 
@@ -1754,17 +1772,100 @@ class LabelingApp(tk.Tk):
             takefocus=0,
         ).pack(pady=(16, 0))
         mode_window.wait_window()
+        return chosen["mode"]
+
+    def _unload_current_video(self) -> bool:
+        """Persist and fully detach the open project — the same writes
+        `on_close` performs, without tearing the Tk app down. Returns False
+        when the final save failed; the project is then left open untouched
+        so nothing can be lost.
+
+        ORDERING (the data-mixing guard): every writer runs against the OLD
+        repo first; then `self.video` drops to None, which idles the
+        buffer/playback threads (their context providers return None); then
+        the buffer generation is bumped so in-flight decodes of old frames
+        discard their result; the state DB closes last.
+        """
+        if self.video is None:
+            return True
+        print(f"INFO: Unloading video '{self.video_name}' (save + close state DB).")
+
+        # Stop playback / arrow-hold before the video identity changes.
+        self.stop_video()
+        self._cancel_arrow_hold_state()
+
+        # A leftover Clothes window writes its dots through the CURRENT repo
+        # on close, so close it now, while that repo is still the right one.
+        if self._cloth_app and self._cloth_app.top_level.winfo_exists():
+            print("INFO: Closing the Clothes window before unloading.")
+            self._cloth_app.on_close()
+        self._cloth_app = None
+
+        try:
+            ok = self.save_data()
+        except Exception:
+            traceback.print_exc()
+            ok = False
+        if not ok:
+            print("ERROR: Unload aborted — the final save failed; "
+                  "keeping the current video open.")
+            return False
+        self.save_last_position()
+        self._finalize_video_time()
+
+        # Drop the video FIRST: from here on the worker threads see a None
+        # context and go idle instead of touching a half-swapped state.
+        self.video = None
+        self.video_name = None
+        self._last_step_sign = 0
+        self._buffer_reset()
+        self.frame_buffer.buffer_ready = False
+
+        self._close_state_repo()
+        self._reset_zone_cache()
+
+        # UI bits tied to the old project.
+        self._set_note_entry_text("")
+        theme.set_button_state(self.cloth_btn, None)
+        self.name_label.config(text="Video Name: -----")
+        self.framerate_label.config(text="Frame Rate: -----")
+        self._refresh_jump_label()
+        self._set_mode_button_states()
+        return True
+
+    def _abort_load_to_clean_state(self):
+        """A load failed AFTER the previous project was already detached.
+        Return to the well-defined startup state (no video, no repo, no
+        timer, empty buffer) instead of leaving a half-loaded session."""
+        print("INFO: load_video: aborting to the clean 'no video loaded' state.")
+        self._stop_video_timer_if_any()
+        self._close_state_repo()
+        self._reset_zone_cache()
+        self.video = None
+        self.video_name = None
+        self._buffer_reset()
+        self._set_mode_button_states()
 
     def load_video(self):
-        had_video = self.video is not None
-        if self.video is not None:
-            print("INFO: Saving before loading new video.")
-            self.save_data()
-            self.save_last_position()
+        """Load Video button. Suspends the buffer/playback workers for the
+        whole swap so they can never observe a half-published video, then
+        wakes them once the load fully finished (successfully or not — an
+        aborted load ends with video=None, which keeps them idle anyway)."""
+        self._suspend_frame_workers = True
+        try:
+            self._load_video_flow()
+        finally:
+            self._suspend_frame_workers = False
+            self.frame_buffer.poke()
 
-        self.ask_labeling_mode()
-        if not hasattr(self, 'labeling_mode'):
-            print("INFO: No mode selected, cancelling video load."); return
+    def _load_video_flow(self):
+        # 1) Gather the user's choices first. Nothing is saved or torn down
+        #    yet, so cancelling either dialog leaves the current session
+        #    completely untouched (mode chip included).
+        mode = self.ask_labeling_mode()
+        if mode is None:
+            print("INFO: No mode selected, cancelling video load.")
+            return
 
         video_path = filedialog.askopenfilename(
             title="Select Video File",
@@ -1775,24 +1876,47 @@ class LabelingApp(tk.Tk):
         )
         if not video_path: return
 
+        # 2) Read-only preparation of the NEW video (copy + probe) while the
+        #    current project, if any, is still fully alive — a failure here
+        #    cancels the load without disturbing it.
         copied_path = self._prepare_video_copy(video_path)
         if not copied_path:
             print("INFO: Video copy failed; cancelling load.")
             return
         video_path = copied_path
-        if had_video:
-            self._finalize_video_time()
 
         # Probe once (adapter); the Video model itself does no I/O anymore.
         raw_frame_count, fps = video_probe.probe(video_path)
-        self.video = Video(video_path, total_frames=raw_frame_count - 1)
-        self.video.frame_rate = round(fps, 1)
-        self.frame_rate = self.video.frame_rate
+
+        # 3) Persist and detach the current project (no-op on first load).
+        #    From here on the app is in the clean "no video" state; any later
+        #    failure aborts back to it instead of leaving a half-loaded mix.
+        if not self._unload_current_video():
+            messagebox.showerror(
+                "Save Failed",
+                "Saving the current video failed (see the console).\n"
+                "The new video was NOT loaded, so nothing is lost.",
+            )
+            return
+
+        # Commit the mode only now that the load is actually going ahead.
+        self.labeling_mode = mode
+        self.mode_label.set(
+            theme.STATUS_WARN if mode == "Reliability" else theme.STATUS_OK, mode
+        )
+
+        # 4) Build the new session against a LOCAL Video object. self.video
+        #    is assigned only at the commit point below, once the state DB is
+        #    open and the frames exist — until then the buffer/playback
+        #    threads idle on a None context, so frames of two videos can
+        #    never mix in the buffer.
+        video = Video(video_path, total_frames=raw_frame_count - 1)
+        video.frame_rate = round(fps, 1)
+        self.frame_rate = video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
         self.jump_frame_count = max(1, round(self.frame_rate * self.jump_seconds))
         print(f"INFO: Fast-jump set to {self.jump_frame_count} frames "
               f"({self.jump_seconds}s @ {self.frame_rate} fps)")
-        self._refresh_jump_label()
         min_length_in_frames = self.minimal_touch_length * self.frame_rate / 1000
         self.min_touch_length_label.config(text=f"Minimal Touch Length: {min_length_in_frames}")
         raw_video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -1800,9 +1924,8 @@ class LabelingApp(tk.Tk):
         # service (ProjectPaths.for_video underneath).
         paths = project_service.prepare_project(raw_video_name, self.labeling_mode)
         video_name = paths.video_name
-        self.video_name = video_name
 
-        self.video.frames_dir = paths.frames_dir
+        video.frames_dir = paths.frames_dir
 
         # --- Working state: open state/<video>.db, migrating the legacy
         # CSV/JSON state on the first open. The progress window covers the whole
@@ -1810,34 +1933,42 @@ class LabelingApp(tk.Tk):
         # legacy row before writing the DB.
         data_progress_update, data_progress_close = self._open_data_progress_window()
         try:
-            self._reset_zone_cache()
-            self._close_state_repo()
             self.state_repo = project_service.open_state(
                 paths,
                 fps=self.frame_rate,
-                program_version=self.video.program_version,
+                program_version=video.program_version,
                 progress_cb=data_progress_update,
             )
             # ORDERING (unchanged): the labeling timer starts BEFORE the frame
             # load so the session is already accumulating; an extraction abort
             # below rolls it back via _stop_video_timer_if_any().
             self.labeling_timer.start(self.state_repo)
-            self.video.frames = self.state_repo.load_frames(
+            video.frames = self.state_repo.load_frames(
                 progress_cb=data_progress_update
             )
+        except Exception as exc:
+            print("ERROR: load_video: could not open the working state:", flush=True)
+            traceback.print_exc()
+            messagebox.showerror(
+                "Load Failed",
+                f"Could not open the working state for this video:\n\n{exc}\n\n"
+                "The video was not loaded.",
+            )
+            self._abort_load_to_clean_state()
+            return
         finally:
             data_progress_close()
 
         # Names for parameters (update button text)
         load_parameter_names_into(
-            self.video,
+            video,
             {1: self.par1_btn, 2: self.par2_btn, 3: self.par3_btn},
             {1: self.limb_par1_btn, 2: self.limb_par2_btn, 3: self.limb_par3_btn},
         )
 
         # Frames generation/check
         print("INFO: load_video: checking frames folder...", flush=True)
-        if not project_service.frames_ready(paths, self.video.total_frames):
+        if not project_service.frames_ready(paths, video.total_frames):
             print("INFO: Number of frames is different, creating new frames", flush=True)
             progress_update, progress_close = self._open_frame_progress_window()
             extraction_cancel = Event()
@@ -1851,6 +1982,9 @@ class LabelingApp(tk.Tk):
                     cancel_event=extraction_cancel,
                 )
             except FrameExtractionCancelled:
+                # The app is closing: on_close set the cancel event and has
+                # already saved/closed everything itself, so only the timer
+                # needs rolling back — no widget may be touched from here.
                 print("INFO: load_video: frame extraction cancelled during shutdown.", flush=True)
                 self._stop_video_timer_if_any()
                 return
@@ -1862,9 +1996,9 @@ class LabelingApp(tk.Tk):
                     "The file may be unreadable or use an unsupported codec. "
                     "The video was not loaded.",
                 )
-                # Undo the labeling-time timer started before extraction so a
-                # failed load doesn't leak an accumulating timer.
-                self._stop_video_timer_if_any()
+                # Roll back the labeling timer and the state DB opened above,
+                # ending in the clean "no video loaded" state.
+                self._abort_load_to_clean_state()
                 return
             finally:
                 if self._frame_extraction_cancel is extraction_cancel:
@@ -1872,6 +2006,13 @@ class LabelingApp(tk.Tk):
                 progress_close()
         else:
             print("INFO: Number of frames is correct", flush=True)
+
+        # 5) COMMIT POINT: the state DB is open, the frames exist on disk.
+        #    Publish the new session to the rest of the app — the worker
+        #    threads start seeing this video from this line on.
+        self.video = video
+        self.video_name = video_name
+        self._refresh_jump_label()
 
         self._timeline_dirty = True
         self._timeline2_dirty = True
@@ -1901,11 +2042,12 @@ class LabelingApp(tk.Tk):
         self._display_w = self.video_frame.winfo_width()
         self._display_h = self.video_frame.winfo_height()
 
+        # Lazily started once; on a reload it is already alive and simply
+        # picks the new video up from its context provider. The buffer itself
+        # was emptied (generation-bumped) in _unload_current_video, BEFORE the
+        # new video was published, so it cannot hold stale frames here.
         if not self.background_thread.is_alive():
             self.background_thread.start()
-        else:
-            self._buffer_reset()
-            print("INFO: Thread already running.")
 
         # Notes: the display-only fallback for pre-unified projects, now the
         # state DB's `legacy_notes` table (never merged into bundle["Note"] —
@@ -1922,7 +2064,6 @@ class LabelingApp(tk.Tk):
         # used as the rescale source (project_service.rescale_clothes_points),
         # exactly as the sidecar's DiagramScale line was.
 
-        self.load_video_btn.config(state=tk.DISABLED)
         for b in self.video.frames.values():
             if isinstance(b, dict):
                 b["Changed"] = False

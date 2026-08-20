@@ -218,22 +218,30 @@ class FrameBuffer:
         self._priority_event.set()  # break the 10 ms wait right away
         self._loader_pool.shutdown(wait=wait, cancel_futures=cancel_futures)
 
-    def _schedule_ui_or_stop(self, fn, what) -> bool:
-        """Marshal `fn` to the UI thread; latch shutdown if the UI is already gone.
+    def _schedule_ui_or_drop(self, fn, what) -> bool:
+        """Marshal `fn` to the UI thread; drop it quietly when that fails.
 
         `shutdown()` runs one line before `Tk.destroy()`, so this thread can be
         mid-decode when the interpreter disappears. `Tk.after` then raises
         (`RuntimeError: main thread is not in main loop`), which would kill the
         daemon with an unhandled traceback on stderr instead of ending the
         session quietly. Mirrors the guard `_request_advance` already has.
+
+        Deliberately does NOT latch `_stopped`: on the real close path
+        `shutdown()` already set it before the interpreter went away, and a
+        scheduling failure can also be transient (the main thread briefly
+        outside the event loop — pump-driven test harnesses do this
+        constantly). Killing the buffer forever over a dropped repaint would
+        break every later video load in the session; the repaint itself is
+        only an optimization, since the frame is already in the buffer and the
+        next display call picks it up.
         """
         try:
             self._schedule_on_ui(fn)
             return True
         except Exception as exc:
-            self._stopped.set()
-            print(f"INFO: frame_buffer: {what} dropped — the UI is gone ({exc!r}); "
-                  f"buffering stops")
+            print(f"INFO: frame_buffer: {what} dropped — could not reach the "
+                  f"UI thread ({exc!r})")
             return False
 
     # === Buffering thread =====================================================
@@ -250,7 +258,11 @@ class FrameBuffer:
             with self._perf.time("background_update"):
                 current_frame = ctx.current_frame
                 if current_frame < 0 or current_frame > ctx.total_frames:
-                    return
+                    # Transiently possible around a video reload (old position
+                    # against new total). Skip the tick — never `return`: that
+                    # would kill this daemon permanently, and a Thread cannot
+                    # be restarted.
+                    continue
 
                 # Per-tick context captured once (the provider reads the
                 # geometry cache maintained on the main thread — H1).
@@ -269,7 +281,7 @@ class FrameBuffer:
                             current_frame, frames_dir, display_w, display_h, downscale, gen
                         )
                     if current_frame in self._buffer:
-                        self._schedule_ui_or_stop(
+                        self._schedule_ui_or_drop(
                             self._on_priority_frame_loaded, "priority repaint"
                         )
                         current_frame_loaded = True
