@@ -17,7 +17,7 @@ from adapters.frame_buffer import (
     PlaybackContext,
     compute_play_step,
 )
-from adapters.frame_extractor import FrameExtractionError
+from adapters.frame_extractor import FrameExtractionCancelled, FrameExtractionError
 from adapters.zone_masks import load_zone_masks
 from domain.model import (
     FrameRecord,
@@ -175,6 +175,8 @@ class LabelingApp(tk.Tk):
         self.labeling_timer = LabelingTimer()
         self._zone_masks = []
         self._zone_dir = None
+        self._closing = False
+        self._frame_extraction_cancel = None
 
         # Config snapshot, loaded ONCE. build_ui and everything below read
         # from this AppConfig instead of re-reading config.json.
@@ -1161,9 +1163,9 @@ class LabelingApp(tk.Tk):
         win.update_idletasks()
 
         def update(count, total, stage, elapsed_s):
-            if not win.winfo_exists():
-                return
             try:
+                if not win.winfo_exists():
+                    return
                 total = max(1, int(total))
                 count = min(int(count), total)
                 bar["maximum"] = total
@@ -1183,8 +1185,13 @@ class LabelingApp(tk.Tk):
                 pass
 
         def close():
-            if win.winfo_exists():
-                win.destroy()
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except tk.TclError:
+                # The root may have been destroyed while update() was pumping
+                # events for a long-running operation.
+                pass
 
         return update, close
 
@@ -1833,10 +1840,20 @@ class LabelingApp(tk.Tk):
         if not project_service.frames_ready(paths, self.video.total_frames):
             print("INFO: Number of frames is different, creating new frames", flush=True)
             progress_update, progress_close = self._open_frame_progress_window()
+            extraction_cancel = Event()
+            self._frame_extraction_cancel = extraction_cancel
             try:
                 project_service.extract_frames(
-                    video_path, paths, self.labeling_mode, progress_cb=progress_update
+                    video_path,
+                    paths,
+                    self.labeling_mode,
+                    progress_cb=progress_update,
+                    cancel_event=extraction_cancel,
                 )
+            except FrameExtractionCancelled:
+                print("INFO: load_video: frame extraction cancelled during shutdown.", flush=True)
+                self._stop_video_timer_if_any()
+                return
             except FrameExtractionError as exc:
                 print(f"ERROR: load_video: frame extraction failed: {exc}", flush=True)
                 messagebox.showerror(
@@ -1850,6 +1867,8 @@ class LabelingApp(tk.Tk):
                 self._stop_video_timer_if_any()
                 return
             finally:
+                if self._frame_extraction_cancel is extraction_cancel:
+                    self._frame_extraction_cancel = None
                 progress_close()
         else:
             print("INFO: Number of frames is correct", flush=True)
@@ -1983,8 +2002,11 @@ class LabelingApp(tk.Tk):
 
     # === App Lifecycle (close, position) =======================================
     def on_close(self):
+        if getattr(self, "_closing", False):
+            return
         if not custom_confirm_close(self):
             return
+        self._closing = True
         if self.video is not None:
             try:
                 ok = self.save_data()
@@ -1996,9 +2018,13 @@ class LabelingApp(tk.Tk):
                 "Saving failed - your latest changes are NOT on disk (see the console).\n"
                 "Close anyway and lose them?",
             ):
+                self._closing = False
                 return
             self.save_last_position()
             self._finalize_video_time()
+        extraction_cancel = getattr(self, "_frame_extraction_cancel", None)
+        if extraction_cancel is not None:
+            extraction_cancel.set()
         # ORDERING: the state DB closes only AFTER the final save, the last
         # position and the labeling-time checkpoint — all three write to it.
         self._close_state_repo()

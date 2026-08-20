@@ -9,7 +9,6 @@ This is the developer-facing document. See also:
 | [README.md](README.md) | Users — install and quick start |
 | [docs/ANNOTATION_GUIDE.md](docs/ANNOTATION_GUIDE.md) | Annotators — the coding manual |
 | [docs/DATA_FORMAT.md](docs/DATA_FORMAT.md) | Data consumers — the frozen export specification |
-| [docs/RELEASING.md](docs/RELEASING.md) | Maintainers — cutting a release |
 
 ## Purpose
 
@@ -36,7 +35,8 @@ touch-coder/
 │   ├── main.py                   # Entry point: layout migration, then LabelingApp.mainloop()
 │   ├── labeling_app.py           # Main controller (~2.3k LOC): video, annotation, persistence,
 │   │                             # frame buffer + playback wiring, save/export orchestration
-│   ├── video_model.py            # Video entity + PROGRAM_VERSION (LimbView wrappers over frames)
+│   ├── app_info.py               # Application version metadata
+│   ├── video_model.py            # Video entity (LimbView wrappers over frames)
 │   ├── perf_utils.py             # Optional perf timer + periodic summary logging
 │   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
 │   ├── domain/                   # PURE rules: no I/O, no Tk, no plotting, no config
@@ -431,12 +431,10 @@ Produces a standalone executable in `dist/`. The spec bundles two `datas` entrie
 
 A GitHub Actions workflow ([.github/workflows/build.yml](.github/workflows/build.yml)) builds and publishes Windows x64, Linux x64, and Linux Legacy x64 (Bullseye / Python 3.11) artifacts on every `v*` tag push, then creates a GitHub Release with the zips attached.
 
-**Full step-by-step instructions** (pre-release checklist, version bump, tagging, monitoring, rollback, common pitfalls): see **[docs/RELEASING.md](docs/RELEASING.md)**.
-
 Quick reference:
 
 ```bash
-# Bump PROGRAM_VERSION in src/video_model.py, commit, push to master, then:
+# Bump PROGRAM_VERSION in src/app_info.py, commit, push to master, then:
 git tag v8.1.0
 git push origin v8.1.0
 ```

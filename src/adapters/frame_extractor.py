@@ -25,6 +25,15 @@ class FrameExtractionError(RuntimeError):
     """Raised when frame extraction or reliability copy cannot complete safely."""
 
 
+class FrameExtractionCancelled(FrameExtractionError):
+    """Raised when the caller cancels an in-progress frame extraction."""
+
+
+def _raise_if_cancelled(cancel_event):
+    if cancel_event is not None and cancel_event.is_set():
+        raise FrameExtractionCancelled("Frame extraction cancelled.")
+
+
 def check_items_count(folder_path, expected_count):
     items = os.listdir(folder_path) if os.path.exists(folder_path) else []
     total_items = len(items)
@@ -106,7 +115,13 @@ def _advance_sequential_count(frames_dir, count):
     return count
 
 
-def _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interval_s):
+def _extract_frames_ffmpeg(
+    video_path,
+    frames_dir,
+    progress_cb,
+    progress_interval_s,
+    cancel_event=None,
+):
     """Extract frames using the bundled ffmpeg binary (fast path)."""
     ffmpeg_exe = _get_ffmpeg_exe()
     if ffmpeg_exe is None:
@@ -190,14 +205,20 @@ def _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interva
         started_threads.append(stderr_thread)
 
         while process.poll() is None:
+            _raise_if_cancelled(cancel_event)
             time.sleep(progress_interval_s)
+            _raise_if_cancelled(cancel_event)
             if progress_cb and total_frames:
                 now = time.time()
                 if (now - last_progress_ts) >= progress_interval_s:
                     last_progress_ts = now
                     count = _advance_sequential_count(frames_dir, count)
                     progress_cb(count, total_frames, "Generating frames", now - start_time)
+                    # The callback pumps Tk events. Closing the application can
+                    # therefore set cancellation before the callback returns.
+                    _raise_if_cancelled(cancel_event)
 
+        _raise_if_cancelled(cancel_event)
         _join_drainers(timeout=5.0)
 
         rc = process.returncode
@@ -218,6 +239,7 @@ def _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interva
         # Final progress report.
         if progress_cb and total_frames:
             progress_cb(frame_count, total_frames, "Generating frames", time.time() - start_time)
+            _raise_if_cancelled(cancel_event)
 
         if total_frames and abs(frame_count - total_frames) > max(1, int(total_frames * FRAME_COUNT_TOLERANCE_PCT)):
             print(f"WARN: ffmpeg generated {frame_count} frames, but expected {total_frames}.")
@@ -231,8 +253,8 @@ def _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interva
             print(f"WARN: could not poll ffmpeg during cleanup (pid={process.pid}): {exc!r}")
         if still_running:
             print(
-                f"ERROR: terminating ffmpeg (pid={process.pid}, video={video_path!r}) "
-                "after extraction error"
+                f"INFO: terminating ffmpeg (pid={process.pid}, video={video_path!r}) "
+                "before extraction completed"
             )
             try:
                 process.kill()
@@ -259,7 +281,13 @@ def _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interva
                     print(f"WARN: failed joining ffmpeg pipe drainer after close: {exc!r}")
 
 
-def _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interval_s):
+def _extract_frames_opencv(
+    video_path,
+    frames_dir,
+    progress_cb,
+    progress_interval_s,
+    cancel_event=None,
+):
     """Extract frames using OpenCV sequential decode+write (fallback path)."""
     print("INFO: Using OpenCV for frame extraction (fallback).")
 
@@ -281,6 +309,7 @@ def _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interva
         start_time = time.time()
 
         while success:
+            _raise_if_cancelled(cancel_event)
             frame_path = os.path.join(frames_dir, f"frame{count}.jpg")
             if not cv2.imwrite(frame_path, image):
                 msg = (
@@ -299,6 +328,7 @@ def _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interva
                 if (now - last_progress_ts) >= progress_interval_s or count >= total_frames:
                     last_progress_ts = now
                     progress_cb(count, total_frames or count, "Generating frames", now - start_time)
+                    _raise_if_cancelled(cancel_event)
     finally:
         vidcap.release()
     sys.stdout.write("\n")
@@ -316,8 +346,10 @@ def create_frames(
     progress_cb=None,
     progress_interval_s=1.0,
     original_frames_dir=None,
+    cancel_event=None,
 ):
     print("INFO: Checking if frames need to be created...")
+    _raise_if_cancelled(cancel_event)
 
     if labeling_mode == "Reliability":
         if original_frames_dir is None:
@@ -340,6 +372,7 @@ def create_frames(
             start_time = time.time()
             last_progress_ts = 0.0
             for index, filename in enumerate(frame_files):
+                _raise_if_cancelled(cancel_event)
                 src = os.path.join(original_frames_dir, filename)
                 dst = os.path.join(frames_dir, filename)
                 try:
@@ -353,9 +386,11 @@ def create_frames(
                     if (now - last_progress_ts) >= progress_interval_s:
                         last_progress_ts = now
                         progress_cb(index + 1, total_files, "Copying frames", now - start_time)
+                        _raise_if_cancelled(cancel_event)
             if progress_cb:
                 now = time.time()
                 progress_cb(total_files, total_files, "Copying frames", now - start_time)
+                _raise_if_cancelled(cancel_event)
             print(f"INFO: Frames copied successfully ({total_files} files in {time.time() - start_time:.1f}s).")
             if total_files == 0:
                 raise FrameExtractionError(
@@ -366,9 +401,19 @@ def create_frames(
 
     # Try ffmpeg first (faster), fall back to OpenCV.
     try:
-        if not _extract_frames_ffmpeg(video_path, frames_dir, progress_cb, progress_interval_s):
+        ffmpeg_args = (video_path, frames_dir, progress_cb, progress_interval_s)
+        ffmpeg_ok = (
+            _extract_frames_ffmpeg(*ffmpeg_args)
+            if cancel_event is None
+            else _extract_frames_ffmpeg(*ffmpeg_args, cancel_event=cancel_event)
+        )
+        if not ffmpeg_ok:
             print("INFO: Falling back to OpenCV extraction.")
-            _extract_frames_opencv(video_path, frames_dir, progress_cb, progress_interval_s)
+            opencv_args = (video_path, frames_dir, progress_cb, progress_interval_s)
+            if cancel_event is None:
+                _extract_frames_opencv(*opencv_args)
+            else:
+                _extract_frames_opencv(*opencv_args, cancel_event=cancel_event)
     except FrameExtractionError:
         raise
     except Exception as exc:
@@ -380,6 +425,7 @@ def create_frames(
     # Recount after extraction so the guard covers BOTH the ffmpeg and OpenCV
     # paths uniformly. A genuinely empty folder is a hard failure (rule 0:
     # never fail silently); a non-zero-but-below-tolerance result stays a WARN.
+    _raise_if_cancelled(cancel_event)
     frame_count = _count_jpg_files(frames_dir)
     if frame_count == 0:
         msg = (f"Frame extraction produced 0 frames for {video_path!r}. "

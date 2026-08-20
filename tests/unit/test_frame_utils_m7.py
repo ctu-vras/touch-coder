@@ -2,6 +2,7 @@
 
 import io
 import os
+from threading import Event
 
 import pytest
 
@@ -164,6 +165,31 @@ def test_M7_ffmpeg_process_killed_on_progress_error(tmp_path, monkeypatch):
             str(tmp_path),
             lambda *_args: (_ for _ in ()).throw(RuntimeError("progress failed")),
             1.0,
+        )
+
+    assert capture.released is True
+    assert process.killed is True
+
+
+def test_M7_ffmpeg_process_killed_on_cancellation(tmp_path, monkeypatch):
+    capture = _ProbeCapture()
+    process = _FakeProcess()
+    cancel_event = Event()
+    monkeypatch.setattr(frame_utils, "_get_ffmpeg_exe", lambda: "ffmpeg")
+    monkeypatch.setattr(frame_utils.cv2, "VideoCapture", lambda *_args: capture)
+    monkeypatch.setattr(frame_utils.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(frame_utils.time, "sleep", lambda _seconds: None)
+
+    def close_app_during_progress(*_args):
+        cancel_event.set()
+
+    with pytest.raises(frame_utils.FrameExtractionCancelled):
+        frame_utils._extract_frames_ffmpeg(
+            "vid.mp4",
+            str(tmp_path),
+            close_app_during_progress,
+            1.0,
+            cancel_event=cancel_event,
         )
 
     assert capture.released is True

@@ -9,7 +9,7 @@
   "limb_parameter1": "LP1",
   "limb_parameter2": "LP2",
   "limb_parameter3": "LP3",
-  "video_downscale": 2.0,
+  "video_downscale": 1.5,
   "jump_seconds": 0.28,
   "realtime_arrow_hold": false,
   "perf_enabled": false,

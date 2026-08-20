@@ -280,7 +280,7 @@ def frames_ready(paths: ProjectPaths, total_frames: int) -> bool:
 
 
 def extract_frames(video_path: str, paths: ProjectPaths, labeling_mode: str,
-                   progress_cb=None) -> None:
+                   progress_cb=None, cancel_event=None) -> None:
     """Extract frames for the video (raises FrameExtractionError on failure).
     Reliability mode copies the original project's frames when available."""
     create_frames(
@@ -290,6 +290,7 @@ def extract_frames(video_path: str, paths: ProjectPaths, labeling_mode: str,
         paths.video_name,
         progress_cb=progress_cb,
         original_frames_dir=paths.original.frames_dir,
+        cancel_event=cancel_event,
     )
 
 

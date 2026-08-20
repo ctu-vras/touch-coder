@@ -1,9 +1,8 @@
 import sys
 from typing import Dict
 
+from app_info import PROGRAM_VERSION
 from domain.model import FrameBundle, LimbView
-
-PROGRAM_VERSION = "8.0.0"
 
 
 class Video:

@@ -66,7 +66,8 @@ TinyTouch_env/
 /docs/books/
 /docs/plans/
 /docs/reviews/
-/docs/dev/HANDOFF.md
+/docs/dev/
+/docs/RELEASING.md
 
 # Local reference assets that are not part of the application or documentation
 /assets/icons_unused/

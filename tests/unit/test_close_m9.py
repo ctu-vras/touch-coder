@@ -51,6 +51,9 @@ def test_M9_cancel_has_zero_save_or_teardown_side_effects(monkeypatch):
 def test_M9_confirm_saves_before_teardown(monkeypatch):
     events = []
     app = _app(events)
+    app._frame_extraction_cancel = SimpleNamespace(
+        set=lambda: events.append("cancel_extraction")
+    )
     monkeypatch.setattr(
         labeling_app,
         "custom_confirm_close",
@@ -64,6 +67,7 @@ def test_M9_confirm_saves_before_teardown(monkeypatch):
         "save",
         "last_position",
         "finalize_time",
+        "cancel_extraction",
         "close_state_repo",
         ("shutdown", False, True),
         "cancel_timers",
@@ -84,3 +88,4 @@ def test_M9_rejected_close_anyway_keeps_session_alive(monkeypatch):
     LabelingApp.on_close(app)
 
     assert events == ["save", "close_anyway"]
+    assert app._closing is False
