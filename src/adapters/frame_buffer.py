@@ -8,7 +8,7 @@ threads need arrives through the injected context providers.
 
 Threading invariants preserved from the original implementation:
   (a) one RLock (`_lock`) guards the four buffer structures
-      (frame dict, byte-size dict, byte total, in-flight set);
+      (frame dict, byte-size dict, byte total, in-flight map);
   (b) `reset()` bumps the generation counter so in-flight decodes started
       under the old video/settings discard their result;
   (c) worker threads never touch the GUI — UI work goes through the injected
@@ -35,7 +35,10 @@ from typing import Callable, NamedTuple, Optional
 
 from PIL import Image
 
-PLAYBACK_BUFFER_PAUSE_S = 1.0
+# 0.15 s (was 1.0): playback sleeps this long when the next frame isn't
+# buffered yet — a full second made every stall feel enormous, while 150 ms
+# rechecks fast enough that recovery is near-immediate once the decode lands.
+PLAYBACK_BUFFER_PAUSE_S = 0.15
 PLAYBACK_BUFFER_AHEAD = 3
 BUFFER_MAX_BYTES = 1_000_000_000
 
@@ -53,27 +56,42 @@ def compute_play_step(current_frame, total_frames, direction):
     return max(0, min(total_frames, current_frame + direction)), False
 
 
-def resize_for_buffer(img, display_width, display_height, downscale):
-    """Tk-free resize used by worker threads. Pure CPU work — no widget calls."""
-    if display_width <= 0 or display_height <= 0:
-        return img
-    original_width, original_height = img.size
-    aspect_ratio = original_width / original_height
+def compute_target_size(orig_w, orig_h, display_w, display_h, downscale):
+    """Pure fit-box sizing rule shared by the decode path and `resize_for_buffer`.
 
+    Target box = (display_w, display_h) / downscale; the source is fit into it
+    aspect-preserving with scale = min(box_w/orig_w, box_h/orig_h). Unlike the
+    old rule, scale > 1 is ALLOWED (upscale) so a low-res video fills a big
+    monitor — the upscale happens here, in the worker decode path, because
+    paint-time upscaling on the UI thread blows the 40 ms playback budget.
+    Degenerate display dims (<= 0) return the original size unchanged;
+    downscale <= 0 is treated as 1.0 (both mirror the old guards).
+    """
+    if display_w <= 0 or display_h <= 0 or orig_w <= 0 or orig_h <= 0:
+        return orig_w, orig_h
     if downscale <= 0:
         downscale = 1.0
+    box_w = max(1, int(display_w / downscale))
+    box_h = max(1, int(display_h / downscale))
+    aspect_ratio = orig_w / orig_h
+    if box_w / box_h > aspect_ratio:
+        return max(1, int(box_h * aspect_ratio)), box_h
+    return box_w, max(1, int(box_w / aspect_ratio))
 
-    target_width = max(1, int(original_width / downscale))
-    target_height = max(1, int(original_height / downscale))
 
-    max_width = min(display_width, target_width)
-    max_height = min(display_height, target_height)
+def resize_for_buffer(img, display_width, display_height, downscale):
+    """Tk-free fit-box resize used by worker threads. Pure CPU work — no widget calls.
 
-    if max_width / max_height > aspect_ratio:
-        new_width = int(max_height * aspect_ratio); new_height = max_height
-    else:
-        new_width = max_width; new_height = int(max_width / aspect_ratio)
-    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    Now upscales as well as downscales (see `compute_target_size`), and uses
+    BILINEAR instead of LANCZOS: measured RMS drift < 1.6/255 (invisible) for
+    ~1.5-3.7x faster end-to-end decode (tests/perf/benchmark_decode_pipeline.py).
+    """
+    target = compute_target_size(
+        img.width, img.height, display_width, display_height, downscale
+    )
+    if target == img.size:
+        return img
+    return img.resize(target, Image.Resampling.BILINEAR)
 
 
 class BufferContext(NamedTuple):
@@ -151,15 +169,26 @@ class FrameBuffer:
         self._buffer = {}            # frame index -> decoded/resized PIL image
         self._buffer_bytes = {}      # frame index -> estimated byte size
         self._buffer_total = 0       # running byte total
-        self._inflight = set()       # frame indices currently being decoded
+        self._inflight = {}          # frame index -> Future (pool decode) or
+                                     # None (synchronous priority load / a pool
+                                     # submission whose Future isn't stored yet)
         self._gen = 0                # bumps on reset() to discard stale decodes
 
-        # Priority-load + parallel-prefetch infrastructure.
+        # Priority-load + parallel-prefetch infrastructure. Pool size adapts
+        # to the machine: PIL releases the GIL during decode/resize, so extra
+        # workers give real parallelism (~1.4-1.5x window-fill throughput at
+        # 6-8 workers on a 16-core box vs the old fixed 3).
         self._priority_frame = None
         self._priority_event = Event()
+        pool_workers = max(3, min(8, (os.cpu_count() or 4) // 2))
+        print(f"INFO: frame_buffer: decode pool starting with {pool_workers} "
+              f"workers (cpu_count={os.cpu_count()})")
         self._loader_pool = ThreadPoolExecutor(
-            max_workers=3, thread_name_prefix="frame-loader"
+            max_workers=pool_workers, thread_name_prefix="frame-loader"
         )
+        # Last byte-aware window cap, for change-only logging (the buffering
+        # loop ticks every 10 ms — logging each tick would flood the console).
+        self._last_window_cap = None
 
         # Playback gating.
         self.buffer_ready = False
@@ -313,8 +342,68 @@ class FrameBuffer:
                     behind = max(base_behind, jump * 2)
                 else:
                     ahead, behind = base_ahead, base_behind
+
+                # 3a) Byte-aware window cap. Upscaled frames can be huge (a 4K
+                #     canvas frame is ~25 MB), so the full 80-frame window can
+                #     exceed the byte budget — the evictor then deletes what
+                #     this loop immediately resubmits (infinite decode churn).
+                #     Cap the window at roughly HALF the budget and shrink
+                #     ahead/behind proportionally; the eviction keep-range in
+                #     step 5 scales from the shrunken values, so trim/evict
+                #     never fight the submission loop.
+                if self._max_bytes and self._max_bytes > 0:
+                    with self._lock:
+                        if self._buffer:
+                            est_frame_bytes = max(
+                                1, self._buffer_total // len(self._buffer)
+                            )
+                        else:
+                            est_frame_bytes = max(1, display_w * display_h * 3)
+                    max_window_frames = max(
+                        self._playback_ahead + 2,
+                        (self._max_bytes // est_frame_bytes) // 2,
+                    )
+                    window_frames = ahead + behind
+                    if window_frames > max_window_frames:
+                        shrink = max_window_frames / window_frames
+                        ahead = max(self._playback_ahead + 1, int(ahead * shrink))
+                        behind = max(1, int(behind * shrink))
+                        if self._last_window_cap != max_window_frames:
+                            self._last_window_cap = max_window_frames
+                            print(
+                                f"INFO: frame_buffer: prefetch window capped to "
+                                f"{max_window_frames} frames "
+                                f"(~{est_frame_bytes / 1e6:.1f} MB/frame, "
+                                f"budget {self._max_bytes / 1e6:.0f} MB) — "
+                                f"ahead={ahead}, behind={behind}"
+                            )
+                    else:
+                        self._last_window_cap = None
                 start_frame = max(0, current_frame - behind)
                 end_frame = min(ctx.total_frames, current_frame + ahead)
+
+                # 3b) Cancel queued decodes that fell OUTSIDE the new window (a
+                #     jump leaves the pool's FIFO queue full of old-window
+                #     decodes — measured jump p95 was ~1.1-1.3 s because the
+                #     jump target queued behind them). Only queued-not-started
+                #     futures cancel; running ones return False and are left
+                #     alone (they'll discard themselves from _inflight when
+                #     they finish). Cancelled frames MUST leave _inflight, or
+                #     they'd never be re-submitted.
+                cancelled = 0
+                with self._lock:
+                    stale = [
+                        (f, fut) for f, fut in self._inflight.items()
+                        if (f < start_frame or f > end_frame) and fut is not None
+                    ]
+                    for f, fut in stale:
+                        if fut.cancel():
+                            self._inflight.pop(f, None)
+                            cancelled += 1
+                if cancelled:
+                    print(f"INFO: frame_buffer: cancelled {cancelled} stale "
+                          f"prefetch decodes outside [{start_frame}, "
+                          f"{end_frame}] (current_frame={current_frame})")
 
                 # 4) Submit prefetch loads to the worker pool. Forward window first
                 #    (most likely direction of travel), then backward.
@@ -421,17 +510,33 @@ class FrameBuffer:
     def _load_frame_to_buffer(self, frame_number, frames_dir, display_w, display_h, downscale, gen):
         """Disk read + JPEG decode + resize + buffer store. Safe to run on any thread.
 
+        The target size is computed from the ORIGINAL dimensions (Image.open
+        reads .size from the header, no decode yet) so `draft()` can tell
+        libjpeg to decode at a reduced DCT scale (1/2, 1/4, 1/8) whenever the
+        source is larger than the target — draft only works pre-load and only
+        on JPEGs, which is exactly what the frames dir holds. The (much
+        smaller) decoded image then gets one cheap BILINEAR resize, skipped
+        entirely when draft already landed on the exact target size.
+
         Stores the result only if the buffer generation still matches (gen == self._gen),
-        i.e. no reset() happened mid-decode. Always discards from the in-flight set.
+        i.e. no reset() happened mid-decode. Always discards from the in-flight map
+        (registering itself with a None entry on the synchronous priority path).
         """
+        with self._lock:
+            self._inflight.setdefault(frame_number, None)
         try:
             with self._perf.time("load_frame_total"):
                 frame_path = os.path.join(frames_dir, f"frame{frame_number}.jpg")
                 with self._perf.time("load_frame_open"):
                     with Image.open(frame_path) as opened:
+                        target = compute_target_size(
+                            *opened.size, display_w, display_h, downscale
+                        )
+                        opened.draft("RGB", target)
                         img = opened.copy()
                 with self._perf.time("load_frame_resize"):
-                    img = resize_for_buffer(img, display_w, display_h, downscale)
+                    if img.size != target:
+                        img = img.resize(target, Image.Resampling.BILINEAR)
                 try:
                     bytes_per_pixel = max(1, len(img.getbands()))
                 except Exception:
@@ -440,29 +545,38 @@ class FrameBuffer:
                 with self._lock:
                     if gen == self._gen:
                         self._store_frame(frame_number, img, est_bytes)
-                    self._inflight.discard(frame_number)
+                    self._inflight.pop(frame_number, None)
         except Exception as e:
             with self._lock:
-                self._inflight.discard(frame_number)
+                self._inflight.pop(frame_number, None)
             print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
 
     def _maybe_submit_load(self, frame_number, total_frames, frames_dir, display_w, display_h, downscale, gen):
-        """Submit a prefetch load to the worker pool, deduping against in-flight + cached frames."""
+        """Submit a prefetch load to the worker pool, deduping against in-flight + cached frames.
+
+        The Future is kept in `_inflight` so `background_update` can cancel
+        queued decodes that a jump left outside the new prefetch window."""
         if frame_number < 0 or frame_number > total_frames:
             return
         with self._lock:
             if frame_number in self._buffer or frame_number in self._inflight:
                 return
-            self._inflight.add(frame_number)
+            self._inflight[frame_number] = None  # reserve before releasing the lock
         try:
-            self._loader_pool.submit(
+            future = self._loader_pool.submit(
                 self._load_frame_to_buffer,
                 frame_number, frames_dir, display_w, display_h, downscale, gen,
             )
         except RuntimeError:
             # Pool was shut down (e.g. on app close); back out the inflight reservation.
             with self._lock:
-                self._inflight.discard(frame_number)
+                self._inflight.pop(frame_number, None)
+            return
+        with self._lock:
+            # Store the Future for cancellation — unless the decode already
+            # finished and removed its own entry (don't resurrect it).
+            if frame_number in self._inflight and self._inflight[frame_number] is None:
+                self._inflight[frame_number] = future
 
     def _remove_frame(self, frame_number):
         with self._lock:

@@ -383,7 +383,23 @@ def _teardown_app(application):
         # The buffer/playback context providers return None once video is None,
         # so the two daemon threads stop touching Tk before the root goes away.
         application.video = None
-        application.frame_buffer.shutdown(wait=False, cancel_futures=True)
+        # wait=True (unlike the app's own on_close): JOIN the decode workers so
+        # no pool thread survives into the next test. A surviving worker that
+        # allocates can trigger a GC cycle — and with it Tk finalizers — in the
+        # middle of the next root's `_tkinter.create()` (the same race the
+        # gc.collect() in make() guards against). Decodes in tests are tiny,
+        # so the join costs milliseconds.
+        application.frame_buffer.shutdown(wait=True, cancel_futures=True)
+        # Join the two daemon loops as well (they exit on the shutdown latch
+        # within one poll interval) — same rationale as the pool join above:
+        # nothing of this app may still be running when the next test's
+        # `_tkinter.create()` starts.
+        for attr in ("background_thread", "background_thread_play"):
+            thread = getattr(application, attr, None)
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=5.0)
+                if thread.is_alive():  # pragma: no cover - diagnostics only
+                    print(f"TEST: {attr} did not exit within 5 s")
     except Exception as exc:  # pragma: no cover - teardown best effort
         print(f"TEST: buffer shutdown during teardown failed: {exc!r}")
     try:
@@ -401,6 +417,9 @@ def _teardown_app(application):
     # _INTERP_KEEPALIVE. The widget tree is gone; only the Tkapp is retained.
     _INTERP_KEEPALIVE.append(application.tk)
     _reset_ttkbootstrap()
+    # Flush pending Tk-related finalizers NOW, while no interpreter is being
+    # created — the counterpart of the gc.collect() in make() (see there).
+    gc.collect()
 
 
 @pytest.fixture
@@ -429,7 +448,30 @@ def app_factory(workspace):
         # `_tkinter.create()` below and the new root died with
         # `Can't find a usable init.tcl`. Deterministic either way now.
         gc.collect()
-        application = LabelingApp()
+        # `_tkinter.create()` can still fail transiently on this machine (the
+        # init.tcl / msgs race above has triggers the two guards don't cover —
+        # a clean HEAD checkout flakes identically, so it is environmental,
+        # not this app's doing). A create that failed once succeeds on the
+        # next attempt, while a genuine construction bug fails every attempt,
+        # so retry a couple of times — loudly, never silently.
+        application = None
+        last_exc = None
+        for attempt in range(3):
+            if attempt:
+                print(f"TEST: Tk root creation failed transiently "
+                      f"({last_exc}); retrying ({attempt}/2)")
+                _reset_ttkbootstrap()
+                gc.collect()
+                time.sleep(0.3)
+            try:
+                application = LabelingApp()
+                break
+            except tk.TclError as exc:
+                last_exc = exc
+        if application is None:
+            raise RuntimeError(
+                f"Tk root creation failed 3 times: {last_exc}"
+            ) from last_exc
         # Hide FIRST, resize second: build_ui already called geometry('1200x1000')
         # on-screen, and we must not let it appear even for one frame.
         hide_window(application)

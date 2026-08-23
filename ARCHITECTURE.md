@@ -148,20 +148,30 @@ Each `FrameRecord` holds aligned `X` / `Y` click lists, `Onset` (`"ON"`/`"OFF"`/
 ### Background processes
 
 [`adapters.frame_buffer.FrameBuffer`](src/adapters/frame_buffer.py) owns two daemon loops plus
-a 3-worker decode pool; they start lazily after a video is loaded. The GUI is reached only
-through the callbacks injected at construction (`schedule_on_ui`, `on_status_change`,
-`apply_play_advance`, …), so no worker ever touches a Tk widget — the buffering loop reads a
-`BufferContext` snapshot instead of calling `winfo_width()`.
+an adaptive decode pool (`max(3, min(8, cpu_count // 2))` workers — PIL releases the GIL
+during decode/resize, so the parallelism is real); they start lazily after a video is loaded.
+The GUI is reached only through the callbacks injected at construction (`schedule_on_ui`,
+`on_status_change`, `apply_play_advance`, …), so no worker ever touches a Tk widget — the
+buffering loop reads a `BufferContext` snapshot instead of calling `winfo_width()`.
 
+- **Decode pipeline** -- each frame load computes its target size from the JPEG header
+  (`compute_target_size`: fit the source into `display / downscale` aspect-preserving,
+  upscaling low-res sources to fill big monitors), asks libjpeg via `Image.draft` to decode
+  at a reduced DCT scale when the source is larger, then does one BILINEAR resize (skipped
+  when draft lands exactly on target). Frames are buffered at final display size, so the UI
+  thread never resizes at paint time.
 - **Buffering loop** -- keeps decoded JPEG frames around the current frame, with an
   asymmetric, velocity-aware window: base read-ahead 50 / look-back 30, widened in the
   direction of the last navigation step (at least `2 × jump_frame_count`) and halved on the
-  other side. Eviction keeps at least ±200 frames and scales with the window; the byte
-  budget is `BUFFER_MAX_BYTES = 1 GB`. It also flips the on-screen `Buffer: Loaded` /
-  `Buffer: Loading` chip.
+  other side. The window is additionally capped at ~half the byte budget (using the running
+  average frame size) so huge upscaled frames can't make eviction fight the submission loop.
+  On a jump, queued-but-not-started decodes outside the new window are cancelled via their
+  `Future`s so the jump target doesn't wait behind stale work. Eviction keeps at least ±200
+  frames and scales with the window; the byte budget is `BUFFER_MAX_BYTES = 1 GB`. It also
+  flips the on-screen `Buffer: Loaded` / `Buffer: Loading` chip.
 - **Playback loop** -- when Play is pressed, advances `current_frame` only once the next
-  `PLAYBACK_BUFFER_AHEAD = 3` frames are buffered, pausing `PLAYBACK_BUFFER_PAUSE_S = 1.0` s
-  when they are not, so playback stalls rather than stutters.
+  `PLAYBACK_BUFFER_AHEAD = 3` frames are buffered, pausing `PLAYBACK_BUFFER_PAUSE_S = 0.15` s
+  when they are not, so playback stalls briefly rather than stutters.
 
 Frame extraction (`adapters.frame_extractor.create_frames`) runs synchronously inside a small Tk progress window the first time a video is opened:
 
