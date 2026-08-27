@@ -2,6 +2,7 @@ import os
 import time
 import traceback
 import webbrowser
+from contextlib import contextmanager
 from threading import Thread, Event, get_ident, current_thread
 
 import keyboard
@@ -61,8 +62,126 @@ DEBUG_ASSERT_UI_THREAD = False
 # =============================================================================
 # Standalone helpers
 # =============================================================================
+def center_over_parent(window, parent) -> None:
+    """Place a realized dialog in the center of its parent window."""
+    window.update_idletasks()
+    x = parent.winfo_rootx() + (parent.winfo_width() - window.winfo_width()) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - window.winfo_height()) // 2
+    window.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+
+@contextmanager
+def center_native_file_dialog(parent):
+    """Center the Windows common file dialog that belongs to *parent*.
+
+    Tk exposes no geometry option for its native Windows file picker.  A
+    temporary WinEvent hook lets us position only the picker owned by this app;
+    on non-Windows platforms the native Tk behavior remains untouched.
+    """
+    if os.name != "nt":
+        yield
+        return
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        event_object_show = 0x8002
+        ga_rootowner = 3
+        winevent_outofcontext = 0
+        swp_nosize = 0x0001
+        swp_nozorder = 0x0004
+        swp_noactivate = 0x0010
+        parent_handle = parent.winfo_id()
+        process_id = os.getpid()
+
+        callback_type = ctypes.WINFUNCTYPE(
+            None,
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.HWND,
+            wintypes.LONG,
+            wintypes.LONG,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        )
+        user32.SetWinEventHook.argtypes = [
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HMODULE,
+            callback_type,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        user32.SetWinEventHook.restype = wintypes.HANDLE
+        user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+        user32.UnhookWinEvent.restype = wintypes.BOOL
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetAncestor.restype = wintypes.HWND
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+
+        def on_window_shown(_hook, _event, window, object_id, child_id, *_args):
+            if object_id != 0 or child_id != 0:
+                return
+            if user32.GetAncestor(window, ga_rootowner) != parent_handle:
+                return
+            class_name = ctypes.create_unicode_buffer(256)
+            if user32.GetClassNameW(window, class_name, len(class_name)) == 0:
+                return
+            if class_name.value != "#32770":
+                return
+            rect = wintypes.RECT()
+            if not user32.GetWindowRect(window, ctypes.byref(rect)):
+                return
+            width = rect.right - rect.left
+            height = rect.bottom - rect.top
+            x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
+            y = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
+            user32.SetWindowPos(
+                window,
+                None,
+                max(0, x),
+                max(0, y),
+                0,
+                0,
+                swp_nosize | swp_nozorder | swp_noactivate,
+            )
+
+        callback = callback_type(on_window_shown)
+        hook = user32.SetWinEventHook(
+            event_object_show,
+            event_object_show,
+            None,
+            callback,
+            process_id,
+            0,
+            winevent_outofcontext,
+        )
+    except (AttributeError, OSError):
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        user32.UnhookWinEvent(hook)
+
+
 def custom_confirm_close(root) -> bool:
     win = tk.Toplevel(root)
+    win.withdraw()
     win.title("Close Application")
     win.geometry("420x180")
     win.resizable(False, False)
@@ -107,6 +226,8 @@ def custom_confirm_close(root) -> bool:
         takefocus=0,
     ).pack(side="left", padx=5)
     win.protocol("WM_DELETE_WINDOW", win.destroy)
+    center_over_parent(win, root)
+    win.deiconify()
     win.wait_window()
     return confirmed
 
@@ -1716,6 +1837,7 @@ class LabelingApp(tk.Tk):
         self.labeling_mode on every save).
         """
         mode_window = tk.Toplevel(self)
+        mode_window.withdraw()
         mode_window.title("Select Mode")
         mode_window.geometry("420x220")
         mode_window.resizable(False, False)
@@ -1767,6 +1889,8 @@ class LabelingApp(tk.Tk):
             style="Tool.TButton",
             takefocus=0,
         ).pack(pady=(16, 0))
+        center_over_parent(mode_window, self)
+        mode_window.deiconify()
         mode_window.wait_window()
         return chosen["mode"]
 
@@ -1863,13 +1987,15 @@ class LabelingApp(tk.Tk):
             print("INFO: No mode selected, cancelling video load.")
             return
 
-        video_path = filedialog.askopenfilename(
-            title="Select Video File",
-            filetypes=(
-                ("Video files", "*.mp4 *.MP4 *.mov *.MOV *.avi *.AVI *.mkv *.MKV *.flv *.FLV *.wmv *.WMV"),
-                ("All files", "*.*"),
-            ),
-        )
+        with center_native_file_dialog(self):
+            video_path = filedialog.askopenfilename(
+                parent=self,
+                title="Select Video File",
+                filetypes=(
+                    ("Video files", "*.mp4 *.MP4 *.mov *.MOV *.avi *.AVI *.mkv *.MKV *.flv *.FLV *.wmv *.WMV"),
+                    ("All files", "*.*"),
+                ),
+            )
         if not video_path: return
 
         # 2) Read-only preparation of the NEW video (copy + probe) while the

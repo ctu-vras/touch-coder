@@ -17,6 +17,56 @@ class _Buffer:
         self.events.append(("shutdown", wait, cancel_futures))
 
 
+class _Window:
+    def __init__(self, width, height, x=0, y=0):
+        self.width = width
+        self.height = height
+        self.x = x
+        self.y = y
+        self.geometry_value = None
+
+    def update_idletasks(self):
+        pass
+
+    def winfo_width(self):
+        return self.width
+
+    def winfo_height(self):
+        return self.height
+
+    def winfo_rootx(self):
+        return self.x
+
+    def winfo_rooty(self):
+        return self.y
+
+    def geometry(self, value):
+        self.geometry_value = value
+
+
+def test_close_confirmation_is_centered_over_its_parent():
+    root = _Window(width=1200, height=800, x=100, y=50)
+    dialog = _Window(width=420, height=180)
+
+    labeling_app.center_over_parent(dialog, root)
+
+    assert dialog.geometry_value == "+490+360"
+
+
+def test_video_picker_is_owned_by_main_window(monkeypatch):
+    app = SimpleNamespace(ask_labeling_mode=lambda: "Normal")
+    picker_options = {}
+    monkeypatch.setattr(
+        labeling_app.filedialog,
+        "askopenfilename",
+        lambda **kwargs: picker_options.update(kwargs) or "",
+    )
+
+    LabelingApp._load_video_flow(app)
+
+    assert picker_options["parent"] is app
+
+
 def _app(events, save_result=True):
     return SimpleNamespace(
         video=object(),
