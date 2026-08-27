@@ -5,7 +5,12 @@ model constructor does no I/O — the controller probes once and passes the
 values in.
 """
 
+import logging
+
 import cv2
+
+
+logger = logging.getLogger(__name__)
 
 
 def probe(video_path):
@@ -20,7 +25,7 @@ def probe(video_path):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
-    print(f"INFO: VideoCapture opened: {is_opened}")
-    print(f"INFO: OpenCV frame count: {total_frames}")
-    print(f"INFO: OpenCV FPS: {fps:.3f}")
+    logger.debug("VideoCapture opened: %s", is_opened)
+    logger.debug("OpenCV frame count: %d", total_frames)
+    logger.debug("OpenCV FPS: %.3f", fps)
     return total_frames, fps

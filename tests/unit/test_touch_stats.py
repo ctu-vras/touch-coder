@@ -115,7 +115,7 @@ def test_parse_export_tolerates_missing_xy_columns_and_reports_them():
     assert episodes[0].points == ()
 
 
-def test_parse_export_sorts_rows_by_frame_and_skips_unusable_frame(capsys):
+def test_parse_export_sorts_rows_by_frame_and_skips_unusable_frame(caplog):
     df = make_df([off(9, [["B"]]), on(4, [["A"]])])
     data = parse_export(df)
     episodes = data.episodes["RH"]
@@ -127,7 +127,7 @@ def test_parse_export_sorts_rows_by_frame_and_skips_unusable_frame(capsys):
     bad["Frame"] = bad["Frame"].astype(object)
     bad.loc[0, "Frame"] = "not-a-frame"
     assert parse_export(bad).row_count == 0
-    assert "WARN" in capsys.readouterr().out
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
 # --- episode reconstruction ------------------------------------------------
@@ -416,11 +416,11 @@ def test_transition_axis_and_matrix():
     assert list(matrix.index) == zones and list(matrix.columns) == zones
 
 
-def test_transition_matrix_drops_and_warns_for_zone_off_axis(capsys):
+def test_transition_matrix_drops_and_warns_for_zone_off_axis(caplog):
     matrix = transition_matrix({"A": {"B": 3}}, ["A"])
 
     assert matrix.values.sum() == 0
-    assert "WARN" in capsys.readouterr().out
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
 def test_zone_sort_key_puts_catch_alls_last():

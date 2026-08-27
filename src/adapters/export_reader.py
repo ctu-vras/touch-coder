@@ -18,7 +18,12 @@ Column-level validation is deliberately NOT done here; it is a pure rule and
 lives in `domain.touch_stats.validate_export_columns`.
 """
 
+import logging
+
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 # Legacy exports carried metadata on the first 6 lines before the header row.
 LEGACY_PREAMBLE_LINES = 6
@@ -39,31 +44,33 @@ def read_export_df(export_path: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(export_path)
         if "Frame" in df.columns:
-            print(f"INFO: read export CSV {export_path} ({len(df)} rows, current layout)")
+            logger.debug("read export CSV %s (%d rows, current layout)", export_path, len(df))
             return df
         last_exc = ValueError("required 'Frame' column is missing")
-        print(f"WARN: current export CSV parse failed for {export_path}: {last_exc}")
+        logger.warning("current export CSV parse failed for %s: %s", export_path, last_exc)
     except OSError as exc:
-        print(f"ERROR: cannot open export CSV {export_path}: {exc!r}")
+        logger.error("cannot open export CSV %s: %r", export_path, exc)
         raise
     except _PARSE_ERRORS as exc:
         last_exc = exc
-        print(f"WARN: current export CSV parse failed for {export_path}: {exc!r}")
+        logger.warning("current export CSV parse failed for %s: %r", export_path, exc)
 
     # Fallback for older exports with a 6-line metadata preamble.
     try:
         df = pd.read_csv(export_path, skiprows=LEGACY_PREAMBLE_LINES)
         if "Frame" in df.columns:
-            print(f"INFO: read export CSV {export_path} ({len(df)} rows, legacy preamble layout)")
+            logger.debug(
+                "read export CSV %s (%d rows, legacy preamble layout)", export_path, len(df)
+            )
             return df
         last_exc = ValueError("required 'Frame' column is missing after legacy header")
-        print(f"WARN: legacy export CSV parse failed for {export_path}: {last_exc}")
+        logger.warning("legacy export CSV parse failed for %s: %s", export_path, last_exc)
     except OSError as exc:
-        print(f"ERROR: cannot open export CSV {export_path}: {exc!r}")
+        logger.error("cannot open export CSV %s: %r", export_path, exc)
         last_exc = exc
     except _PARSE_ERRORS as exc:
         last_exc = exc
-        print(f"WARN: legacy export CSV parse failed for {export_path}: {exc!r}")
+        logger.warning("legacy export CSV parse failed for %s: %r", export_path, exc)
 
     raise ExportReadError(
         f"Could not read export CSV {export_path}; current and legacy formats failed"

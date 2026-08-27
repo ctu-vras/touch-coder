@@ -140,8 +140,16 @@ University in Prague.
 
 Maintainer: navarlu2@fel.cvut.cz
 
-Bug reports are welcome. When something goes wrong, include a screenshot of the terminal
-window that runs alongside the application: it carries the log.
+## Reporting a problem
+
+TinyTouch writes one diagnostic log for every session. Open **Settings -> Open Logs
+Folder**, then attach the newest `tinytouch_*.log` file to the bug report. The log includes
+application details, errors, and the local annotation activity--including note text--needed
+to understand what happened. It stays on your computer and is never transmitted
+automatically.
+
+If a log file cannot be created, TinyTouch continues running and reports diagnostics in
+the terminal window instead.
 
 ## Documentation
 

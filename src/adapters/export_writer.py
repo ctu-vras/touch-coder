@@ -7,11 +7,15 @@ any encoding drift silently corrupts published research datasets.
 """
 
 import json
+import logging
 import pandas as pd
 from typing import Dict
 
 from adapters.atomic_io import atomic_write
 from domain.model import FrameBundle, _normalize_param_state, empty_bundle
+
+
+logger = logging.getLogger(__name__)
 
 
 def write_export_metadata(meta_path: str,
@@ -104,4 +108,4 @@ def export_from_unified(frames: Dict[int, FrameBundle],
     atomic_write(out_csv, lambda f: df.to_csv(f, index=False))
 
     # CSV remains clean (no preamble). Metadata is written separately by caller.
-    print(f"DEBUG: Export -> {out_csv} (rows={len(rows)})")
+    logger.debug("Export -> %s (rows=%d)", out_csv, len(rows))

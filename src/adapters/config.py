@@ -10,12 +10,16 @@ live in labeling_app.load_parameter_names_into.
 """
 
 import json
+import logging
 import os
 import shutil
 from dataclasses import dataclass, field
 
 from adapters.atomic_io import atomic_write
 from gui.resource_utils import get_app_dir, resource_path
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_config_path() -> str:
@@ -46,6 +50,7 @@ CONFIG_DEFAULTS = {
     'video_downscale': 1.0,
     'jump_seconds': 1.0,
     'realtime_arrow_hold': True,
+    'log_level_console': 'INFO', 'log_keep_files': 20,
     'parameter1': 'Parameter 1', 'parameter2': 'Parameter 2', 'parameter3': 'Parameter 3',
     'limb_parameter1': 'Limb Parameter 1', 'limb_parameter2': 'Limb Parameter 2',
     'limb_parameter3': 'Limb Parameter 3',
@@ -58,8 +63,8 @@ def load_config():
         with open(config_path, 'r', encoding="utf-8") as file:
             data = json.load(file)
         return data if isinstance(data, dict) else {}
-    except Exception as e:
-        print(f"WARNING: config.json unreadable ({e}); using defaults")
+    except Exception as exc:
+        logger.warning("config.json unreadable (%s); using defaults", exc)
         return {}
 
 
@@ -170,6 +175,8 @@ class AppConfig:
     perf_enabled: bool = CONFIG_DEFAULTS['perf_enabled']
     perf_log_every_s: float = CONFIG_DEFAULTS['perf_log_every_s']
     perf_log_top_n: int = CONFIG_DEFAULTS['perf_log_top_n']
+    log_level_console: str = CONFIG_DEFAULTS['log_level_console']
+    log_keep_files: int = CONFIG_DEFAULTS['log_keep_files']
     parameter1: str = CONFIG_DEFAULTS['parameter1']
     parameter2: str = CONFIG_DEFAULTS['parameter2']
     parameter3: str = CONFIG_DEFAULTS['parameter3']
@@ -193,6 +200,28 @@ def load_app_config() -> AppConfig:
             value = fallback
         return value
 
+    def _console_log_level(raw_value):
+        if isinstance(raw_value, str):
+            value = raw_value.strip().upper()
+            if value in {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}:
+                return value
+        logger.warning(
+            "Invalid log_level_console %r; using %s",
+            raw_value,
+            CONFIG_DEFAULTS['log_level_console'],
+        )
+        return CONFIG_DEFAULTS['log_level_console']
+
+    def _log_retention(raw_value):
+        if isinstance(raw_value, int) and not isinstance(raw_value, bool) and raw_value > 0:
+            return raw_value
+        logger.warning(
+            "Invalid log_keep_files %r; using %d",
+            raw_value,
+            CONFIG_DEFAULTS['log_keep_files'],
+        )
+        return CONFIG_DEFAULTS['log_keep_files']
+
     return AppConfig(
         new_template=config.get('new_template', CONFIG_DEFAULTS['new_template']),
         minimal_touch_length=config.get('minimal_touch_length', CONFIG_DEFAULTS['minimal_touch_length']),
@@ -208,6 +237,12 @@ def load_app_config() -> AppConfig:
         perf_enabled=bool(config.get('perf_enabled', CONFIG_DEFAULTS['perf_enabled'])),
         perf_log_every_s=float(config.get('perf_log_every_s', CONFIG_DEFAULTS['perf_log_every_s'])),
         perf_log_top_n=int(config.get('perf_log_top_n', CONFIG_DEFAULTS['perf_log_top_n'])),
+        log_level_console=_console_log_level(
+            config.get('log_level_console', CONFIG_DEFAULTS['log_level_console'])
+        ),
+        log_keep_files=_log_retention(
+            config.get('log_keep_files', CONFIG_DEFAULTS['log_keep_files'])
+        ),
         parameter1=config.get('parameter1', CONFIG_DEFAULTS['parameter1']),
         parameter2=config.get('parameter2', CONFIG_DEFAULTS['parameter2']),
         parameter3=config.get('parameter3', CONFIG_DEFAULTS['parameter3']),

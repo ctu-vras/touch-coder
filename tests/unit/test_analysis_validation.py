@@ -9,6 +9,7 @@ must keep working (retired `Look` column, 6-line preamble).
 """
 
 import json
+import logging
 
 import pandas as pd
 import pytest
@@ -107,7 +108,7 @@ def test_single_missing_limb_column_is_named(tmp_path):
     assert "RH_Zones" not in missing_part  # only the missing ones are blamed
 
 
-def test_service_aborts_on_missing_columns_without_writing_anything(tmp_path, capsys):
+def test_service_aborts_on_missing_columns_without_writing_anything(tmp_path, caplog):
     paths = ProjectPaths(video_name="vid", base_dir=str(tmp_path / "data"))
     (tmp_path / "data" / "vid" / "export").mkdir(parents=True)
     pd.DataFrame({"Frame": [0, 1]}).to_csv(paths.export_csv, index=False)
@@ -116,7 +117,7 @@ def test_service_aborts_on_missing_columns_without_writing_anything(tmp_path, ca
     with pytest.raises(ExportSchemaError):
         analysis_service.run_analysis(paths, frame_rate=25.0, output_folder=str(out_dir))
 
-    assert "ERROR" in capsys.readouterr().out
+    assert any(record.levelname == "ERROR" for record in caplog.records)
     # No half-written dashboard: the output folder is not even created.
     assert not out_dir.exists()
 
@@ -194,22 +195,23 @@ def test_unreadable_bytes_raise_export_read_error(tmp_path):
 
 # --- frame-rate provenance -------------------------------------------------
 
-def test_frame_rate_prefers_caller_then_metadata_then_none(tmp_path, capsys):
+def test_frame_rate_prefers_caller_then_metadata_then_none(tmp_path, caplog):
     meta = tmp_path / "vid_metadata.json"
     meta.write_text(json.dumps({"Frame Rate": 25.0}), encoding="utf-8")
 
-    assert analysis_service.resolve_frame_rate(30.0, str(meta)) == (30.0, "caller")
-    assert "overrides export metadata" in capsys.readouterr().out
+    with caplog.at_level(logging.INFO, logger="service_layer.analysis_service"):
+        assert analysis_service.resolve_frame_rate(30.0, str(meta)) == (30.0, "caller")
+        assert "overrides export metadata" in caplog.text
 
-    # A 0.0 probe (some containers report 0 for CAP_PROP_FPS) is not a value.
-    assert analysis_service.resolve_frame_rate(0.0, str(meta)) == (25.0, "metadata")
-    assert analysis_service.resolve_frame_rate(None, str(meta)) == (25.0, "metadata")
-    assert "from export metadata" in capsys.readouterr().out
+        # A 0.0 probe (some containers report 0 for CAP_PROP_FPS) is not a value.
+        assert analysis_service.resolve_frame_rate(0.0, str(meta)) == (25.0, "metadata")
+        assert analysis_service.resolve_frame_rate(None, str(meta)) == (25.0, "metadata")
+        assert "from export metadata" in caplog.text
 
-    assert analysis_service.resolve_frame_rate(0.0, str(tmp_path / "nope.json")) == (
-        None, "unavailable",
-    )
-    assert "WARN" in capsys.readouterr().out
+        assert analysis_service.resolve_frame_rate(0.0, str(tmp_path / "nope.json")) == (
+            None, "unavailable",
+        )
+        assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
 def test_frame_rate_metadata_with_zero_value_is_not_used(tmp_path):
@@ -219,9 +221,9 @@ def test_frame_rate_metadata_with_zero_value_is_not_used(tmp_path):
     assert analysis_service.resolve_frame_rate(None, str(meta)) == (None, "unavailable")
 
 
-def test_frame_rate_corrupt_metadata_does_not_raise(tmp_path, capsys):
+def test_frame_rate_corrupt_metadata_does_not_raise(tmp_path, caplog):
     meta = tmp_path / "vid_metadata.json"
     meta.write_text("{not json", encoding="utf-8")
 
     assert analysis_service.resolve_frame_rate(None, str(meta)) == (None, "unavailable")
-    assert "WARN" in capsys.readouterr().out
+    assert any(record.levelname == "WARNING" for record in caplog.records)

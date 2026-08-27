@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import deque
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+
+logger = logging.getLogger(__name__)
 
 
 # Update these paths/settings here instead of using CLI arguments.
@@ -211,10 +215,11 @@ def main() -> None:
     metadata_path = OUTPUT_DIR / "zones.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-    print(f"Saved {len(metadata)} zone entries to {OUTPUT_DIR}")
-    print(f"Preview image: {OUTPUT_DIR / 'zone_index_preview.png'}")
-    print(f"Metadata: {metadata_path}")
+    logger.info("saved %s zone entries to %s", len(metadata), OUTPUT_DIR)
+    logger.info("preview image: %s", OUTPUT_DIR / "zone_index_preview.png")
+    logger.info("metadata: %s", metadata_path)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
     main()

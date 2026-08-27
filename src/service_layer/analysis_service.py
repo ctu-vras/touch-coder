@@ -28,6 +28,7 @@ only. Whichever source won is logged.
 
 import json
 import os
+import logging
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -49,6 +50,7 @@ from domain.touch_stats import (
 )
 
 METADATA_FPS_KEY = "Frame Rate"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,16 +75,16 @@ def _read_metadata_frame_rate(metadata_path: str):
     returns None: analysis must never be blocked by its optional sidecar.
     """
     if not os.path.exists(metadata_path):
-        print(f"INFO: no export metadata at {metadata_path}; cannot recover frame rate from it")
+        logger.debug("no export metadata at %s; cannot recover frame rate", metadata_path)
         return None
     try:
         with open(metadata_path, "r", encoding="utf-8") as fh:
             meta = json.load(fh)
     except (OSError, ValueError) as exc:
-        print(f"WARN: could not read export metadata {metadata_path}: {exc!r}")
+        logger.warning("could not read export metadata %s: %r", metadata_path, exc)
         return None
     if not isinstance(meta, dict) or METADATA_FPS_KEY not in meta:
-        print(f"WARN: export metadata {metadata_path} has no {METADATA_FPS_KEY!r} key")
+        logger.warning("export metadata %s has no %r key", metadata_path, METADATA_FPS_KEY)
         return None
     return meta.get(METADATA_FPS_KEY)
 
@@ -101,24 +103,24 @@ def resolve_frame_rate(caller_frame_rate, metadata_path: str):
     if fps_is_usable(caller_frame_rate):
         fps = float(caller_frame_rate)
         if fps_is_usable(meta_value) and float(meta_value) != fps:
-            print(
-                f"INFO: frame rate {fps} from caller overrides export metadata {meta_value}"
-            )
+            logger.info("frame rate %s from caller overrides export metadata %s", fps, meta_value)
         else:
-            print(f"INFO: frame rate {fps} from caller")
+            logger.info("frame rate %s from caller", fps)
         return fps, "caller"
 
     if fps_is_usable(meta_value):
         fps = float(meta_value)
-        print(
-            f"INFO: frame rate {fps} from export metadata "
-            f"(caller passed unusable {caller_frame_rate!r})"
+        logger.info(
+            "frame rate %s from export metadata (caller passed unusable %r)",
+            fps,
+            caller_frame_rate,
         )
         return fps, "metadata"
 
-    print(
-        f"WARN: no usable frame rate (caller={caller_frame_rate!r}, "
-        f"metadata={meta_value!r}); seconds-based results will be omitted"
+    logger.warning(
+        "no usable frame rate (caller=%r, metadata=%r); seconds-based results will be omitted",
+        caller_frame_rate,
+        meta_value,
     )
     return None, "unavailable"
 
@@ -146,7 +148,7 @@ def run_analysis(paths: ProjectPaths,
     output_folder = output_folder or paths.plots_dir
     warnings: List[str] = []
 
-    print(f"INFO: analysis starting for {name!r}: export={export_path} output={output_folder}")
+    logger.info("analysis starting for %r: export=%s output=%s", name, export_path, output_folder)
 
     # 1) READ + 2) VALIDATE/PARSE — before creating the output directory, so a
     #    rejected export leaves no empty plots/ behind.
@@ -165,7 +167,7 @@ def run_analysis(paths: ProjectPaths,
             + ", ".join(data.missing_optional_columns)
             + " column(s); the touch-trajectory plot will have no points."
         )
-        print(f"WARN: {message}")
+        logger.warning("%s", message)
         warnings.append(message)
 
     # 3) COMPUTE everything first (see module docstring).
@@ -191,7 +193,7 @@ def run_analysis(paths: ProjectPaths,
             "separately as censored and excluded from durations, means, "
             "percentages, rates, transitions and histograms."
         )
-        print(f"WARN: {message}")
+        logger.warning("%s", message)
         warnings.append(message)
 
     # 4) WRITE
@@ -217,9 +219,9 @@ def run_analysis(paths: ProjectPaths,
     master_html = plotting.write_master_html(name, output_folder, limbs, notes=warnings)
     written.append(master_html)
 
-    print(
-        f"INFO: analysis complete for {name!r}: {len(written)} file(s) in {output_folder} "
-        f"(frames={data.total_frames}, fps={fps!r} via {fps_source})"
+    logger.info(
+        "analysis complete for %r: %s file(s) in %s (frames=%s, fps=%r via %s)",
+        name, len(written), output_folder, data.total_frames, fps, fps_source,
     )
 
     if open_browser is not None:
@@ -244,21 +246,23 @@ def parse_export_data(df, limbs: Sequence[str] = LIMBS):
     try:
         data = parse_export(df, limbs)
     except ExportSchemaError as exc:
-        print(f"ERROR: export schema rejected: {exc}")
+        logger.error("export schema rejected: %s", exc)
         raise
     episode_counts = {limb: len(eps) for limb, eps in data.episodes.items()}
-    print(
-        f"INFO: export schema OK — {data.row_count} row(s), total_frames={data.total_frames}, "
-        f"episodes={episode_counts}"
+    logger.debug(
+        "export schema OK: %s row(s), total_frames=%s, episodes=%s",
+        data.row_count,
+        data.total_frames,
+        episode_counts,
     )
     return data
 
 
 def _log_limb(limb: str, stats: LimbStats, total_frames: int) -> None:
-    print(
-        f"INFO: {limb}: closed={stats.total_touches} open={stats.open_touches} "
-        f"total={stats.total_duration_frames}f "
-        f"({stats.percentage_touching:.4f}% of {total_frames}f) "
-        f"mean={stats.mean_duration_frames} stdev={stats.stdev_duration_frames} "
-        f"rate/min={stats.touch_rate_per_minute}"
+    logger.debug(
+        "%s: closed=%s open=%s total=%sf (%.4f%% of %sf) mean=%s stdev=%s rate/min=%s",
+        limb, stats.total_touches, stats.open_touches,
+        stats.total_duration_frames, stats.percentage_touching, total_frames,
+        stats.mean_duration_frames, stats.stdev_duration_frames,
+        stats.touch_rate_per_minute,
     )

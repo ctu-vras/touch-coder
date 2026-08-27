@@ -1,31 +1,28 @@
-import sys
+import log_setup
+from app_info import PROGRAM_VERSION
+from gui.resource_utils import get_app_dir
 
-from labeling_app import LabelingApp
 
+def main() -> None:
+    app_dir = get_app_dir()
+    log_setup.configure_logging(app_dir)
+    log_setup.install_process_exception_hooks()
 
-def _harden_console_encoding():
-    """Make logging survive a redirected stdout on Windows.
+    # Import after the process hooks exist so import/startup failures are also
+    # captured in the session log.
+    from labeling_app import LabelingApp
 
-    Attached to a real console, Python writes UTF-16 through the Win32 console
-    API and anything prints fine. Redirect the process to a file or a pipe
-    (`TinyTouch.exe > log.txt`, a CI runner, a wrapper script) and Python falls
-    back to the LOCALE encoding — cp1252 / cp1250 — where a Czech note, an
-    unusual character in a video path or a box-drawing character raises
-    UnicodeEncodeError from inside `print`. That exception then surfaces
-    wherever the log line happened to be, which has already cost one silent
-    data-loss bug: a DEBUG line with a Unicode arrow raised inside the retired
-    `unified_repo.load_unified_dataset`, whose `except Exception` guard read it
-    as "unreadable CSV" and migrated zero frames.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-        except Exception as exc:  # pragma: no cover - non-reconfigurable stream
-            print(f"WARN: could not switch {stream!r} to UTF-8: {exc!r}")
+    app = LabelingApp()
+    log_setup.apply_config(app.config.log_level_console, app.config.log_keep_files)
+    log_setup.install_tk_exception_hook(app)
+    log_setup.log_session_header(
+        version=PROGRAM_VERSION,
+        config=app.config,
+        app_dir=app_dir,
+    )
+    app.mainloop()
+    log_setup.log_session_footer()
 
 
 if __name__ == "__main__":
-    _harden_console_encoding()
-    print("Labeling App starting...")
-    app = LabelingApp()
-    app.mainloop()
+    main()

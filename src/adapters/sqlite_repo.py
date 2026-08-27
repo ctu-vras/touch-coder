@@ -69,6 +69,7 @@ runtime dirty flag that has never been serialized by any backend.
 """
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -81,6 +82,9 @@ from domain.model import (
     _normalize_param_state,
     empty_record,
 )
+
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -199,15 +203,16 @@ class SqliteRepository:
         version = self._user_version()
         if is_new or version == 0:
             self._create_schema()
-            print(
-                f"INFO: sqlite_repo: created state DB (schema v{SCHEMA_VERSION}) "
-                f"-> {db_path}"
+            logger.info(
+                "sqlite_repo: created state DB (schema v%d) -> %s", SCHEMA_VERSION, db_path
             )
         else:
             self._upgrade_from(version)
-            print(
-                f"INFO: sqlite_repo: opened state DB (schema v{self._user_version()}) "
-                f"-> {db_path} ({os.path.getsize(db_path)} bytes)"
+            logger.info(
+                "sqlite_repo: opened state DB (schema v%d) -> %s (%d bytes)",
+                self._user_version(),
+                db_path,
+                os.path.getsize(db_path),
             )
 
     # === plumbing =============================================================
@@ -256,9 +261,11 @@ class SqliteRepository:
             )
         if version < SCHEMA_VERSION:
             # v0 is handled by the caller (fresh create). No v1-> path yet.
-            print(
-                f"INFO: sqlite_repo: upgrading {self._path} from schema "
-                f"v{version} to v{SCHEMA_VERSION}"
+            logger.info(
+                "sqlite_repo: upgrading %s from schema v%d to v%d",
+                self._path,
+                version,
+                SCHEMA_VERSION,
             )
             self._create_schema()
 
@@ -290,9 +297,9 @@ class SqliteRepository:
         self._check_thread()
         try:
             self._conn.close()
-            print(f"INFO: sqlite_repo: closed state DB -> {self._path}")
-        except Exception as exc:  # never block app shutdown on this
-            print(f"WARN: sqlite_repo: close failed for {self._path}: {exc}")
+            logger.debug("sqlite_repo: closed state DB -> %s", self._path)
+        except Exception:  # never block app shutdown on this
+            logger.warning("sqlite_repo: close failed for %s", self._path, exc_info=True)
 
     # === meta =================================================================
     def get_meta(self, key: str, default=None) -> Optional[str]:
@@ -328,7 +335,9 @@ class SqliteRepository:
         try:
             return float(raw)
         except (TypeError, ValueError):
-            print(f"WARN: sqlite_repo: meta[{key}]={raw!r} is not a number; using {default!r}")
+            logger.warning(
+                "sqlite_repo: meta[%s]=%r is not a number; using %r", key, raw, default
+            )
             return default
 
     def _get_meta_int(self, key: str, default: Optional[int]) -> Optional[int]:
@@ -361,8 +370,8 @@ class SqliteRepository:
             if progress_cb and (index + 1) % report_every == 0:
                 try:
                     progress_cb(index + 1, total, "Loading state database", time.time() - t0)
-                except Exception as exc:
-                    print(f"WARN: sqlite_repo: progress_cb failed: {exc}")
+                except Exception:
+                    logger.warning("sqlite_repo: progress_cb failed", exc_info=True)
 
         params_n = 0
         for row in self._conn.execute(
@@ -411,9 +420,11 @@ class SqliteRepository:
                     "Zones": [], "Touch": None,
                 }
                 records[(row["frame"], row["limb"])] = rec
-                print(
-                    f"WARN: sqlite_repo: clicks row without limb_records parent "
-                    f"(frame={row['frame']} limb={row['limb']}) — record rebuilt"
+                logger.warning(
+                    "sqlite_repo: clicks row without limb_records parent "
+                    "(frame=%s limb=%s) — record rebuilt",
+                    row["frame"],
+                    row["limb"],
                 )
             if row["x"] is not None:
                 rec["X"].append(row["x"])
@@ -443,13 +454,19 @@ class SqliteRepository:
         if progress_cb and total:
             try:
                 progress_cb(total, total, "Loading state database", time.time() - t0)
-            except Exception as exc:
-                print(f"WARN: sqlite_repo: progress_cb failed: {exc}")
+            except Exception:
+                logger.warning("sqlite_repo: progress_cb failed", exc_info=True)
 
-        print(
-            f"DEBUG: sqlite_repo: loaded frames={total} limb_records={recs_n} "
-            f"clicks={clicks_n} frame_params={params_n} limb_params={lp_n} "
-            f"in {time.time() - t0:.2f}s <- {self._path}"
+        logger.debug(
+            "sqlite_repo: loaded frames=%d limb_records=%d clicks=%d "
+            "frame_params=%d limb_params=%d in %.2fs <- %s",
+            total,
+            recs_n,
+            clicks_n,
+            params_n,
+            lp_n,
+            time.time() - t0,
+            self._path,
         )
         return frames
 
@@ -471,9 +488,10 @@ class SqliteRepository:
             if isinstance(b, dict) and b.get("Changed")
         )
         if not dirty:
-            print(
-                f"DEBUG: sqlite_repo: save skipped — no dirty frames "
-                f"(total_frames={total_frames}) -> {self._path}"
+            logger.debug(
+                "sqlite_repo: save skipped — no dirty frames (total_frames=%d) -> %s",
+                total_frames,
+                self._path,
             )
             self.set_meta(META_TOTAL_FRAMES, total_frames)
             return 0
@@ -486,13 +504,15 @@ class SqliteRepository:
             self._set_meta_unlocked(META_TOTAL_FRAMES, total_frames)
 
         for message in anomalies[:20]:
-            print(f"WARN: sqlite_repo: {message}")
+            logger.warning("sqlite_repo: %s", message)
         if len(anomalies) > 20:
-            print(f"WARN: sqlite_repo: … and {len(anomalies) - 20} more anomalies")
-        print(
-            f"DEBUG: sqlite_repo: saved dirty frames={len(dirty)} "
-            f"(total_frames={total_frames}) in {time.time() - t0:.3f}s "
-            f"-> {self._path}"
+            logger.warning("sqlite_repo: … and %d more anomalies", len(anomalies) - 20)
+        logger.debug(
+            "sqlite_repo: saved dirty frames=%d (total_frames=%d) in %.3fs -> %s",
+            len(dirty),
+            total_frames,
+            time.time() - t0,
+            self._path,
         )
         return len(dirty)
 
@@ -582,7 +602,7 @@ class SqliteRepository:
         self.set_meta_many(
             {META_LAST_FRAME: int(frame), META_TOTAL_FRAMES: int(total_frames)}
         )
-        print(f"INFO: sqlite_repo: saved last position frame={frame} -> {self._path}")
+        logger.debug("sqlite_repo: saved last position frame=%d -> %s", frame, self._path)
 
     def read_last_position(self, total_frames: int) -> Optional[int]:
         """Clamped resume frame, or None when the DB has never stored one."""
@@ -620,9 +640,11 @@ class SqliteRepository:
                 [(int(d), float(x), float(y), str(z or "")) for d, x, y, z in rows],
             )
             self._set_meta_unlocked(META_CLOTHES_SCALE, float(diagram_scale))
-        print(
-            f"INFO: sqlite_repo: saved clothes dots={len(rows)} "
-            f"scale={diagram_scale} -> {self._path}"
+        logger.debug(
+            "sqlite_repo: saved clothes dots=%d scale=%s -> %s",
+            len(rows),
+            diagram_scale,
+            self._path,
         )
 
     def load_clothes_rows(self) -> List[Tuple[int, float, float, str]]:
@@ -678,8 +700,11 @@ def _loads_bucket(raw: str, frame: int, limb: str):
     try:
         return json.loads(raw)
     except (TypeError, ValueError) as exc:
-        print(
-            f"WARN: sqlite_repo: unreadable zones bucket for frame={frame} "
-            f"limb={limb}: {raw!r} ({exc}) — using []"
+        logger.warning(
+            "sqlite_repo: unreadable zones bucket for frame=%s limb=%s: %r (%s) — using []",
+            frame,
+            limb,
+            raw,
+            exc,
         )
         return []

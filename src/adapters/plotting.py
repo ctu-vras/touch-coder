@@ -28,6 +28,7 @@ master page never links a file that was not written.
 
 import base64
 import html
+import logging
 import math
 import os
 from typing import Dict, Optional, Sequence
@@ -46,6 +47,9 @@ from domain.touch_stats import (
     fps_is_usable,
 )
 from gui.resource_utils import asset_path
+
+
+logger = logging.getLogger(__name__)
 
 # Panel titles, in `domain.model.LIMBS` order.
 LIMB_TITLES = {"LH": "Left Hand", "RH": "Right Hand", "LL": "Left Leg", "RL": "Right Leg"}
@@ -115,7 +119,7 @@ def write_transition_heatmap(transition_df: pd.DataFrame,
     )
     path = os.path.join(output_folder, heatmap_file(limb))
     fig.write_html(path)
-    print(f"INFO: wrote {path}")
+    logger.debug("wrote %s", path)
     return path
 
 
@@ -245,7 +249,7 @@ def write_trajectory_plot(episodes_by_limb: Dict[str, Sequence[Episode]],
     )
     path = os.path.join(output_folder, TRAJECTORY_FILE)
     fig.write_html(path, config={"scrollZoom": True})
-    print(f"INFO: wrote {path}")
+    logger.debug("wrote %s", path)
     return path
 
 
@@ -279,12 +283,12 @@ def write_analysis_tables(stats: Sequence[LimbStats],
     )
     frames_path = os.path.join(output_folder, FRAMES_TABLE_CSV)
     df_frames.to_csv(frames_path, index=False)
-    print(f"INFO: wrote {frames_path}")
+    logger.debug("wrote %s", frames_path)
 
     if not fps_is_usable(fps):
-        print(
-            "WARN: frame rate unusable "
-            f"({fps!r}) — seconds-based table columns written as empty values"
+        logger.warning(
+            "frame rate unusable (%r) — seconds-based table columns written as empty values",
+            fps,
         )
 
     df_seconds = pd.DataFrame(
@@ -305,7 +309,7 @@ def write_analysis_tables(stats: Sequence[LimbStats],
     )
     seconds_path = os.path.join(output_folder, SECONDS_TABLE_CSV)
     df_seconds.to_csv(seconds_path, index=False)
-    print(f"INFO: wrote {seconds_path}")
+    logger.debug("wrote %s", seconds_path)
     return df_seconds
 
 
@@ -374,7 +378,7 @@ def write_summary_table(stats: Sequence[LimbStats],
     )
     path = os.path.join(output_folder, TABLE_FILE)
     fig.write_html(path)
-    print(f"INFO: wrote {path}")
+    logger.debug("wrote %s", path)
     return path
 
 
@@ -412,7 +416,7 @@ def write_onset_histogram(stats: Sequence[LimbStats], output_folder: str) -> str
     )
     path = os.path.join(output_folder, ONSET_HISTOGRAM_FILE)
     fig.write_html(path)
-    print(f"INFO: wrote {path}")
+    logger.debug("wrote %s", path)
     return path
 
 
@@ -436,7 +440,7 @@ def write_duration_histogram(stats: Sequence[LimbStats], fps, output_folder: str
             f"<sup>frame rate unavailable ({fps!r}) — durations shown in frames</sup>"
         )
         xaxis_title = "Touch Duration [frames]"
-        print("WARN: duration histogram fell back to frame buckets (unusable frame rate)")
+        logger.warning("duration histogram fell back to frame buckets (unusable frame rate)")
     fig.update_layout(
         barmode="stack",
         title=title,
@@ -446,7 +450,7 @@ def write_duration_histogram(stats: Sequence[LimbStats], fps, output_folder: str
     )
     path = os.path.join(output_folder, DURATION_HISTOGRAM_FILE)
     fig.write_html(path)
-    print(f"INFO: wrote {path}")
+    logger.debug("wrote %s", path)
     return path
 
 
@@ -557,5 +561,5 @@ def write_master_html(name: str,
     path = os.path.join(output_folder, master_file(name))
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html_content)
-    print(f"INFO: wrote {path}")
+    logger.debug("wrote %s", path)
     return path

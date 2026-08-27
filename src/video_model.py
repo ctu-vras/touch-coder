@@ -1,8 +1,12 @@
 import sys
+import logging
 from typing import Dict
 
 from app_info import PROGRAM_VERSION
 from domain.model import FrameBundle, LimbView
+
+
+logger = logging.getLogger(__name__)
 
 
 class Video:
@@ -43,7 +47,7 @@ class Video:
             self.program_version = f"{PROGRAM_VERSION} (Linux)"
         else:
             self.program_version = f"{PROGRAM_VERSION} (Unknown OS)"
-        print("INFO: Program version:", self.program_version)
+        logger.debug("program version: %s", self.program_version)
         self.parameter1_name = None
         self.parameter2_name = None
         self.parameter3_name = None

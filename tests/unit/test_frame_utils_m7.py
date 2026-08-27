@@ -18,7 +18,7 @@ def _reliability_source(tmp_path, video_name="vid"):
     return source
 
 
-def test_M7_reliability_copy_filters_non_frames(tmp_path, monkeypatch, make_frame_jpgs, capsys):
+def test_M7_reliability_copy_filters_non_frames(tmp_path, monkeypatch, make_frame_jpgs, caplog):
     source = _reliability_source(tmp_path)
     make_frame_jpgs(str(source), 5)
     (source / "Thumbs.db").write_bytes(b"metadata")
@@ -32,8 +32,8 @@ def test_M7_reliability_copy_filters_non_frames(tmp_path, monkeypatch, make_fram
 
     assert count == 5
     assert sorted(os.listdir(destination)) == [f"frame{i}.jpg" for i in range(5)]
-    output = capsys.readouterr().out
-    assert "WARN" in output and "skipped" in output.lower()
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert any("skipped" in message.lower() for message in warnings)
 
 
 def test_M7_reliability_nonframes_only_raises(tmp_path, monkeypatch):
@@ -109,7 +109,7 @@ def test_M7_opencv_capture_released_on_error(tmp_path, monkeypatch):
     assert capture.released is True
 
 
-def test_M7_opencv_imwrite_false_raises(tmp_path, monkeypatch, capsys):
+def test_M7_opencv_imwrite_false_raises(tmp_path, monkeypatch, caplog):
     capture = _ErrorCapture()
     monkeypatch.setattr(frame_utils.cv2, "VideoCapture", lambda *_args: capture)
     monkeypatch.setattr(frame_utils.cv2, "imwrite", lambda *_args: False)
@@ -118,7 +118,7 @@ def test_M7_opencv_imwrite_false_raises(tmp_path, monkeypatch, capsys):
         frame_utils._extract_frames_opencv("vid.mp4", str(tmp_path), None, 1.0)
 
     assert capture.released is True
-    assert "ERROR" in capsys.readouterr().out
+    assert any(record.levelname == "ERROR" for record in caplog.records)
 
 
 class _ProbeCapture:

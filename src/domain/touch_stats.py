@@ -62,6 +62,7 @@ FRAME RATE MAY BE UNUSABLE
 """
 
 import json
+import logging
 import math
 import statistics
 from collections import Counter, defaultdict
@@ -72,6 +73,9 @@ import pandas as pd
 
 from domain.model import LIMBS
 from domain.touch import NO_ZONE, is_catch_all_zone
+
+
+logger = logging.getLogger(__name__)
 
 # `NO_ZONE` ("NN") is defined in domain.touch — the labeler's hit test writes it
 # and this module reuses it as the transition fallback for an episode edge that
@@ -155,9 +159,11 @@ def parse_xy_list(value) -> List[float]:
         try:
             out.append(float(token))
         except ValueError as exc:
-            print(
-                f"WARN: touch_stats ignored invalid coordinate token {token!r} "
-                f"from {value!r}: {exc}"
+            logger.warning(
+                "ignored invalid coordinate token %r from %r: %s",
+                token,
+                value,
+                exc,
             )
     return out
 
@@ -177,7 +183,7 @@ def parse_zones(value):
     try:
         parsed = json.loads(s)
     except json.JSONDecodeError as exc:
-        print(f"WARN: touch_stats could not parse zones {value!r}: {exc}")
+        logger.warning("could not parse zones %r: %s", value, exc)
         return []
     return parsed if parsed is not None else []
 
@@ -451,7 +457,7 @@ def parse_export(df: pd.DataFrame, limbs: Sequence[str] = LIMBS) -> ExportData:
         try:
             frame = int(rec["Frame"])
         except (TypeError, ValueError) as exc:
-            print(f"WARN: touch_stats skipped row with unusable Frame {rec.get('Frame')!r}: {exc}")
+            logger.warning("skipped row with unusable Frame %r: %s", rec.get("Frame"), exc)
             continue
         rows.append((frame, rec))
     rows.sort(key=lambda item: item[0])
@@ -644,11 +650,11 @@ def transition_matrix(
     matrix = pd.DataFrame(0, index=zones, columns=zones)
     for start_zone, ends in transition_counts.items():
         if start_zone not in matrix.index:
-            print(f"WARN: touch_stats dropped transitions from unknown start zone {start_zone!r}")
+            logger.warning("dropped transitions from unknown start zone %r", start_zone)
             continue
         for end_zone, count in ends.items():
             if end_zone not in matrix.columns:
-                print(f"WARN: touch_stats dropped transitions to unknown end zone {end_zone!r}")
+                logger.warning("dropped transitions to unknown end zone %r", end_zone)
                 continue
             matrix.at[start_zone, end_zone] += count
     return matrix

@@ -1,7 +1,7 @@
 import os
 import time
-import traceback
 import webbrowser
+import logging
 from contextlib import contextmanager
 from threading import Thread, Event, get_ident, current_thread
 
@@ -31,10 +31,15 @@ from gui import theme
 from gui.cloth_app import ClothApp, DEFAULT_CLOTH_DIAGRAM_SCALE
 from gui.resource_utils import asset_path
 from gui.ui_components import build_ui
+from log_setup import open_logs_folder
 from perf_utils import PerfLogger
 from service_layer import analysis_service, annotation_service, project_service, save_service
 from service_layer.project_service import LabelingTimer
 from video_model import Video
+
+
+logger = logging.getLogger(__name__)
+annotation_logger = logging.getLogger("annot")
 
 
 # =============================================================================
@@ -52,7 +57,6 @@ from video_model import Video
 HOLD_START_DELAY_MS = 500
 HOLD_RELEASE_TIMEOUT_MS = 100
 HOLD_WATCHDOG_INTERVAL_MS = 50
-DEBUG = False
 # Dev guard (H1): when True, the main render/timeline methods raise if called
 # off the Tk main thread, so any future thread-boundary regression fails loudly
 # at the offending call site instead of crashing Tcl intermittently.
@@ -305,29 +309,30 @@ class LabelingApp(tk.Tk):
 
         # Build UI (creates frames, widgets, binds events; sets many attributes)
         build_ui(self)
+        self._logged_limb = self.option_var_1.get()
 
         # Config flags that affect UI sizing & behavior
         self.NEW_TEMPLATE = self.config.new_template
         self.minimal_touch_length = self.config.minimal_touch_length
-        print("INFO: Loaded new template:", self.NEW_TEMPLATE)
-        print("INFO: Loaded minimal touch length:", self.minimal_touch_length)
+        logger.debug("new template: %s", self.NEW_TEMPLATE)
+        logger.debug("minimal touch length: %s", self.minimal_touch_length)
         self.perf = PerfLogger(
             enabled=self.config.perf_enabled,
             log_every_s=self.config.perf_log_every_s,
             top_n=self.config.perf_log_top_n,
         )
-        print("INFO: Perf logging enabled:", self.config.perf_enabled)
+        logger.debug("performance logging enabled: %s", self.config.perf_enabled)
         self.video_downscale = self.config.video_downscale
-        print("INFO: Video downscale:", self.video_downscale)
+        logger.debug("video downscale: %s", self.video_downscale)
         self.jump_seconds = self.config.jump_seconds
         self.jump_frame_count = 7  # fallback until a video loads & framerate is known
-        print(f"INFO: Fast-jump configured to {self.jump_seconds}s")
+        logger.debug("fast jump configured: %ss", self.jump_seconds)
         self._refresh_jump_label()
 
         # Realtime arrow-hold playback state (no KeyRelease bindings â€” OS keyboard
         # auto-repeat KeyPress events act as a heartbeat, polled by a watchdog).
         self.realtime_arrow_hold = self.config.realtime_arrow_hold
-        print(f"INFO: Realtime arrow hold: {self.realtime_arrow_hold}")
+        logger.debug("realtime arrow hold: %s", self.realtime_arrow_hold)
         self.play_dir = 1                     # 1 = forward, -1 = backward (set by arrow-hold)
         self._arrow_held_dir = None           # currently-held arrow direction (1 / -1 / None)
         self._first_arrow_press_ms = 0.0      # time of the initial KeyPress (gates 1s hold delay)
@@ -435,7 +440,7 @@ class LabelingApp(tk.Tk):
                 text=text,
                 variable=self.option_var_1,
                 value=value,
-                command=self.on_radio_click,
+                command=self._on_limb_selected,
                 takefocus=0,
             ).pack(anchor="w")
 
@@ -483,7 +488,6 @@ class LabelingApp(tk.Tk):
             b["Changed"] = True
             self._timeline_dirty = True
             self._timeline2_dirty = True
-            # optional: keep your terminal print
             if hasattr(self, "notify_bundle_changed"):
                 self.notify_bundle_changed(idx)
 
@@ -493,11 +497,10 @@ class LabelingApp(tk.Tk):
         idx = self.video.current_frame if index is None else index
         try:
             b = self.video.frames[idx]
-            if DEBUG:
-                print("\n=== FrameBundle UPDATED ===")
-                print(bundle_summary_str(b, frame_index=idx))
-        except Exception as e:
-            print(f"[notify_bundle_changed] could not print bundle at {idx}: {e}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("FrameBundle updated:\n%s", bundle_summary_str(b, frame_index=idx))
+        except Exception:
+            logger.warning("could not summarize bundle at frame %s", idx, exc_info=True)
 
     # === Navigation & Input Events =============================================
     def global_click(self, event):
@@ -529,11 +532,11 @@ class LabelingApp(tk.Tk):
 
         try:
             self.after(0, _apply)
-        except (RuntimeError, tk.TclError) as e:
+        except (RuntimeError, tk.TclError) as exc:
             # Called from the buffering thread, which can still be mid-tick when
             # on_close() destroys the root; `after` then raises "main thread is
             # not in main loop" and would kill the daemon with a traceback.
-            print(f"DEBUG: buffer status update dropped during teardown: {e}")
+            logger.debug("buffer status update dropped during teardown: %s", exc)
 
     def _is_ui_thread(self) -> bool:
         """True when called on the Tk main thread (recorded in __init__)."""
@@ -617,7 +620,7 @@ class LabelingApp(tk.Tk):
                 self.play = False
                 self._hold_play_active = False
                 self.play_dir = 1
-                print(f"INFO: Realtime hold released (dir={direction})")
+                logger.debug("realtime hold released: direction=%s", direction)
             return
         # Still held â€” keep polling.
         self._hold_watchdog_id = self.after(HOLD_WATCHDOG_INTERVAL_MS, self._hold_watchdog_tick)
@@ -632,7 +635,7 @@ class LabelingApp(tk.Tk):
             self.play_thread_on = True
             if not self.background_thread_play.is_alive():
                 self.background_thread_play.start()
-        print(f"INFO: Realtime hold started (dir={direction}, fps={self.frame_rate})")
+        logger.debug("realtime hold started: direction=%s fps=%s", direction, self.frame_rate)
 
     def _cancel_arrow_hold_state(self):
         """Force-stop any in-flight hold state. Used when arrow keys are unbound."""
@@ -661,7 +664,7 @@ class LabelingApp(tk.Tk):
         self.last_mouse_y = event.y
 
     def on_resize(self, event):
-        print("INFO: Resized to {}x{}".format(event.width, event.height))
+        logger.debug("window resized to %sx%s", event.width, event.height)
         # Refresh the geometry cache the buffer thread reads instead of winfo_* (H1).
         self._display_w = event.width
         self._display_h = event.height
@@ -726,6 +729,13 @@ class LabelingApp(tk.Tk):
             # Repaint immediately so the erased dot disappears without waiting
             # for the 300ms periodic_print_dot tick.
             self._render_diagram_dots()
+            rec = self.video.frames[current_frame][option]
+            annotation_logger.info(
+                "f=%s %s delete points=%s",
+                current_frame,
+                option,
+                len(rec.get("X", [])),
+            )
 
     # === Diagram Init & Click Handling =========================================
     def init_diagram(self):
@@ -802,16 +812,19 @@ class LabelingApp(tk.Tk):
         # here, where the frame and limb are known, so the annotator can go back
         # and re-place the dot instead of finding NN rows after the study.
         if zone_results == [NO_ZONE]:
-            print(
-                f"WARN: click hit no zone mask - recorded as '{NO_ZONE}' "
-                f"frame={current_frame} limb={option} onset={onset} "
-                f"x={x_pos:.1f} y={y_pos:.1f} (diagram pixels); "
-                "delete the dot and click further inside a zone"
+            logger.warning(
+                "click hit no zone mask - recorded as '%s' frame=%s limb=%s "
+                "onset=%s x=%.1f y=%.1f (diagram pixels); delete the dot and "
+                "click further inside a zone",
+                NO_ZONE,
+                current_frame,
+                option,
+                onset,
+                x_pos,
+                y_pos,
             )
 
         setattr(self.video, f"is_touch{option}", True)
-
-        print(f"CLICK: before  frame={current_frame:>5} limb={option} onset={onset} zones={zone_results}")
 
         rec = annotation_service.add_click(
             self.video.frames, current_frame, option, x_pos, y_pos, onset, zone_results
@@ -822,9 +835,13 @@ class LabelingApp(tk.Tk):
         # 300ms periodic_print_dot tick.
         self._render_diagram_dots()
 
-        print(
-            f"CLICK:  after  frame={current_frame:>5} limb={option} onset={rec.get('Onset')} "
-            f"points={len(rec.get('X', []))} zones_len={len(rec.get('Zones', []))}"
+        annotation_logger.info(
+            "f=%s %s click %s zones=%s points=%s",
+            current_frame,
+            option,
+            rec.get("Onset"),
+            zone_results,
+            len(rec.get("X", [])),
         )
 
     def preview_before_save(self, changed_only: bool = True):
@@ -833,25 +850,19 @@ class LabelingApp(tk.Tk):
         Shows base/state/export dirs and per-frame summaries.
         """
         if not self.video:
-            print("PREVIEW: No video loaded."); return
+            logger.debug("save preview skipped: no video loaded")
+            return
 
         paths = ProjectPaths(self.video_name)
-        print("\n===== PREVIEW: Save destinations =====")
-        print(f"Base:   {paths.video_dir}")
-        print(f"State:  {paths.state_dir}")
-        print(f"Export: {paths.export_dir}")
-        print(f"State DB (writes changed frames only): {paths.state_db}")
-        print(f"Export  CSV (will write all frames):   {paths.export_csv}")
-
         lines = preview_lines_for_save(self.video.frames, self.video.total_frames, changed_only=changed_only)
-
-        if not lines:
-            print("PREVIEW: No changed frames to save.")
-        else:
-            print("===== PREVIEW: Frames to be saved =====")
-            for line in lines:
-                print(line)
-            print("===== PREVIEW: End =====\n")
+        logger.debug(
+            "save preview: video_dir=%s state_db=%s export_csv=%s changed=%s%s",
+            paths.video_dir,
+            paths.state_db,
+            paths.export_csv,
+            len(lines),
+            "\n" + "\n".join(lines) if lines else "",
+        )
     
     def find_last_green(self, _unused_data=None):
         """
@@ -867,6 +878,14 @@ class LabelingApp(tk.Tk):
         self.video.last_green = find_last_open_onset(
             self.video.frames, limb, self.video.current_frame
         )
+
+    def _on_limb_selected(self):
+        selected = self.option_var_1.get()
+        previous = getattr(self, "_logged_limb", None)
+        if previous is not None and previous != selected:
+            annotation_logger.info("limb %s -> %s", previous, selected)
+        self._logged_limb = selected
+        self.on_radio_click()
 
     def on_radio_click(self):
         expected_dir = asset_path("icons/zones3_new_template" if self.NEW_TEMPLATE else "icons/zones3")
@@ -919,7 +938,7 @@ class LabelingApp(tk.Tk):
                 self.video.current_frame = frame_number + self.video.number_frames_in_zone * self.video.current_frame_zone
                 self.display_first_frame()
             else:
-                print("ERROR: Frame Number")
+                logger.error("invalid frame number")
 
     def on_timeline2_click(self, event):
         if self.video and self.video.total_frames > 0:
@@ -928,7 +947,7 @@ class LabelingApp(tk.Tk):
             new_frame = int((click_position / canvas_width) * self.video.total_frames)
             self.video.current_frame = new_frame
             self.video.current_frame_zone = new_frame // self.video.number_frames_in_zone
-            print("INFO: Jumping to exact frame:", new_frame)
+            logger.debug("jumping to exact frame: %s", new_frame)
             self.display_first_frame()
 
     def parameter_color_at_frame(self, frame):
@@ -1360,8 +1379,6 @@ class LabelingApp(tk.Tk):
             try:
                 export_fn()
             except Exception as exc:
-                print("ERROR: Full export failed on worker thread:", flush=True)
-                traceback.print_exc()
                 result["error"] = exc
             finally:
                 done.set()
@@ -1404,13 +1421,13 @@ class LabelingApp(tk.Tk):
         try:
             project_service.copy_file_with_progress(source_path, dest_path, progress_update)
         except Exception as exc:
-            print(f"ERROR: Failed to copy video: {exc}")
+            logger.exception("failed to copy video to %s", dest_path)
             messagebox.showerror("Video Copy Failed", f"Failed to copy video:\n{exc}")
             return None
         finally:
             progress_close()
 
-        print(f"INFO: Copied video to {dest_path}")
+        logger.info("copied video to %s", dest_path)
         return dest_path
 
     # === Frame Buffer Boundary (GUI side of adapters.frame_buffer) =============
@@ -1462,7 +1479,7 @@ class LabelingApp(tk.Tk):
         concurrently from two threads.
         """
         if self.video is None:
-            print("DEBUG: play advance skipped — no video (shutdown/reload)")
+            logger.debug("play advance skipped: no video (shutdown/reload)")
             return
         self.video.current_frame = next_frame
         self._last_step_sign = direction
@@ -1471,21 +1488,21 @@ class LabelingApp(tk.Tk):
             self.draw_timeline2()
             if next_frame % 10 == 0:
                 self.draw_timeline()
-        except tk.TclError as e:
+        except tk.TclError as exc:
             # Expected only when the app is being torn down mid-playback.
-            print(f"DEBUG: play advance redraw aborted during teardown: {e}")
+            logger.debug("play advance redraw aborted during teardown: %s", exc)
 
     def _on_playback_boundary(self, current_frame, direction):
         """Playback hit the edge it was moving toward — stop cleanly."""
         self.play = False
         self._hold_play_active = False
         self.play_dir = 1
-        print(f"INFO: Playback stopped at boundary (frame {current_frame}, dir={direction})")
+        logger.debug("playback stopped at boundary: frame=%s direction=%s", current_frame, direction)
 
     def _on_playback_schedule_error(self, exc):
         """UI marshaling failed — the Tk mainloop is gone (close mid-playback)."""
         self.play = False
-        print(f"DEBUG: playback redraw scheduling stopped — Tk shutting down: {exc}")
+        logger.debug("playback redraw scheduling stopped: Tk shutting down: %s", exc)
 
     @staticmethod
     def _compute_play_step(current_frame, total_frames, direction):
@@ -1507,7 +1524,8 @@ class LabelingApp(tk.Tk):
             else:
                 self.video.current_frame = frame_number
             if frame_number < 0 or frame_number > self.video.total_frames:
-                print("ERROR: Frame number out of bounds."); return
+                logger.error("frame number out of bounds: %s", frame_number)
+                return
             pil_img = self.frame_buffer.get(frame_number)
             if pil_img is not None:
                 with self.perf.time("display_frame_photo"):
@@ -1528,7 +1546,7 @@ class LabelingApp(tk.Tk):
                 self.loading_label.set(theme.STATUS_OK, "Loaded")
                 self.image = photo_img
             else:
-                print("INFO: Frame not in buffer.")
+                logger.debug("frame not in buffer: %s", frame_number)
                 self.loading_label.set(theme.STATUS_BAD, "Loading")
 
             self.update_note_entry()
@@ -1587,6 +1605,7 @@ class LabelingApp(tk.Tk):
         # mark frame dirty, print, and refresh timeline
         self.mark_bundle_changed(idx)
         self.draw_timeline()
+        annotation_logger.info("f=%s param P%s -> %s", idx, parameter_index, new_state)
 
     def toggle_limb_parameter(self, param_number: int):
         limb = self.option_var_1.get()
@@ -1602,6 +1621,9 @@ class LabelingApp(tk.Tk):
         # mark & redraw (so timeline updates)
         self.mark_bundle_changed(frame)
         self.draw_timeline()
+        annotation_logger.info(
+            "f=%s %s limbparam LP%s -> %s", frame, limb, param_number, new_state
+        )
 
     def update_limb_parameter_buttons(self):
         if not self.video:
@@ -1652,30 +1674,28 @@ class LabelingApp(tk.Tk):
         try:
             frame_int = int(frame)
         except ValueError:
-            print("Error selecting frame: The frame number must be a valid integer.")
+            logger.warning("cannot select frame: value is not a valid integer: %r", frame)
             self._clear_note_entry(); return
         if self.video is not None:
             if frame_int < 0 or frame_int > self.video.total_frames:
-                print("Error selecting frame: Out of range!")
+                logger.warning("cannot select frame: %s is out of range", frame_int)
                 self._clear_note_entry(); return
             self.video.current_frame = frame_int
             self.update_frame_counter()
             self.display_first_frame()
         else:
-            print("Error selecting frame: No video loaded!")
+            logger.warning("cannot select frame: no video loaded")
         self._clear_note_entry()
 
     def save_note(self):
-        print("INFO: Saving note...")
-
         idx = self.video.current_frame
         note_text = self._get_note_entry_text().strip()
 
-        if annotation_service.set_note(self.video.frames, idx, note_text):
+        changed = annotation_service.set_note(self.video.frames, idx, note_text)
+        if changed:
             self.mark_bundle_changed(idx)
             self.notify_bundle_changed(idx)
-
-        print(f"INFO: Note saved for frame {idx}: {note_text}")
+            annotation_logger.info("f=%s note -> %r", idx, note_text)
         try:
             import keyboard
             keyboard.press_and_release('tab')
@@ -1697,23 +1717,30 @@ class LabelingApp(tk.Tk):
     # === Save / Export =========================================================
     def save_data(self):
         if not self.video or not self.video.frames_dir:
-            print("INFO: Save skipped (no video loaded).")
+            logger.info("save skipped: no video loaded")
             return True
         if self.state_repo is None:
-            print("ERROR: Save skipped — no state database is open.")
+            logger.error("save skipped: no state database is open")
             return False
+        started = time.perf_counter()
+        dirty_count = sum(
+            1 for bundle in self.video.frames.values()
+            if isinstance(bundle, dict) and bundle.get("Changed")
+        )
         self._persist_video_time()
         self.preview_before_save(changed_only=True)
-        print("INFO: Saving (state DB & export)...")
+        logger.info("saving %s changed frames", dirty_count)
 
         paths = ProjectPaths(self.video_name)
         os.makedirs(paths.state_dir, exist_ok=True)
         os.makedirs(paths.export_dir, exist_ok=True)
-        print(f"DEBUG: Base dir:   {paths.video_dir}")
-        print(f"DEBUG: State dir:  {paths.state_dir}")
-        print(f"DEBUG: Export dir: {paths.export_dir}")
-        print(f"DEBUG: Frames dir: {self.video.frames_dir}")
-        print(f"DEBUG: Writing state database -> {paths.state_db}")
+        logger.debug(
+            "save paths: video=%s state=%s export=%s frames=%s",
+            paths.video_dir,
+            paths.state_db,
+            paths.export_csv,
+            self.video.frames_dir,
+        )
 
         # 1) Dirty frames -> state DB, one transaction. UI thread (the repo
         #    enforces that itself); this is the source of truth.
@@ -1721,7 +1748,7 @@ class LabelingApp(tk.Tk):
             self.state_repo, self.video.total_frames, self.video.frames
         )
 
-        print(f"DEBUG: Writing export dataset -> {paths.export_csv}")
+        logger.debug("writing export dataset: %s", paths.export_csv)
 
         # Non-tabular inputs gathered here: the button labels are Tk reads and
         # the labeling clock must be sampled on the UI thread.
@@ -1752,7 +1779,12 @@ class LabelingApp(tk.Tk):
                 snapshot, paths, frame_rate, metadata, total_frames
             )
         )
-        print("INFO: Save completed successfully.")
+        logger.info(
+            "save complete: changed_frames=%s export_rows=%s duration=%.2fs",
+            dirty_count,
+            self.video.total_frames + 1,
+            time.perf_counter() - started,
+        )
 
         # 4) Clear Changed ONLY where the live bundle still equals its snapshot:
         #    a frame edited DURING the export stays dirty for the next save.
@@ -1790,7 +1822,7 @@ class LabelingApp(tk.Tk):
                 new_template=self.NEW_TEMPLATE,
             )
         except Exception as exc:
-            traceback.print_exc()
+            logger.exception("analysis failed for %s", self.video_name)
             messagebox.showerror("Analysis failed", f"Could not complete analysis:\n{exc}")
             return
 
@@ -1798,12 +1830,12 @@ class LabelingApp(tk.Tk):
             messagebox.showwarning(
                 "Analysis finished with warnings", "\n\n".join(result.warnings)
             )
-        print(f"INFO: opening analysis dashboard {result.master_html}")
+        logger.info("opening analysis dashboard: %s", result.master_html)
         webbrowser.open(result.master_html)
 
     def play_video(self):
         if self.video is None:
-            print("ERROR: First select video")
+            logger.error("cannot play: select a video first")
             return
         # Always play forward when the user clicks Play, regardless of any
         # prior arrow-hold state that may have left play_dir = -1.
@@ -1908,7 +1940,7 @@ class LabelingApp(tk.Tk):
         """
         if self.video is None:
             return True
-        print(f"INFO: Unloading video '{self.video_name}' (save + close state DB).")
+        logger.info("unloading video %r (save and close state DB)", self.video_name)
 
         # Stop playback / arrow-hold before the video identity changes.
         self.stop_video()
@@ -1917,18 +1949,19 @@ class LabelingApp(tk.Tk):
         # A leftover Clothes window writes its dots through the CURRENT repo
         # on close, so close it now, while that repo is still the right one.
         if self._cloth_app and self._cloth_app.top_level.winfo_exists():
-            print("INFO: Closing the Clothes window before unloading.")
+            logger.debug("closing Clothes window before unloading")
             self._cloth_app.on_close()
         self._cloth_app = None
 
         try:
             ok = self.save_data()
         except Exception:
-            traceback.print_exc()
+            logger.exception("final save failed while unloading %r", self.video_name)
             ok = False
         if not ok:
-            print("ERROR: Unload aborted — the final save failed; "
-                  "keeping the current video open.")
+            logger.error(
+                "unload aborted: final save failed; keeping current video open"
+            )
             return False
         self.save_last_position()
         self._finalize_video_time()
@@ -1957,7 +1990,7 @@ class LabelingApp(tk.Tk):
         """A load failed AFTER the previous project was already detached.
         Return to the well-defined startup state (no video, no repo, no
         timer, empty buffer) instead of leaving a half-loaded session."""
-        print("INFO: load_video: aborting to the clean 'no video loaded' state.")
+        logger.info("video load aborted; returning to clean no-video state")
         self._stop_video_timer_if_any()
         self._close_state_repo()
         self._reset_zone_cache()
@@ -1984,7 +2017,7 @@ class LabelingApp(tk.Tk):
         #    completely untouched (mode chip included).
         mode = self.ask_labeling_mode()
         if mode is None:
-            print("INFO: No mode selected, cancelling video load.")
+            logger.info("video load cancelled: no mode selected")
             return
 
         with center_native_file_dialog(self):
@@ -2003,7 +2036,7 @@ class LabelingApp(tk.Tk):
         #    cancels the load without disturbing it.
         copied_path = self._prepare_video_copy(video_path)
         if not copied_path:
-            print("INFO: Video copy failed; cancelling load.")
+            logger.info("video load cancelled: copy failed")
             return
         video_path = copied_path
 
@@ -2023,6 +2056,7 @@ class LabelingApp(tk.Tk):
 
         # Commit the mode only now that the load is actually going ahead.
         self.labeling_mode = mode
+        annotation_logger.info("mode %s selected for video %s", mode, os.path.basename(video_path))
         self.mode_label.set(
             theme.STATUS_WARN if mode == "Reliability" else theme.STATUS_OK, mode
         )
@@ -2037,8 +2071,12 @@ class LabelingApp(tk.Tk):
         self.frame_rate = video.frame_rate
         self.framerate_label.config(text=f"Frame Rate: {self.frame_rate}")
         self.jump_frame_count = max(1, round(self.frame_rate * self.jump_seconds))
-        print(f"INFO: Fast-jump set to {self.jump_frame_count} frames "
-              f"({self.jump_seconds}s @ {self.frame_rate} fps)")
+        logger.debug(
+            "fast jump set to %s frames (%ss at %s fps)",
+            self.jump_frame_count,
+            self.jump_seconds,
+            self.frame_rate,
+        )
         min_length_in_frames = self.minimal_touch_length * self.frame_rate / 1000
         self.min_touch_length_label.config(text=f"Minimal Touch Length: {min_length_in_frames}")
         raw_video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -2067,8 +2105,7 @@ class LabelingApp(tk.Tk):
                 progress_cb=data_progress_update
             )
         except Exception as exc:
-            print("ERROR: load_video: could not open the working state:", flush=True)
-            traceback.print_exc()
+            logger.exception("could not open working state for %s", video_name)
             messagebox.showerror(
                 "Load Failed",
                 f"Could not open the working state for this video:\n\n{exc}\n\n"
@@ -2087,9 +2124,9 @@ class LabelingApp(tk.Tk):
         )
 
         # Frames generation/check
-        print("INFO: load_video: checking frames folder...", flush=True)
+        logger.debug("checking frames folder: %s", paths.frames_dir)
         if not project_service.frames_ready(paths, video.total_frames):
-            print("INFO: Number of frames is different, creating new frames", flush=True)
+            logger.info("frame set incomplete; extracting frames for %s", video_name)
             progress_update, progress_close = self._open_frame_progress_window()
             extraction_cancel = Event()
             self._frame_extraction_cancel = extraction_cancel
@@ -2105,11 +2142,11 @@ class LabelingApp(tk.Tk):
                 # The app is closing: on_close set the cancel event and has
                 # already saved/closed everything itself, so only the timer
                 # needs rolling back — no widget may be touched from here.
-                print("INFO: load_video: frame extraction cancelled during shutdown.", flush=True)
+                logger.info("frame extraction cancelled during shutdown")
                 self._stop_video_timer_if_any()
                 return
             except FrameExtractionError as exc:
-                print(f"ERROR: load_video: frame extraction failed: {exc}", flush=True)
+                logger.error("frame extraction failed for %s: %s", video_name, exc)
                 messagebox.showerror(
                     "Frame Extraction Failed",
                     f"Could not extract frames from this video:\n\n{exc}\n\n"
@@ -2125,7 +2162,7 @@ class LabelingApp(tk.Tk):
                     self._frame_extraction_cancel = None
                 progress_close()
         else:
-            print("INFO: Number of frames is correct", flush=True)
+            logger.debug("frame set is complete for %s", video_name)
 
         # 5) COMMIT POINT: the state DB is open, the frames exist on disk.
         #    Publish the new session to the rest of the app — the worker
@@ -2144,15 +2181,13 @@ class LabelingApp(tk.Tk):
         self._timeline_playhead_id = None
         self._timeline2_playhead_id = None
 
-        print("INFO: load_video: restoring last position...", flush=True)
         self.restore_last_position()
 
-        print("INFO: load_video: drawing first frame & timelines...", flush=True)
         t_draw = time.time()
         self.display_first_frame()
         self.draw_timeline()
         self.draw_timeline2()
-        print(f"INFO: load_video: initial draw done in {time.time() - t_draw:.1f}s", flush=True)
+        logger.debug("initial video draw completed in %.1fs", time.time() - t_draw)
         self.name_label.config(
             text=f"Video: {video_name} | FPS: {self.frame_rate} | Version: {self.video.program_version}"
         )
@@ -2185,12 +2220,18 @@ class LabelingApp(tk.Tk):
                 b["Changed"] = False
         self.rebuild_annotation_controls()
         self._set_mode_button_states()
-        print("INFO: Welcome back! I wish you happy labeling session! :)")
+        logger.info(
+            "video %s loaded: %s frames at %s fps, resuming at frame %s",
+            video_name,
+            video.total_frames + 1,
+            self.frame_rate,
+            video.current_frame,
+        )
 
     # === Clothes Side Window ===================================================
     def open_cloth_app(self):
         if self.video is None:
-            print("ERROR: First select video")
+            logger.error("cannot open Clothes: select a video first")
         else:
             if self._cloth_app and self._cloth_app.top_level.winfo_exists():
                 self._cloth_app.top_level.lift()
@@ -2218,16 +2259,16 @@ class LabelingApp(tk.Tk):
                     initial_points=initial_points,
                     diagram_scale=scale,
                 )
-            except Exception as e:
+            except Exception:
                 self.cloth_btn.config(state=tk.NORMAL)
                 self._cloth_app = None
-                print(f"ERROR: Failed to open Clothes App: {e}")
+                logger.exception("failed to open Clothes window")
 
     def update_data_clothes(self, dots, diagram_scale=None):
         self.data_clothes = dots
         if diagram_scale:
             self.clothes_diagram_scale = float(diagram_scale)
-        print("Data clothes updated:", self.data_clothes)
+        annotation_logger.info("clothes updated dots=%s", len(self.data_clothes))
         self.save_clothes()
         theme.set_button_state(self.cloth_btn, "ON")
 
@@ -2240,9 +2281,9 @@ class LabelingApp(tk.Tk):
         a frozen contract built on that tokenization (see
         `SqliteRepository.clothes_zone_list`).
         """
-        print("INFO: Saving clothes...")
         if self.state_repo is None:
-            print("ERROR: No state database is open"); return
+            logger.error("cannot save clothes: no state database is open")
+            return
         scale = self.clothes_diagram_scale or DEFAULT_CLOTH_DIAGRAM_SCALE
 
         rows = []
@@ -2253,7 +2294,7 @@ class LabelingApp(tk.Tk):
             rows.append((dot_id, x, y, ','.join(zones)))
 
         self.state_repo.save_clothes(rows, scale)
-        print(f"INFO: Clothes saved ({len(rows)} dots)")
+        logger.info("clothes saved: dots=%s", len(rows))
 
     
 
@@ -2268,7 +2309,7 @@ class LabelingApp(tk.Tk):
             try:
                 ok = self.save_data()
             except Exception:
-                traceback.print_exc()
+                logger.exception("final save failed while closing")
                 ok = False
             if not ok and not messagebox.askyesno(
                 "Save failed",
@@ -2287,8 +2328,8 @@ class LabelingApp(tk.Tk):
         self._close_state_repo()
         try:
             self.frame_buffer.shutdown(wait=False, cancel_futures=True)
-        except Exception as e:
-            print(f"WARN: loader pool shutdown failed: {e}")
+        except Exception:
+            logger.warning("loader pool shutdown failed", exc_info=True)
         self._cancel_pending_timers()
         self.destroy()
 
@@ -2304,8 +2345,8 @@ class LabelingApp(tk.Tk):
         if after_id is not None:
             try:
                 self.after_cancel(after_id)
-            except Exception as e:
-                print(f"WARN: could not cancel the diagram refresh timer: {e}")
+            except Exception:
+                logger.warning("could not cancel diagram refresh timer", exc_info=True)
             self._dot_refresh_after_id = None
 
     def _close_state_repo(self):
@@ -2332,7 +2373,7 @@ class LabelingApp(tk.Tk):
             return
         self.video.current_frame = frame
         self.video.current_frame_zone = int(self.video.current_frame / self.video.number_frames_in_zone)
-        print(f"INFO: Restored last position: frame {self.video.current_frame}")
+        logger.debug("restored last position: frame=%s", self.video.current_frame)
 
     # === Settings ==============================================================
     def open_settings(self):
@@ -2524,6 +2565,14 @@ class LabelingApp(tk.Tk):
 
             config.save_config(new_cfg)
             self.apply_runtime_settings(new_cfg)
+            for key, new_value in new_cfg.items():
+                old_value = cfg.get(key)
+                if old_value != new_value:
+                    annotation_logger.info(
+                        "setting %s %r -> %r", key, old_value, new_value
+                    )
+            cfg.clear()
+            cfg.update(new_cfg)
             if close:
                 win.destroy()
 
@@ -2545,11 +2594,29 @@ class LabelingApp(tk.Tk):
         ).pack(side="left", padx=5)
         ttk.Button(
             btn_frame,
+            text="Open Logs Folder",
+            command=self._open_logs_folder,
+            style="Tool.TButton",
+            takefocus=0,
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            btn_frame,
             text="Close",
             command=win.destroy,
             style="Tool.TButton",
             takefocus=0,
         ).pack(side="left", padx=5)
+
+    def _open_logs_folder(self):
+        try:
+            open_logs_folder()
+        except Exception as exc:
+            logger.exception("could not open logs folder")
+            messagebox.showerror(
+                "Logs unavailable",
+                f"Could not open the logs folder:\n{exc}",
+                parent=getattr(self, "_settings_win", self),
+            )
 
     def apply_runtime_settings(self, cfg: dict):
         # Refresh the one AppConfig snapshot the app holds (build_ui and other
@@ -2570,10 +2637,14 @@ class LabelingApp(tk.Tk):
         self.jump_seconds = new_jump_seconds
         if self.video is not None and getattr(self, "frame_rate", None):
             self.jump_frame_count = max(1, round(self.frame_rate * self.jump_seconds))
-            print(f"INFO: Fast-jump updated to {self.jump_frame_count} frames "
-                  f"({self.jump_seconds}s @ {self.frame_rate} fps)")
+            logger.debug(
+                "fast jump updated to %s frames (%ss at %s fps)",
+                self.jump_frame_count,
+                self.jump_seconds,
+                self.frame_rate,
+            )
         else:
-            print(f"INFO: Fast-jump updated to {self.jump_seconds}s (no video loaded)")
+            logger.debug("fast jump updated to %ss (no video loaded)", self.jump_seconds)
         self._refresh_jump_label()
 
         # Realtime arrow-hold toggle. If user disables it mid-session while a
@@ -2582,7 +2653,7 @@ class LabelingApp(tk.Tk):
         if not new_realtime:
             self._cancel_arrow_hold_state()
         self.realtime_arrow_hold = new_realtime
-        print(f"INFO: Realtime arrow hold: {self.realtime_arrow_hold}")
+        logger.debug("realtime arrow hold: %s", self.realtime_arrow_hold)
 
         new_scale = float(cfg.get("diagram_scale", 1.0))
         new_dot = float(cfg.get("dot_size", 10))
@@ -2621,7 +2692,8 @@ class LabelingApp(tk.Tk):
     # === Frame Stepping ========================================================
     def next_frame(self, number_of_frames, play=False):
         if self.video is None:
-            print("ERROR: Video = None"); return
+            logger.debug("frame movement skipped: no video loaded")
+            return
         if number_of_frames > 0:
             self.video.current_frame = min(self.video.total_frames, self.video.current_frame + number_of_frames)
             self._last_step_sign = 1
@@ -2629,7 +2701,8 @@ class LabelingApp(tk.Tk):
             self.video.current_frame = max(0, self.video.current_frame + number_of_frames)
             self._last_step_sign = -1
         else:
-            print("ERROR: Wrong number of frames."); return
+            logger.warning("frame movement skipped: delta is zero")
+            return
 
         # Wake the buffering thread if the destination isn't cached so it gets
         # loaded with priority before any prefetch fills.

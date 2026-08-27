@@ -24,6 +24,7 @@ repository enforces this itself (`SqliteRepository._check_thread`).
 
 import copy
 import os
+import logging
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -31,6 +32,9 @@ from adapters.export_writer import export_from_unified, write_export_metadata
 from adapters.sqlite_repo import SqliteRepository
 from domain.model import FrameBundle
 from domain.project import ProjectPaths
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -119,4 +123,4 @@ def clear_clean_flags(frames: Dict[int, FrameBundle],
             and b == snapshot.get(f)
         ):
             b["Changed"] = False
-    print("DEBUG: Cleared bundle 'Changed' flags after save.")
+    logger.debug("cleared clean bundle flags after save")

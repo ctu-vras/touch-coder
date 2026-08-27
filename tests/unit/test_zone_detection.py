@@ -403,7 +403,7 @@ def _do_click(app, x, y):
     LabelingApp.on_diagram_click(app, SimpleNamespace(x=x, y=y), True)
 
 
-def test_click_that_resolves_to_NN_is_logged_with_frame_limb_and_coords(capsys):
+def test_click_that_resolves_to_NN_is_logged_with_frame_limb_and_coords(caplog):
     """A click matching no mask still enters the dataset (as `NN`), so the GUI
     must SAY so — silently recording a defect is the failure mode this guards
     (no silent failures). The pure rule stays log-free; the warning
@@ -412,30 +412,32 @@ def test_click_that_resolves_to_NN_is_logged_with_frame_limb_and_coords(capsys):
 
     _do_click(app, 15, 15)  # outside A's black square -> NN
 
-    out = capsys.readouterr().out
-    assert "WARN" in out and "NN" in out
-    assert "frame=41" in out
-    assert "limb=RH" in out
-    assert "x=15.0" in out and "y=15.0" in out
+    records = [record for record in caplog.records if record.name == "labeling_app"]
+    assert len(records) == 1
+    assert records[0].levelname == "WARNING"
+    message = records[0].getMessage()
+    assert "NN" in message
+    assert "frame=41" in message
+    assert "limb=RH" in message
+    assert "x=15.0" in message and "y=15.0" in message
     # The click was still recorded, warning or not.
     assert app.video.frames[41]["RH"]["Zones"] == [[NO_ZONE]]
 
 
-def test_out_of_bounds_click_is_warned_too(capsys):
+def test_out_of_bounds_click_is_warned_too(caplog):
     app = _click_app([("A", _mask((0, 5, 0, 5)))])
 
     _do_click(app, 500, 500)
 
-    assert "WARN" in capsys.readouterr().out
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
-def test_click_that_resolves_to_a_zone_logs_no_NN_warning(capsys):
+def test_click_that_resolves_to_a_zone_logs_no_NN_warning(caplog):
     app = _click_app([("A", _mask((0, 20, 0, 20)))])
 
     _do_click(app, 10, 10)
 
-    out = capsys.readouterr().out
-    assert "WARN" not in out
+    assert not any(record.levelname == "WARNING" for record in caplog.records)
     assert app.video.frames[41]["RH"]["Zones"] == [["A"]]
 
 
@@ -492,7 +494,7 @@ def test_load_zone_masks_caches_per_directory(tmp_path, monkeypatch):
     assert [name for name, _ in app._zone_masks] == ["FACE"]
 
 
-def test_load_zone_masks_missing_directory_is_a_warned_noop(tmp_path, monkeypatch, capsys):
+def test_load_zone_masks_missing_directory_is_a_warned_noop(tmp_path, monkeypatch, caplog):
     missing = str(tmp_path / "nope")
     monkeypatch.setattr(labeling_app, "asset_path", lambda rel: missing)
     app = _loader_stub()
@@ -500,4 +502,7 @@ def test_load_zone_masks_missing_directory_is_a_warned_noop(tmp_path, monkeypatc
     LabelingApp._load_zone_masks(app)
 
     assert app._zone_masks == []
-    assert "Zones directory not found" in capsys.readouterr().out
+    assert any(
+        record.levelname == "WARNING" and "Zones directory not found" in record.getMessage()
+        for record in caplog.records
+    )

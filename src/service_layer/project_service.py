@@ -23,6 +23,7 @@ created by 8.0.x or earlier is NOT converted (see ARCHITECTURE.md).
 import os
 import shutil
 import time
+import logging
 from typing import Optional
 
 from adapters.frame_extractor import check_items_count, create_frames
@@ -35,6 +36,7 @@ from adapters.sqlite_repo import (
 from domain.project import VIDEOS_DIR, ProjectPaths
 
 DEFAULT_VIDEOS_DIR = VIDEOS_DIR
+logger = logging.getLogger(__name__)
 
 
 # === Labeling-time accumulator ================================================
@@ -98,7 +100,7 @@ def plan_video_copy(source_path: str, videos_dir: str = DEFAULT_VIDEOS_DIR):
     dest_path = os.path.join(videos_dir, os.path.basename(source_path))
 
     if os.path.abspath(source_path) == os.path.abspath(dest_path):
-        print(f"INFO: Video already inside project videos folder: {dest_path}")
+        logger.debug("video already inside project videos folder: %s", dest_path)
         return dest_path, "in_place", False
 
     if os.path.exists(dest_path):
@@ -106,8 +108,8 @@ def plan_video_copy(source_path: str, videos_dir: str = DEFAULT_VIDEOS_DIR):
         try:
             size_mismatch = os.path.getsize(source_path) != os.path.getsize(dest_path)
         except Exception:
-            print("WARN: Could not compare video sizes; using existing copy.")
-        print(f"INFO: Video already exists in videos folder: {dest_path}")
+            logger.warning("could not compare video sizes; using existing copy")
+        logger.info("video already exists in videos folder: %s", dest_path)
         return dest_path, "existing", size_mismatch
 
     return dest_path, "copy", False
@@ -163,7 +165,7 @@ def open_state(paths: ProjectPaths, *, fps=None,
     if program_version is not None:
         meta[META_CREATED_BY_VERSION] = program_version
     repo.set_meta_many(meta)
-    print(f"INFO: open_state: {paths.state_db} ready")
+    logger.debug("state DB ready: %s", paths.state_db)
     return repo
 
 

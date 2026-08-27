@@ -23,7 +23,11 @@ the unified-CSV journal — appending is exactly what SQLite replaced — and th
 writers).
 """
 
+import logging
 import os
+
+
+logger = logging.getLogger(__name__)
 
 
 def atomic_write(path, write_fn, *, encoding="utf-8", newline=""):
@@ -48,5 +52,5 @@ def atomic_write(path, write_fn, *, encoding="utf-8", newline=""):
             if os.path.exists(tmp):
                 os.remove(tmp)  # best-effort cleanup; never mask original error
         except OSError as cleanup_err:
-            print(f"WARN: atomic_write temp cleanup failed for {tmp}: {cleanup_err}")
+            logger.warning("atomic_write temp cleanup failed for %s: %s", tmp, cleanup_err)
         raise

@@ -36,6 +36,7 @@ flagged/
 
 # Ignore log files
 *.log
+/logs/
 
 # Ignore hidden system files
 .DS_Store

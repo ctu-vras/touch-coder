@@ -70,9 +70,9 @@ def test_M6_state_db_round_trips_utf8_notes_and_params(tmp_path):
 # legacy -> SQLite migration imported ZERO frames before renaming the sources
 # `*.migrated`. So: literals handed to `print()` stay inside cp1252.
 #
-# Only LITERALS are checked. Interpolated values (a Czech note, an exotic path)
-# can still be unencodable; hardening those is `main._harden_console_encoding`'s
-# job, not something a static check can promise.
+# Runtime output now goes through the logging handlers, which encode safely at
+# the I/O boundary. Keep a structural guard so a future `print()` cannot bring
+# the old call-site failure mode back.
 
 import ast
 import os
@@ -82,19 +82,16 @@ _SRC_ROOT = os.path.abspath(
 )
 
 
-def _print_literals(tree):
-    """Every string constant that appears inside a `print(...)` call."""
+def _print_calls(tree):
+    """Every runtime `print(...)` call in one parsed module."""
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
+        if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "print"):
-            continue
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
-                yield inner.lineno, inner.value
+            yield node.lineno
 
 
-def test_M6_print_literals_are_cp1252_safe():
+def test_M6_runtime_uses_logging_instead_of_print():
     offenders = []
     for dirpath, _dirnames, filenames in os.walk(_SRC_ROOT):
         for filename in sorted(filenames):
@@ -103,13 +100,10 @@ def test_M6_print_literals_are_cp1252_safe():
             path = os.path.join(dirpath, filename)
             with open(path, "r", encoding="utf-8") as handle:
                 tree = ast.parse(handle.read(), filename=path)
-            for lineno, text in _print_literals(tree):
-                try:
-                    text.encode("cp1252")
-                except UnicodeEncodeError:
-                    rel = os.path.relpath(path, _SRC_ROOT)
-                    offenders.append(f"{rel}:{lineno}: {text!r}")
+            for lineno in _print_calls(tree):
+                rel = os.path.relpath(path, _SRC_ROOT)
+                offenders.append(f"{rel}:{lineno}")
     assert offenders == [], (
-        "these log literals cannot be written to a redirected stdout on "
-        "Windows (cp1252); use ASCII in log text:\n  " + "\n  ".join(offenders)
+        "runtime output must use logging instead of print():\n  "
+        + "\n  ".join(offenders)
     )

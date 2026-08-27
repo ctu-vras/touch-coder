@@ -1,4 +1,5 @@
 import tkinter as tk
+import logging
 from tkinter import ttk
 from PIL import Image, ImageTk
 
@@ -7,6 +8,7 @@ from gui import theme
 
 DEFAULT_CLOTH_DIAGRAM_SCALE = 1.0
 DEFAULT_CLOTH_DOT_RADIUS = 7
+annotation_logger = logging.getLogger("annot")
 
 
 class ClothApp:
@@ -110,11 +112,13 @@ class ClothApp:
 
     def add_dot(self, event):
         self._create_dot(event.x, event.y)
-        print("INFO: Clothes dots: ", self.dots)
+        annotation_logger.info(
+            "clothes click add x=%s y=%s dots=%s", event.x, event.y, len(self.dots)
+        )
 
     def remove_dot(self, event):
         closest_dot = self.canvas2.find_closest(event.x, event.y)[0]
         if closest_dot in self.dots:
             del self.dots[closest_dot]
             self.canvas2.delete(closest_dot)
-            print("Dots:", self.dots)
+            annotation_logger.info("clothes click delete dots=%s", len(self.dots))

@@ -26,6 +26,7 @@ keeps the worker from double-stepping while a requested advance is still
 queued on the UI thread.
 """
 
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,9 @@ from threading import Event, RLock
 from typing import Callable, NamedTuple, Optional
 
 from PIL import Image
+
+
+logger = logging.getLogger(__name__)
 
 # 0.15 s (was 1.0): playback sleeps this long when the next frame isn't
 # buffered yet — a full second made every stall feel enormous, while 150 ms
@@ -181,8 +185,11 @@ class FrameBuffer:
         self._priority_frame = None
         self._priority_event = Event()
         pool_workers = max(3, min(8, (os.cpu_count() or 4) // 2))
-        print(f"INFO: frame_buffer: decode pool starting with {pool_workers} "
-              f"workers (cpu_count={os.cpu_count()})")
+        logger.debug(
+            "frame_buffer: decode pool starting with %d workers (cpu_count=%s)",
+            pool_workers,
+            os.cpu_count(),
+        )
         self._loader_pool = ThreadPoolExecutor(
             max_workers=pool_workers, thread_name_prefix="frame-loader"
         )
@@ -269,8 +276,11 @@ class FrameBuffer:
             self._schedule_on_ui(fn)
             return True
         except Exception as exc:
-            print(f"INFO: frame_buffer: {what} dropped — could not reach the "
-                  f"UI thread ({exc!r})")
+            logger.debug(
+                "frame_buffer: %s dropped — could not reach the UI thread (%r)",
+                what,
+                exc,
+            )
             return False
 
     # === Buffering thread =====================================================
@@ -370,12 +380,14 @@ class FrameBuffer:
                         behind = max(1, int(behind * shrink))
                         if self._last_window_cap != max_window_frames:
                             self._last_window_cap = max_window_frames
-                            print(
-                                f"INFO: frame_buffer: prefetch window capped to "
-                                f"{max_window_frames} frames "
-                                f"(~{est_frame_bytes / 1e6:.1f} MB/frame, "
-                                f"budget {self._max_bytes / 1e6:.0f} MB) — "
-                                f"ahead={ahead}, behind={behind}"
+                            logger.debug(
+                                "frame_buffer: prefetch window capped to %d frames "
+                                "(~%.1f MB/frame, budget %.0f MB) — ahead=%d, behind=%d",
+                                max_window_frames,
+                                est_frame_bytes / 1e6,
+                                self._max_bytes / 1e6,
+                                ahead,
+                                behind,
                             )
                     else:
                         self._last_window_cap = None
@@ -401,9 +413,14 @@ class FrameBuffer:
                             self._inflight.pop(f, None)
                             cancelled += 1
                 if cancelled:
-                    print(f"INFO: frame_buffer: cancelled {cancelled} stale "
-                          f"prefetch decodes outside [{start_frame}, "
-                          f"{end_frame}] (current_frame={current_frame})")
+                    logger.debug(
+                        "frame_buffer: cancelled %d stale prefetch decodes outside "
+                        "[%d, %d] (current_frame=%d)",
+                        cancelled,
+                        start_frame,
+                        end_frame,
+                        current_frame,
+                    )
 
                 # 4) Submit prefetch loads to the worker pool. Forward window first
                 #    (most likely direction of travel), then backward.
@@ -546,10 +563,10 @@ class FrameBuffer:
                     if gen == self._gen:
                         self._store_frame(frame_number, img, est_bytes)
                     self._inflight.pop(frame_number, None)
-        except Exception as e:
+        except Exception:
             with self._lock:
                 self._inflight.pop(frame_number, None)
-            print(f"ERROR: Opening or processing frame {frame_number}: {str(e)}")
+            logger.exception("Opening or processing frame %s", frame_number)
 
     def _maybe_submit_load(self, frame_number, total_frames, frames_dir, display_w, display_h, downscale, gen):
         """Submit a prefetch load to the worker pool, deduping against in-flight + cached frames.

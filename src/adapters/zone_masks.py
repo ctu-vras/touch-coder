@@ -9,12 +9,16 @@ knows the zone-set directory layout (`icons/zones3` vs
 the NAMES for its heatmap axes, and neither hard-codes the paths.
 """
 
+import logging
 import os
 
 import cv2
 
 from domain.touch_stats import NO_ZONE, zone_sort_key
 from gui.resource_utils import asset_path
+
+
+logger = logging.getLogger(__name__)
 
 ZONES_DIR = "icons/zones3"
 ZONES_DIR_NEW_TEMPLATE = "icons/zones3_new_template"
@@ -42,11 +46,13 @@ def list_zone_names(new_template: bool = False) -> list:
             if filename.lower().endswith(_IMAGE_SUFFIXES):
                 names.append(os.path.splitext(filename)[0])
     except OSError as exc:
-        print(f"WARN: could not list zone names in {directory!r}: {exc!r}")
+        logger.warning("could not list zone names in %r: %r", directory, exc)
         names = []
     if NO_ZONE not in names:
         names.append(NO_ZONE)
-    print(f"INFO: zone list for {'new_template' if new_template else 'zones3'}: {len(names)} zones")
+    logger.debug(
+        "zone list for %s: %d zones", "new_template" if new_template else "zones3", len(names)
+    )
     return sorted(names, key=zone_sort_key)
 
 
@@ -62,7 +68,7 @@ def load_zone_masks(directory):
     """
     masks = []
     if not os.path.isdir(directory):
-        print(f"WARNING: Zones directory not found: {directory}")
+        logger.warning("Zones directory not found: %s", directory)
         return masks
     for filename in sorted(os.listdir(directory)):
         fp = os.path.join(directory, filename)
@@ -72,5 +78,5 @@ def load_zone_masks(directory):
                 continue
             zone_name = filename.rsplit('.', 1)[0]
             masks.append((zone_name, image))
-    print(f"INFO: Loaded touch zone masks from {directory}: {len(masks)} masks")
+    logger.debug("Loaded touch zone masks from %s: %d masks", directory, len(masks))
     return masks

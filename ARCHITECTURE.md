@@ -38,6 +38,7 @@ touch-coder/
 │   ├── app_info.py               # Application version metadata
 │   ├── video_model.py            # Video entity (LimbView wrappers over frames)
 │   ├── perf_utils.py             # Optional perf timer + periodic summary logging
+│   ├── log_setup.py              # Session handlers, retention and exception hooks
 │   ├── generate_zone_masks.py    # Offline tool: build per-zone PNG masks from a diagram
 │   ├── domain/                   # PURE rules: no I/O, no Tk, no plotting, no config
 │   │   ├── model.py              # FrameRecord / FrameBundle shapes, LIMBS, LimbView
@@ -340,6 +341,8 @@ survive a Settings round-trip (`AppConfig.raw` keeps the full parsed dict). Keys
 | `jump_seconds` | yes | Fast-jump distance in seconds for `<<` / `>>` and Shift+Arrow; multiplied by the frame rate at load time into `jump_frame_count`. |
 | `realtime_arrow_hold` | yes | Holding an arrow key plays at the video's frame rate instead of stepping. |
 | `perf_enabled` / `perf_log_every_s` / `perf_log_top_n` | no | Optional `PerfLogger` (see [src/perf_utils.py](src/perf_utils.py)). When on, prints rolling averages of timed code blocks (buffer loop, click handlers, etc.). |
+| `log_level_console` | no | Console threshold (`INFO` by default); `TINYTOUCH_LOG_LEVEL` overrides it for development. The session file always records `DEBUG`. |
+| `log_keep_files` | no | Number of newest session log files retained (default 20). |
 | `max_display_width` / `max_display_height` | no | Optional hard caps on the rendered video size (`0` = unlimited). |
 | `last_labeling_mode` | no | Last-chosen `Normal` / `Reliability`; written by the mode dialog. |
 
@@ -347,6 +350,31 @@ Defaults for every key live in `adapters.config.CONFIG_DEFAULTS`, so a missing o
 `config.json` degrades to defaults with a WARN instead of failing. When the app is run from
 a PyInstaller bundle, `adapters.config._ensure_config_file()` copies the bundled default to
 the install directory the first time so users get a writable copy.
+
+## Observability
+
+[`src/log_setup.py`](src/log_setup.py) configures stdlib `logging` once at the
+application composition root. Runtime modules use `logging.getLogger(__name__)`;
+annotation activity uses the dedicated `annot` logger and performance summaries use
+`perf`. The root logger accepts `DEBUG`, while handler levels decide where records go:
+
+- The console defaults to `INFO`. It shows lifecycle messages and deliberate annotation
+  actions (clicks, deletions, limb/parameter selections, notes, clothes, mode and settings),
+  so an annotator can see that input was registered. Automatic frame movement and buffer
+  detail stay at `DEBUG`.
+- A UTF-8 session file always receives `DEBUG` and above. Source runs write under
+  `logs/`; frozen Windows builds prefer `%LOCALAPPDATA%/TinyTouch/logs`, and Linux builds
+  prefer `$XDG_STATE_HOME/tinytouch/logs` or `~/.local/state/tinytouch/logs`. Settings ->
+  **Open Logs Folder** opens the active location.
+- `sys.excepthook`, `threading.excepthook` and Tk's `report_callback_exception` route
+  unhandled failures to the file. Caught exceptions use `logger.exception` at their
+  handling boundary.
+
+Log records are diagnostics, not a recovery format: the state DB remains the only source
+of truth. Annotation records intentionally include locally entered note text, but no log
+data leaves the machine. The domain layer remains independent of outer packages; its
+statistics module may emit diagnostics through stdlib logging as the one narrow side-effect
+exception to otherwise pure computation.
 
 ## Application Workflow
 
@@ -401,7 +429,7 @@ them and users bookmark them): `heatmap_<LIMB>.html`, `touch_trajectory.html`,
 ## Testing
 
 ```bash
-uv run pytest                 # 317 passed, 7 deselected
+uv run pytest                 # 298 passed, 7 deselected
 uv run pytest -m gui          # the excluded end-to-end GUI tests (needs a display)
 ```
 

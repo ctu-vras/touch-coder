@@ -3,18 +3,20 @@ adapters/frame_extractor.py
 Frame folder management and generation (was frame_utils.py).
 """
 
+import logging
 import os
 import re
-import sys
 import time
 import shutil
 import subprocess
 import threading
-import traceback
 
 import cv2
 
 from domain.project import ProjectPaths
+
+
+logger = logging.getLogger(__name__)
 
 
 _FRAME_RE = re.compile(r"^frame(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
@@ -50,41 +52,48 @@ def check_items_count(folder_path, expected_count):
     frame_count = len(frame_indices)
     expected_files = (expected_count + 1) if expected_count is not None and expected_count >= 0 else expected_count
 
-    print("INFO: Frames dir exists:", os.path.exists(folder_path))
-    print("INFO: Number of files in frames folder:", total_items)
-    print("INFO: Frame files detected:", frame_count)
+    logger.debug("Frames dir exists: %s", os.path.exists(folder_path))
+    logger.debug("Number of files in frames folder: %d", total_items)
+    logger.debug("Frame files detected: %d", frame_count)
     if expected_files is not None:
-        print("INFO: Expected frame files:", expected_files)
-        print("INFO: Expected last frame index:", expected_count)
+        logger.debug("Expected frame files: %d", expected_files)
+        logger.debug("Expected last frame index: %s", expected_count)
         allowed_missing = max(1, int(expected_files * FRAME_COUNT_TOLERANCE_PCT)) if expected_files > 0 else 0
-        print(
-            "INFO: Frame count tolerance:",
-            f"{FRAME_COUNT_TOLERANCE_PCT * 100:.3f}% (allow {allowed_missing} missing frames)",
+        logger.debug(
+            "Frame count tolerance: %.3f%% (allow %d missing frames)",
+            FRAME_COUNT_TOLERANCE_PCT * 100,
+            allowed_missing,
         )
     else:
-        print("WARN: Expected frame count is undefined.")
+        logger.warning("Expected frame count is undefined.")
 
     if non_frame_items:
         sample = ", ".join(non_frame_items[:5])
-        print(f"WARN: Non-frame items in folder: {len(non_frame_items)} (sample: {sample})")
+        logger.warning(
+            "Non-frame items in folder: %d (sample: %s)", len(non_frame_items), sample
+        )
 
     if frame_indices:
         min_idx = min(frame_indices)
         max_idx = max(frame_indices)
-        print(f"INFO: Frame index range in folder: {min_idx}..{max_idx}")
+        logger.debug("Frame index range in folder: %d..%d", min_idx, max_idx)
         if expected_count is not None and expected_count >= 0 and max_idx != expected_count:
-            print("WARN: Max frame index does not match expected last index.")
+            logger.warning("Max frame index does not match expected last index.")
 
     if expected_files is None:
         return False
     allowed_missing = max(1, int(expected_files * FRAME_COUNT_TOLERANCE_PCT)) if expected_files > 0 else 0
     min_ok = expected_files - allowed_missing
     if frame_count < min_ok or frame_count > expected_files:
-        print(f"WARN: Frame file count mismatch: expected {expected_files}, found {frame_count}")
+        logger.warning(
+            "Frame file count mismatch: expected %d, found %d", expected_files, frame_count
+        )
         return False
     if frame_count != expected_files:
-        print(
-            f"WARN: Frame file count within tolerance: expected {expected_files}, found {frame_count}"
+        logger.warning(
+            "Frame file count within tolerance: expected %d, found %d",
+            expected_files,
+            frame_count,
         )
     return True
 
@@ -125,10 +134,10 @@ def _extract_frames_ffmpeg(
     """Extract frames using the bundled ffmpeg binary (fast path)."""
     ffmpeg_exe = _get_ffmpeg_exe()
     if ffmpeg_exe is None:
-        print("INFO: ffmpeg binary not available; will fall back to OpenCV.")
+        logger.debug("ffmpeg binary not available")
         return False
 
-    print(f"INFO: Using ffmpeg for frame extraction: {ffmpeg_exe}")
+    logger.info("Using ffmpeg for frame extraction: %s", ffmpeg_exe)
 
     os.makedirs(frames_dir, exist_ok=True)
     output_pattern = os.path.join(frames_dir, "frame%d.jpg")
@@ -141,7 +150,13 @@ def _extract_frames_ffmpeg(
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     finally:
         cap.release()
-    print(f"INFO: Video properties: frames={total_frames}, fps={fps:.3f}, size={width}x{height}")
+    logger.debug(
+        "Video properties: frames=%d, fps=%.3f, size=%dx%d",
+        total_frames,
+        fps,
+        width,
+        height,
+    )
 
     # -nostats -loglevel error: keeps stderr almost silent, so the OS pipe
     # buffer can't fill up and deadlock ffmpeg while we poll for progress.
@@ -158,13 +173,13 @@ def _extract_frames_ffmpeg(
     start_time = time.time()
     last_progress_ts = 0.0
 
-    print(f"INFO: Spawning ffmpeg: {' '.join(cmd)}")
+    logger.debug("Spawning ffmpeg: %s", " ".join(cmd))
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    print(f"INFO: ffmpeg started (pid={process.pid})")
+    logger.debug("ffmpeg started (pid=%d)", process.pid)
 
     # Defense-in-depth: drain stdout/stderr concurrently so the pipes can
     # never block ffmpeg even if a future change makes it chatty again.
@@ -178,7 +193,7 @@ def _extract_frames_ffmpeg(
                     break
                 sink.append(chunk)
         except Exception as exc:
-            print(f"WARN: pipe drainer error: {exc}")
+            logger.warning("pipe drainer error: %s", exc)
 
     stdout_thread = None
     stderr_thread = None
@@ -190,7 +205,7 @@ def _extract_frames_ffmpeg(
             try:
                 thread.join(timeout=timeout)
             except Exception as exc:
-                print(f"WARN: failed joining ffmpeg pipe drainer: {exc!r}")
+                logger.warning("failed joining ffmpeg pipe drainer: %r", exc)
 
     try:
         stdout_thread = threading.Thread(
@@ -223,18 +238,21 @@ def _extract_frames_ffmpeg(
 
         rc = process.returncode
         duration = time.time() - start_time
-        print(f"INFO: ffmpeg exited rc={rc} after {duration:.1f}s")
+        logger.debug("ffmpeg exited rc=%s after %.1fs", rc, duration)
 
         if rc != 0:
             stderr = b"".join(stderr_chunks).decode(errors="replace")
-            print(f"ERROR: ffmpeg failed (exit {rc}): {stderr[-1000:]}")
+            logger.warning("ffmpeg failed (exit %s): %s", rc, stderr[-1000:])
             return False
 
-        print("INFO: Counting extracted frame files (this can take a moment with very long videos)...")
+        logger.debug("Counting extracted frame files")
         listdir_start = time.time()
         frame_count = _count_jpg_files(frames_dir)
-        print(f"INFO: ffmpeg extracted {frame_count} frames "
-              f"(file count took {time.time() - listdir_start:.1f}s).")
+        logger.info(
+            "ffmpeg extracted %d frames (file count took %.1fs)",
+            frame_count,
+            time.time() - listdir_start,
+        )
 
         # Final progress report.
         if progress_cb and total_frames:
@@ -242,7 +260,9 @@ def _extract_frames_ffmpeg(
             _raise_if_cancelled(cancel_event)
 
         if total_frames and abs(frame_count - total_frames) > max(1, int(total_frames * FRAME_COUNT_TOLERANCE_PCT)):
-            print(f"WARN: ffmpeg generated {frame_count} frames, but expected {total_frames}.")
+            logger.warning(
+                "ffmpeg generated %d frames, but expected %d.", frame_count, total_frames
+            )
 
         return True
     finally:
@@ -250,35 +270,38 @@ def _extract_frames_ffmpeg(
             still_running = process.poll() is None
         except Exception as exc:
             still_running = True
-            print(f"WARN: could not poll ffmpeg during cleanup (pid={process.pid}): {exc!r}")
+            logger.warning(
+                "could not poll ffmpeg during cleanup (pid=%d): %r", process.pid, exc
+            )
         if still_running:
-            print(
-                f"INFO: terminating ffmpeg (pid={process.pid}, video={video_path!r}) "
-                "before extraction completed"
+            logger.debug(
+                "terminating ffmpeg (pid=%d, video=%r) before extraction completed",
+                process.pid,
+                video_path,
             )
             try:
                 process.kill()
             except Exception as exc:
-                print(f"WARN: failed to kill ffmpeg (pid={process.pid}): {exc!r}")
+                logger.warning("failed to kill ffmpeg (pid=%d): %r", process.pid, exc)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print(f"WARN: timed out waiting for ffmpeg (pid={process.pid}) to exit")
+                logger.warning("timed out waiting for ffmpeg (pid=%d) to exit", process.pid)
             except Exception as exc:
-                print(f"WARN: failed waiting for ffmpeg (pid={process.pid}): {exc!r}")
+                logger.warning("failed waiting for ffmpeg (pid=%d): %r", process.pid, exc)
         _join_drainers(timeout=5.0)
         for stream in (process.stdout, process.stderr):
             try:
                 if stream is not None:
                     stream.close()
             except Exception as exc:
-                print(f"WARN: failed closing ffmpeg pipe (pid={process.pid}): {exc!r}")
+                logger.warning("failed closing ffmpeg pipe (pid=%d): %r", process.pid, exc)
         for thread in started_threads:
             if thread.is_alive():
                 try:
                     thread.join(timeout=1.0)
                 except Exception as exc:
-                    print(f"WARN: failed joining ffmpeg pipe drainer after close: {exc!r}")
+                    logger.warning("failed joining ffmpeg pipe drainer after close: %r", exc)
 
 
 def _extract_frames_opencv(
@@ -289,7 +312,7 @@ def _extract_frames_opencv(
     cancel_event=None,
 ):
     """Extract frames using OpenCV sequential decode+write (fallback path)."""
-    print("INFO: Using OpenCV for frame extraction (fallback).")
+    logger.debug("Using OpenCV for frame extraction (fallback)")
 
     vidcap = cv2.VideoCapture(video_path)
     try:
@@ -298,8 +321,14 @@ def _extract_frames_opencv(
         fps = vidcap.get(cv2.CAP_PROP_FPS)
         width = int(vidcap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"INFO: VideoCapture opened: {is_opened}")
-        print(f"INFO: Video properties: frames={total_frames}, fps={fps:.3f}, size={width}x{height}")
+        logger.debug("VideoCapture opened: %s", is_opened)
+        logger.debug(
+            "Video properties: frames=%d, fps=%.3f, size=%dx%d",
+            total_frames,
+            fps,
+            width,
+            height,
+        )
 
         success, image = vidcap.read()
         count = 0
@@ -316,13 +345,10 @@ def _extract_frames_opencv(
                     f"cv2.imwrite failed at frame {count} -> {frame_path} "
                     "(disk full / unwritable?)"
                 )
-                print(f"ERROR: {msg}")
+                logger.error("%s", msg)
                 raise FrameExtractionError(msg)
             success, image = vidcap.read()
             count += 1
-            progress = (count / total_frames) * 100 if total_frames else 0
-            sys.stdout.write(f"\rGenerating frames... {progress:.2f}%")
-            sys.stdout.flush()
             if progress_cb:
                 now = time.time()
                 if (now - last_progress_ts) >= progress_interval_s or count >= total_frames:
@@ -331,10 +357,11 @@ def _extract_frames_opencv(
                     _raise_if_cancelled(cancel_event)
     finally:
         vidcap.release()
-    sys.stdout.write("\n")
-    print(f"INFO: OpenCV extracted {count} frames in {time.time() - start_time:.1f}s.")
+    logger.info("OpenCV extracted %d frames in %.1fs.", count, time.time() - start_time)
     if total_frames and count != total_frames:
-        print(f"WARN: Generated {count} frames, but OpenCV reported {total_frames} total frames.")
+        logger.warning(
+            "Generated %d frames, but OpenCV reported %d total frames.", count, total_frames
+        )
     return count
 
 
@@ -348,7 +375,7 @@ def create_frames(
     original_frames_dir=None,
     cancel_event=None,
 ):
-    print("INFO: Checking if frames need to be created...")
+    logger.debug("Checking if frames need to be created")
     _raise_if_cancelled(cancel_event)
 
     if labeling_mode == "Reliability":
@@ -357,16 +384,20 @@ def create_frames(
             # original; derive its location from the canonical project layout.
             original_frames_dir = ProjectPaths(video_name).original.frames_dir
         if os.path.exists(original_frames_dir):
-            print(f"INFO: Found existing frames at {original_frames_dir}. Copying instead of generating...")
+            logger.info(
+                "Found existing frames at %s. Copying instead of generating",
+                original_frames_dir,
+            )
             os.makedirs(frames_dir, exist_ok=True)
             source_items = os.listdir(original_frames_dir)
             frame_files = [filename for filename in source_items if _FRAME_RE.match(filename)]
             skipped_files = [filename for filename in source_items if not _FRAME_RE.match(filename)]
             if skipped_files:
                 sample = ", ".join(skipped_files[:5])
-                print(
-                    f"WARN: Reliability copy skipped {len(skipped_files)} non-frame items "
-                    f"(sample: {sample})"
+                logger.warning(
+                    "Reliability copy skipped %d non-frame items (sample: %s)",
+                    len(skipped_files),
+                    sample,
                 )
             total_files = len(frame_files)
             start_time = time.time()
@@ -379,7 +410,7 @@ def create_frames(
                     shutil.copy2(src, dst)
                 except OSError as exc:
                     msg = f"reliability frame copy failed: {src} -> {dst}: {exc!r}"
-                    print(f"ERROR: {msg}")
+                    logger.error("%s", msg)
                     raise FrameExtractionError(msg) from exc
                 if progress_cb:
                     now = time.time()
@@ -391,13 +422,17 @@ def create_frames(
                 now = time.time()
                 progress_cb(total_files, total_files, "Copying frames", now - start_time)
                 _raise_if_cancelled(cancel_event)
-            print(f"INFO: Frames copied successfully ({total_files} files in {time.time() - start_time:.1f}s).")
+            logger.info(
+                "Frames copied successfully (%d files in %.1fs).",
+                total_files,
+                time.time() - start_time,
+            )
             if total_files == 0:
                 raise FrameExtractionError(
                     f"Reliability copy produced 0 frames from {original_frames_dir}")
             return total_files
 
-    print("INFO: Creating frames from video...")
+    logger.info("Creating frames from video")
 
     # Try ffmpeg first (faster), fall back to OpenCV.
     try:
@@ -408,7 +443,7 @@ def create_frames(
             else _extract_frames_ffmpeg(*ffmpeg_args, cancel_event=cancel_event)
         )
         if not ffmpeg_ok:
-            print("INFO: Falling back to OpenCV extraction.")
+            logger.warning("Falling back to OpenCV extraction.")
             opencv_args = (video_path, frames_dir, progress_cb, progress_interval_s)
             if cancel_event is None:
                 _extract_frames_opencv(*opencv_args)
@@ -418,8 +453,7 @@ def create_frames(
         raise
     except Exception as exc:
         msg = f"Unexpected failure while extracting frames from {video_path!r}: {exc!r}"
-        print(f"ERROR: {msg}")
-        traceback.print_exc()
+        logger.exception("%s", msg)
         raise FrameExtractionError(msg) from exc
 
     # Recount after extraction so the guard covers BOTH the ffmpeg and OpenCV
@@ -430,7 +464,7 @@ def create_frames(
     if frame_count == 0:
         msg = (f"Frame extraction produced 0 frames for {video_path!r}. "
                f"The file may be unreadable or use an unsupported codec.")
-        print(f"ERROR: {msg}")
+        logger.error("%s", msg)
         raise FrameExtractionError(msg)
-    print(f"INFO: create_frames() finished ({frame_count} frames).")
+    logger.info("create_frames() finished (%d frames).", frame_count)
     return frame_count

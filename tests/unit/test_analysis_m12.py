@@ -87,7 +87,7 @@ def test_M12_reader_missing_file_raises_oserror(tmp_path):
         read_export_df(str(tmp_path / "missing.csv"))
 
 
-def test_M12_reader_parse_failure_logged_and_chained(tmp_path, capsys):
+def test_M12_reader_parse_failure_logged_and_chained(tmp_path, caplog):
     path = tmp_path / "invalid.csv"
     path.write_bytes(b"\xff\xfe\xfa")
 
@@ -95,8 +95,9 @@ def test_M12_reader_parse_failure_logged_and_chained(tmp_path, capsys):
         read_export_df(str(path))
 
     assert caught.value.__cause__ is not None
-    output = capsys.readouterr().out
-    assert "WARN" in output and str(path) in output
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert warnings
+    assert any(str(path) in record.getMessage() for record in warnings)
 
 
 def test_M12_reader_accepts_real_and_legacy_export(tmp_path):
