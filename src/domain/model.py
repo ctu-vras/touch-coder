@@ -117,12 +117,18 @@ def preview_lines_for_save(frames: Dict[int, FrameBundle],
             rec = b.get(limb, {})
             xs = rec.get("X", [])
             ys = rec.get("Y", [])
-            if not xs or not ys:
+            limb_params = {
+                k: v for k, v in (rec.get("LimbParams") or {}).items() if v is not None
+            }
+            if (not xs or not ys) and not limb_params:
                 # skip empty limb (keeps preview concise)
                 continue
-            onset = rec.get("Onset", "")
-            zones = rec.get("Zones", [])
-            parts.append(f"{limb}: {onset} {zones}")
+            bits = []
+            if xs and ys:
+                bits.append(f"{rec.get('Onset', '')} {rec.get('Zones', [])}")
+            if limb_params:
+                bits.append("LP[" + ", ".join(f"{k}:{v}" for k, v in limb_params.items()) + "]")
+            parts.append(f"{limb}: " + " ".join(bits))
         # include note/params if present
         note = b.get("Note")
         if note:
@@ -135,6 +141,11 @@ def preview_lines_for_save(frames: Dict[int, FrameBundle],
 
         if len(parts) > 1:  # at least one limb had content or note/params
             lines.append(" | ".join(parts))
+        elif b.get("Changed"):
+            # A dirty frame can have nothing left to show (its last point was
+            # deleted); it is still written on save, so keep it in the preview
+            # to make the line count match what the repository persists.
+            lines.append(f"{parts[0]} | (cleared)")
 
     return lines
 

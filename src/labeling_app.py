@@ -901,10 +901,21 @@ class LabelingApp(tk.Tk):
         else:  # LL
             image_path = asset_path("icons/LL_new_template.png" if self.NEW_TEMPLATE else "icons/LL.png")
 
-        img = Image.open(image_path)
         scale = getattr(self, "diagram_scale", 1.0)
-        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
-        self.photo = ImageTk.PhotoImage(img)
+        # The periodic dot refresh repaints through here every 300ms; cache the
+        # decoded+resized PhotoImage per (path, scale) so the repaint does not
+        # re-read the PNG from disk on every tick.
+        cache = getattr(self, "_diagram_photo_cache", None)
+        if cache is None:
+            cache = self._diagram_photo_cache = {}
+        photo = cache.get((image_path, scale))
+        if photo is None:
+            with Image.open(image_path) as img:
+                resized = img.resize(
+                    (int(img.width * scale), int(img.height * scale)), Image.LANCZOS
+                )
+            photo = cache[(image_path, scale)] = ImageTk.PhotoImage(resized)
+        self.photo = photo
         self.diagram_canvas.create_image(0, 0, anchor="nw", image=self.photo)
         self.draw_timeline()
         self.draw_timeline2()
@@ -1693,8 +1704,8 @@ class LabelingApp(tk.Tk):
 
         changed = annotation_service.set_note(self.video.frames, idx, note_text)
         if changed:
+            # mark_bundle_changed already emits the notify_bundle_changed summary.
             self.mark_bundle_changed(idx)
-            self.notify_bundle_changed(idx)
             annotation_logger.info("f=%s note -> %r", idx, note_text)
         try:
             import keyboard

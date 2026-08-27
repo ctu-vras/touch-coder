@@ -52,6 +52,23 @@ def test_configure_is_idempotent_and_routes_levels(tmp_path, monkeypatch):
     assert contents.count("f=12 LH click ON") == 1
 
 
+def test_noisy_third_party_loggers_stay_out_of_the_session_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+
+    session = log_setup.configure_logging(str(tmp_path))
+    logging.getLogger("PIL.PngImagePlugin").debug("STREAM b'IDAT' 41 45796")
+    logging.getLogger("numexpr.utils").info("NumExpr defaulting to 16 threads.")
+    logging.getLogger("PIL.Image").warning("palette warning")
+    logging.getLogger("adapters.zone_masks").debug("tinytouch detail")
+    _flush_handlers()
+
+    contents = session.path.read_text(encoding="utf-8")
+    assert "STREAM" not in contents
+    assert "NumExpr defaulting" not in contents
+    assert "palette warning" in contents
+    assert "tinytouch detail" in contents
+
+
 def test_console_uses_current_stdout_and_environment_override(tmp_path, monkeypatch):
     configured_stream = io.StringIO()
     current_stream = io.StringIO()

@@ -21,6 +21,14 @@ from time import monotonic
 
 DEFAULT_CONSOLE_LEVEL = "INFO"
 DEFAULT_KEEP_FILES = 20
+# Third-party loggers raised above the root DEBUG level: PIL logs every PNG
+# chunk it decodes (hundreds of records per minute in the session file) and
+# numexpr announces its thread pool at INFO before TinyTouch's own startup
+# line. TinyTouch module records are never silenced here.
+THIRD_PARTY_LOG_LEVELS = {
+    "PIL": logging.INFO,
+    "numexpr": logging.WARNING,
+}
 _SESSION_NAME = re.compile(
     r"^tinytouch_\d{4}-\d{2}-\d{2}_\d{6}_\d{3}_\d+\.log$"
 )
@@ -131,6 +139,8 @@ def configure_logging(app_dir: str | None = None, *, to_file: bool = True) -> Lo
     _harden_console_encoding()
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
+    for name, level in THIRD_PARTY_LOG_LEVELS.items():
+        logging.getLogger(name).setLevel(level)
 
     console = _LazyStdoutHandler()
     console.setLevel(logging.INFO)
@@ -403,6 +413,8 @@ def _reset_for_tests() -> None:
         if getattr(handler, "_tinytouch_handler", False):
             root.removeHandler(handler)
             handler.close()
+    for name in THIRD_PARTY_LOG_LEVELS:
+        logging.getLogger(name).setLevel(logging.NOTSET)
     if _process_hooks_installed:
         sys.excepthook = _original_sys_excepthook
         threading.excepthook = _original_threading_excepthook

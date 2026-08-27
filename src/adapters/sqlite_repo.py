@@ -208,7 +208,7 @@ class SqliteRepository:
             )
         else:
             self._upgrade_from(version)
-            logger.info(
+            logger.debug(
                 "sqlite_repo: opened state DB (schema v%d) -> %s (%d bytes)",
                 self._user_version(),
                 db_path,
