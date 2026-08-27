@@ -9,7 +9,8 @@ Orchestration only — four ordered steps, no rules and no figures of its own:
                  ExportSchemaError naming any missing column)
     3. COMPUTE   domain.touch_stats.summarize / transitions / transition_matrix
                  for all four limbs — ALL of it, before anything is written
-    4. WRITE     adapters.plotting.* , returning the master HTML path
+    4. WRITE     adapters.plotting.* figures, arranged into the master page by
+                 adapters.report_page.write_master_html
 
 Step 3 finishing before step 4 starts is deliberate: the old code interleaved
 computation and `write_html`, so a mid-run exception (fps 0 -> ZeroDivisionError)
@@ -32,7 +33,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence
 
-from adapters import plotting
+from adapters import plotting, report_page
 from adapters.export_reader import read_export_df
 from adapters.zone_masks import list_zone_names
 from domain.model import LIMBS
@@ -172,7 +173,7 @@ def run_analysis(paths: ProjectPaths,
 
     # 3) COMPUTE everything first (see module docstring).
     stats: List[LimbStats] = []
-    matrices = []
+    matrices: Dict[str, tuple] = {}
     zones_default = list_zone_names(new_template)
     for limb in limbs:
         episodes = data.episodes.get(limb, [])
@@ -180,7 +181,7 @@ def run_analysis(paths: ProjectPaths,
         stats.append(limb_stats)
         counts = transitions(episodes)
         zones = transition_zone_axis(counts, limb_stats.zone_touch_count, zones_default)
-        matrices.append((transition_matrix(counts, zones), zones))
+        matrices[limb] = (transition_matrix(counts, zones), zones)
         _log_limb(limb, limb_stats, data.total_frames)
 
     open_total = sum(s.open_touches for s in stats)
@@ -196,27 +197,29 @@ def run_analysis(paths: ProjectPaths,
         logger.warning("%s", message)
         warnings.append(message)
 
-    # 4) WRITE
+    # 4) WRITE — figures in master-page display order; the service forwards the
+    #    opaque `ReportFigure` fragments to the page renderer, it builds none.
     os.makedirs(output_folder, exist_ok=True)
-    written: List[str] = []
-    for limb, (matrix, zones) in zip(limbs, matrices):
-        written.append(plotting.write_transition_heatmap(matrix, zones, limb, output_folder))
-    written.append(
+    figures = [
         plotting.write_trajectory_plot(
             data.episodes, plotting.limb_image_paths(new_template), output_folder
-        )
+        ),
+        plotting.write_summary_table(stats, data.total_frames, fps, output_folder),
+        plotting.write_onset_histogram(stats, output_folder),
+        plotting.write_duration_histogram(stats, fps, output_folder),
+    ]
+    for limb in plotting.display_limb_order(limbs):
+        matrix, zones = matrices[limb]
+        figures.append(plotting.write_transition_heatmap(matrix, zones, limb, output_folder))
+
+    written: List[str] = [figure.path for figure in figures]
+    written.extend(plotting.write_analysis_tables(stats, fps, output_folder))
+
+    fps_text = f"{fps:g} fps ({fps_source})" if fps is not None else "frame rate unknown"
+    subtitle = f"{data.total_frames} frames · {fps_text}"
+    master_html = report_page.write_master_html(
+        name, output_folder, figures, notes=warnings, subtitle=subtitle
     )
-    plotting.write_analysis_tables(stats, data.total_frames, fps, output_folder)
-    written.extend(
-        [
-            os.path.join(output_folder, plotting.FRAMES_TABLE_CSV),
-            os.path.join(output_folder, plotting.SECONDS_TABLE_CSV),
-        ]
-    )
-    written.append(plotting.write_summary_table(stats, data.total_frames, fps, output_folder))
-    written.append(plotting.write_onset_histogram(stats, output_folder))
-    written.append(plotting.write_duration_histogram(stats, fps, output_folder))
-    master_html = plotting.write_master_html(name, output_folder, limbs, notes=warnings)
     written.append(master_html)
 
     logger.info(

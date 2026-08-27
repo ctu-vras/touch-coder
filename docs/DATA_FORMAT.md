@@ -13,7 +13,9 @@ data/<video_name>/export/<video_name>_metadata.json     the sidecar (fps, mode, 
 
 Everything else under `data/<video_name>/` is internal: `state/<video_name>.db` is the
 app's working state, `frames/` holds the extracted JPEGs, and `plots/` holds the analysis
-dashboards. Do not parse those; they are free to change between versions.
+dashboards. Do not parse those; they are free to change between versions. (One practical
+note: the HTML files in `plots/` share a single `plotly.min.js` in the same folder, so
+copy or share the folder as a whole.)
 
 **The export format is unchanged from earlier TinyTouch versions.** The column set, the
 column order and the byte-level encoding of every cell are frozen and pinned by tests

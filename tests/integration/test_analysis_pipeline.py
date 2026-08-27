@@ -24,7 +24,9 @@ pinned literally. If they ever change, the statistics changed — investigate,
 do not edit the numbers.
 """
 
+import json
 import os
+import re
 
 import pandas as pd
 import pytest
@@ -189,6 +191,92 @@ def test_cat3_heatmap_reflects_pairwise_transitions(tmp_path):
     assert "one count per zone pair" in html
 
 
+# --- report page layout ------------------------------------------------------
+# The master page is ONE scrolling document: figure divs inlined (no iframes),
+# plotly.js loaded once from a shared plots/plotly.min.js, wheel-zoom disabled
+# so the mouse wheel scrolls the page instead of panning a figure.
+
+def _run_cat3(tmp_path):
+    paths = write_project(tmp_path, cat3_frames())
+    out = tmp_path / "plots"
+    analysis_service.run_analysis(
+        paths, frame_rate=CAT3_FPS, output_folder=str(out), open_browser=BrowserSpy()
+    )
+    return out
+
+
+def test_master_page_is_one_document(tmp_path):
+    out = _run_cat3(tmp_path)
+    page = (out / "master_cat3.html").read_text(encoding="utf-8")
+
+    assert "<iframe" not in page.lower()
+    assert page.count('src="plotly.min.js"') == 1
+    assert (out / "plotly.min.js").is_file()
+    for title in (
+        "Touch trajectories over the limb diagrams",
+        "Summary table",
+        "Touch length distribution",
+        "Touch duration distribution",
+        "Transition heatmap — Right Hand (RH)",
+    ):
+        assert title in page, f"missing card title {title!r}"
+
+
+def test_figures_share_one_plotly_bundle(tmp_path):
+    out = _run_cat3(tmp_path)
+    for filename in [f for f in EXPECTED_FILES if f.endswith(".html")]:
+        html = (out / filename).read_text(encoding="utf-8")
+        assert "plotly.min.js" in html, f"{filename} does not reference the shared bundle"
+        size = (out / filename).stat().st_size
+        assert size < 1_000_000, f"{filename} is {size} bytes — plotly.js embedded?"
+
+
+def test_wheel_zoom_disabled_everywhere(tmp_path):
+    out = _run_cat3(tmp_path)
+    for filename in [f for f in EXPECTED_FILES if f.endswith(".html")]:
+        html = (out / filename).read_text(encoding="utf-8")
+        assert re.search(r'"scrollZoom"\s*:\s*true', html) is None, filename
+        assert re.search(r'"scrollZoom"\s*:\s*false', html), filename
+
+
+def test_limb_panels_are_mirrored_to_match_the_viewed_diagram(tmp_path):
+    """The diagrams face the viewer, so the subject's right limbs render on the
+    viewer's left: RH before LH, RL before LL — in the trajectory subplot
+    titles and in the heatmap cards on the master page."""
+    out = _run_cat3(tmp_path)
+
+    trajectory = (out / "touch_trajectory.html").read_text(encoding="utf-8")
+    assert trajectory.index("Right Hand") < trajectory.index("Left Hand")
+    assert trajectory.index("Right Leg") < trajectory.index("Left Leg")
+
+    page = (out / "master_cat3.html").read_text(encoding="utf-8")
+    assert (page.index("Transition heatmap — Right Hand")
+            < page.index("Transition heatmap — Left Hand")
+            < page.index("Transition heatmap — Right Leg")
+            < page.index("Transition heatmap — Left Leg"))
+
+
+def test_trajectory_panels_are_pinned_to_the_diagram(tmp_path):
+    """Panel ranges must never follow the data: any `autorange` recomputes the
+    view from the point cloud, so each panel zoomed to its own points instead
+    of showing the whole limb diagram (the y range is reversed EXPLICITLY)."""
+    out = _run_cat3(tmp_path)
+    traj = (out / "touch_trajectory.html").read_text(encoding="utf-8")
+    assert re.search(r'"autorange"\s*:\s*"reversed"', traj) is None
+    assert re.search(r'"autorange"\s*:\s*true', traj) is None
+    assert '"scaleanchor"' in traj
+
+
+def test_heatmap_height_follows_zone_count(tmp_path):
+    out = _run_cat3(tmp_path)
+    html = (out / "heatmap_RH.html").read_text(encoding="utf-8")
+    height = re.search(r'"height"\s*:\s*(\d+)', html)
+    ticks = re.search(r'"ticktext"\s*:\s*(\[[^\]]*\])', html)
+    assert height and ticks, "heatmap layout carries no height/ticktext"
+    zones = json.loads(ticks.group(1))
+    assert int(height.group(1)) == plotting.heatmap_height(len(zones))
+
+
 # --- bug 1: unusable frame rate --------------------------------------------
 
 @pytest.mark.parametrize("bad_fps", [0.0, None, -1.0])
@@ -306,8 +394,11 @@ def test_trajectory_hover_texts_align_with_points(tmp_path):
     assert "Frame: 25" in trace.text[1] and "Zone: C" in trace.text[1]
     assert "Frame: 30" in trace.text[2] and "Zone: D" in trace.text[2]
     assert "Frame: 30" in trace.text[3] and "Zone: E" in trace.text[3]
-    # marker roles: green start, black mid, black non-final offset click, red end
-    assert list(trace.marker.color) == ["green", "black", "black", "red"]
+    # marker roles: start, mid, non-final offset click, end (colours are the
+    # module's palette -- the ROLE assignment is what is pinned here)
+    assert list(trace.marker.color) == [
+        plotting._START_COLOR, plotting._MID_COLOR, plotting._MID_COLOR, plotting._END_COLOR
+    ]
 
     # And the mid-touch click reached the statistics too (both or neither).
     rh = next(s for s in result.stats if s.limb == "RH")

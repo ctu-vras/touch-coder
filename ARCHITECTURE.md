@@ -49,7 +49,8 @@ touch-coder/
 │   │   ├── sqlite_repo.py        # Working-state DB per video (SOURCE OF TRUTH)
 │   │   ├── export_writer.py      # Legacy export schema + metadata sidecar (write)
 │   │   ├── export_reader.py      # Export CSV read, incl. legacy 6-line preamble
-│   │   ├── plotting.py           # Every plotly figure / CSV table / master HTML
+│   │   ├── plotting.py           # Every plotly figure / CSV table (ReportFigure factory)
+│   │   ├── report_page.py        # master_<name>.html layout/CSS (inlines the figures)
 │   │   ├── config.py             # config.json read / write, AppConfig snapshot
 │   │   ├── zone_masks.py         # Zone-mask PNG loading + zone-name listing
 │   │   ├── frame_extractor.py    # Frame extraction (ffmpeg → OpenCV fallback) + integrity
@@ -398,8 +399,11 @@ adapters.export_reader.read_export_df   read export/<name>_export.csv
 domain.touch_stats.parse_export         validate schema, rebuild Episodes
         │  summarize / transitions      per-limb stats + zone transitions
         ▼
-adapters.plotting.write_*               heatmaps, trajectory, tables, histograms,
-        │                               master_<name>.html
+adapters.plotting.write_*               heatmaps, trajectory, tables, histograms —
+        │                               each returns a `ReportFigure` fragment
+        ▼
+adapters.report_page.write_master_html  arranges the fragments into
+        │                               master_<name>.html (layout/CSS only)
         ▼
 service_layer.analysis_service          orchestrates the above, returns the path
                                         (LabelingApp opens the browser)
@@ -421,10 +425,16 @@ Rules that downstream research depends on -- documented at length in
 These rules are also stated for external readers in
 [docs/DATA_FORMAT.md](docs/DATA_FORMAT.md#3-semantic-conventions); keep the two in step.
 
-The written artifacts and their file names are a contract too (`write_master_html` links
+The written artifacts and their file names are a contract too (the master page links
 them and users bookmark them): `heatmap_<LIMB>.html`, `touch_trajectory.html`,
 `analysis_table_frames.csv`, `analysis_table_seconds.csv`, `table.html`, `histogram.html`,
 `histogram_2.html`, `master_<name>.html`.
+
+The master page inlines every figure `<div>` into ONE scrolling document and loads a
+single shared `plots/plotly.min.js` (written by plotly via `include_plotlyjs="directory"`).
+The standalone figure files reference the same bundle, so a `plots/` folder must travel
+as a whole when shared. Wheel-zoom is disabled on every figure (`scrollZoom: false`) —
+the mouse wheel scrolls the page; zooming is an explicit drag-select.
 
 ## Testing
 
