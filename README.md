@@ -4,7 +4,7 @@ Frame-by-frame annotation of infant self-touch, for behavioral research.
 
 ![TinyTouch main window](assets/readme_images/showcase.png)
 
-![version](https://img.shields.io/badge/version-8.0.0-blue) ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![python](https://img.shields.io/badge/python-3.12-blue)
+![version](https://img.shields.io/badge/version-8.0.0-blue) ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![python](https://img.shields.io/badge/python-3.12-blue) ![license](https://img.shields.io/badge/license-CC%20BY%204.0-green)
 
 ## What it does
 
@@ -131,7 +131,15 @@ An example of the kind of analysis this coding scheme supports:
 
 ## License
 
-To be confirmed. Please contact the maintainer before redistributing.
+Copyright (c) 2026 Czech Technical University in Prague, Vision for Robotics and Autonomous
+Systems (VRAS) group.
+
+TinyTouch -- the software, its documentation and the bundled assets -- is licensed under the
+[Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+You may copy, redistribute and adapt it for any purpose, including commercially, provided you
+give appropriate credit (see [Citing](#citing)), link to the license, and indicate if changes
+were made. The software is provided as is, without warranty of any kind. The full license text
+is in [LICENSE](LICENSE).
 
 ## Contact
 

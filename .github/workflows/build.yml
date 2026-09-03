@@ -29,6 +29,7 @@ jobs:
           TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
+          cp LICENSE dist/TinyTouch-${{ github.ref_name }}/
           cd dist
           zip -r TinyTouch-${{ github.ref_name }}-linux-x64.zip TinyTouch-${{ github.ref_name }}
       - uses: actions/upload-artifact@v4
@@ -56,6 +57,7 @@ jobs:
           TINYTOUCH_APP_NAME=TinyTouch-${{ github.ref_name }} python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
+          cp LICENSE dist/TinyTouch-${{ github.ref_name }}/
           cd dist
           zip -r TinyTouch-${{ github.ref_name }}-linux-legacy-x64.zip TinyTouch-${{ github.ref_name }}
       - uses: actions/upload-artifact@v4
@@ -83,7 +85,7 @@ jobs:
           python -m PyInstaller TinyTouch.spec
       - name: Package
         run: |
-          Compress-Archive -Path dist\\TinyTouch-${{ github.ref_name }}.exe -DestinationPath dist\\TinyTouch-${{ github.ref_name }}-windows-x64.zip
+          Compress-Archive -Path dist\\TinyTouch-${{ github.ref_name }}.exe, LICENSE -DestinationPath dist\\TinyTouch-${{ github.ref_name }}-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: TinyTouch-windows-x64
