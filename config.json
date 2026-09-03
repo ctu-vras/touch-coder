@@ -3,7 +3,7 @@
   "dot_size": 10.0,
   "new_template": false,
   "minimal_touch_length": 280,
-  "parameter1": "Looking1",
+  "parameter1": "P1",
   "parameter2": "P2",
   "parameter3": "P3",
   "limb_parameter1": "LP1",
@@ -15,6 +15,7 @@
   "perf_enabled": false,
   "perf_log_every_s": 2.0,
   "perf_log_top_n": 10,
-  "last_labeling_mode": "Normal",
-  "annotation_mode": "touch"
+  "log_level_console": "INFO",
+  "log_keep_files": 20,
+  "last_labeling_mode": "Normal"
 }

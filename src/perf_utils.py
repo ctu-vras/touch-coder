@@ -1,6 +1,10 @@
+import logging
 import time
 import threading
 from dataclasses import dataclass
+
+
+logger = logging.getLogger("perf")
 
 
 @dataclass
@@ -79,9 +83,9 @@ class PerfLogger:
             now = time.perf_counter()
             if now - self._last_log_ts >= self.log_every_s:
                 self._last_log_ts = now
-                self._print_summary_locked()
+                self._log_summary_locked()
 
-    def _print_summary_locked(self) -> None:
+    def _log_summary_locked(self) -> None:
         if not self._stats:
             return
         items = sorted(self._stats.items(), key=lambda kv: kv[1].total, reverse=True)
@@ -91,4 +95,4 @@ class PerfLogger:
             parts.append(
                 f"{name}: avg={avg * 1000:.2f}ms max={stats.max * 1000:.2f}ms n={stats.count}"
             )
-        print("PERF:", " | ".join(parts))
+        logger.debug("%s", " | ".join(parts))

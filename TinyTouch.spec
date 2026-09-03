@@ -9,9 +9,12 @@ spec_path = os.path.abspath(sys.argv[0]) if sys.argv else os.path.abspath("TinyT
 project_root = os.path.abspath(os.path.dirname(spec_path))
 src_root = os.path.join(project_root, "src")
 
+# Destinations MUST match gui/resource_utils:
+#   resource_path("config.json")      -> <_MEIPASS>/config.json        (dest ".")
+#   asset_path("icons/<...>")         -> <_MEIPASS>/resources/icons/…  (dest "resources")
 datas = [
     (os.path.join(project_root, "config.json"), "."),
-    (os.path.join(project_root, "icons"), "icons"),
+    (os.path.join(src_root, "resources"), "resources"),
 ]
 datas += collect_data_files("ttkbootstrap")  # localization .msg files
 

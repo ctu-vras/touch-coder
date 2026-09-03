@@ -2,44 +2,41 @@
 __pycache__/
 *.py[cod]
 *$py.class
-AGENTS.md
 # Ignore distribution/build directories
 build/
 dist/
-AGENTS.md
-CLAUDE.md
-.mcp.json
 
 # Ignore flagged folder (if not needed in the repo)
 flagged/
 
-# Ignore the icons folder (if not needed in the repo)
-
-
-# Ignore Videos folder contents (large binaries kept locally only)
+# Ignore videos/ contents (large binaries kept locally only)
 # Exception: cat3.mp4 is the in-repo sample used for quick smoke testing.
-Videos/**
-!Videos/cat3.mp4
+/videos/**
+!/videos/cat3.mp4
 
-# Ignore Labeled_data contents but keep the folder in the repo
-Labeled_data/**
-!Labeled_data/.gitkeep
+# Ignore data/ (labeling output) contents but keep the folder in the repo.
+# Anchored with a leading slash so it cannot swallow scripts/bench/data/ etc.
+/data/**
+!/data/.gitkeep
 
-# Ignore config and environment files
+# Pre-v9 output root. v9 does not read or convert these trees; the rule stays
+# only so an old local copy can never offer real research data for commit.
+/Labeled_data/**
+
+# Ignore local environments and packaged executables
 
 *.env
 *.exe
 
-# Ignore test data (extracted frames)
-tests/data/
+# Ignore local benchmark and experiment scripts
+/scripts/
+
+# Ignore pytest cache
+.pytest_cache/
 
 # Ignore log files
 *.log
-
-# Ignore text files that aren't documentation
-*.txt
-!requirements.txt
-!README.txt
+/logs/
 
 # Ignore hidden system files
 .DS_Store
@@ -52,8 +49,27 @@ venv/
 TinyTouch_env/
 
 # Ignore generated sorted frames
-Labeled_data/*/sorted_frames/
-Labeled_data/*/sorted_frames/**
+/data/*/sorted_frames/
+/data/*/sorted_frames/**
 
-.claude
-AGENTS.md
+# Ignore editor-specific project metadata
+/.idea/
+
+# Keep local assistant and internal working files out of the public repository
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.claude/
+/.mcp.json
+/TODO.md
+/DONE.md
+/docs/books/
+/docs/plans/
+/docs/reviews/
+/docs/dev/
+/docs/RELEASING.md
+
+# Local reference assets that are not part of the application or documentation
+/assets/icons_unused/
+/assets/tutorial.mp4
+/surprise.txt

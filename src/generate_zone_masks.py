@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import deque
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 
+logger = logging.getLogger(__name__)
+
+
 # Update these paths/settings here instead of using CLI arguments.
-SOURCE_IMAGE = Path("icons/3d_zones/diagram.png")
-OUTPUT_DIR = Path("icons/3d_zones/generated_masks")
+# Paths are relative to the repo root (run this offline tool from there).
+SOURCE_IMAGE = Path("src/resources/icons/diagram.png")
+OUTPUT_DIR = Path("src/resources/icons/generated_masks")
 ARCHIVE_DIR = OUTPUT_DIR / "_merged_legacy"
 ZONE_NAME_PREFIX = "ZONE_"
 THRESHOLD = 200
@@ -19,33 +24,11 @@ INCLUDE_LINE_MASK = True
 
 # Merge regions after you inspect zone_index_preview.png.
 # Keys are output names, values are 1-based region indices to combine.
-MERGED_ZONE_GROUPS: dict[str, list[int]] = {
-    "FACE": [1, 2, 3, 4, 5, 6],
-}
+MERGED_ZONE_GROUPS: dict[str, list[int]] = {}
 
-# Stable names for single regions that should remain separate.
-MANUAL_ZONE_NAMES: dict[int, str] = {
-    7: "NECK",
-    8: "L_SHOULDER",
-    9: "R_SHOULDER",
-    10: "L_ELBOW",
-    11: "R_ELBOW",
-    12: "BELLY",
-    13: "L_WRIST",
-    14: "R_WRIST",
-    15: "R_HIP",
-    16: "L_HIP",
-    17: "R_KNEE",
-    18: "L_KNEE",
-    19: "BOX1",
-    20: "BOX2",
-    21: "BOX4",
-    22: "BOX3",
-    23: "R_ANKLE",
-    24: "L_ANKLE",
-    25: "BOX6",
-    26: "BOX5",
-}
+# Stable names for single regions that should remain separate
+# (unnamed regions fall back to ZONE_<index>).
+MANUAL_ZONE_NAMES: dict[int, str] = {}
 
 
 def load_diagram_mask(image_path: Path, threshold: int) -> tuple[list[list[bool]], int, int]:
@@ -232,10 +215,11 @@ def main() -> None:
     metadata_path = OUTPUT_DIR / "zones.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-    print(f"Saved {len(metadata)} zone entries to {OUTPUT_DIR}")
-    print(f"Preview image: {OUTPUT_DIR / 'zone_index_preview.png'}")
-    print(f"Metadata: {metadata_path}")
+    logger.info("saved %s zone entries to %s", len(metadata), OUTPUT_DIR)
+    logger.info("preview image: %s", OUTPUT_DIR / "zone_index_preview.png")
+    logger.info("metadata: %s", metadata_path)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
     main()

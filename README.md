@@ -1,159 +1,165 @@
-# Self-Contact Coding Application TinyTouch
+# TinyTouch
 
-## Introduction
+Frame-by-frame annotation of infant self-touch, for behavioral research.
 
-This application is designed for behavioral researchers to code self-contact (self-touch) in videos.
+![TinyTouch main window](assets/readme_images/showcase.png)
 
-![Showcase](assets/readme_images/showcase.png)
+![version](https://img.shields.io/badge/version-9.0.0-blue) ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![python](https://img.shields.io/badge/python-3.12-blue) ![license](https://img.shields.io/badge/license-CC%20BY%204.0-green)
 
-## Installation & Usage Guide
+## What it does
 
-### Windows and Linux Installation
+TinyTouch is a desktop tool for coding self-contact in infant video: for each frame you
+mark which limb (left/right hand, left/right leg) touches which body zone, together with
+the onset and offset of the episode, the infant's gaze, and up to six user-defined
+parameters. Contact locations are entered by clicking a body diagram and resolved to zone
+names automatically. Each labeled video produces a flat CSV dataset plus a JSON metadata
+sidecar, ready for statistical analysis.
 
-#### Step 1: Download and Extract
+## Install
 
-1. **Download** the ZIP from **Releases** that matches your operating system.
-2. **Extract** the contents of the ZIP file into a folder on your computer.
+Download the ZIP for your system from the
+[Releases page](https://github.com/Humanoids-CTU/tiny-touch/releases), extract it anywhere, and
+run the executable inside — `TinyTouch-<tag>.exe` on Windows, `TinyTouch-<tag>` on Linux.
+No installation step and no Python required.
 
-#### Step 2: Run the Application
+Three builds are published per release: `windows-x64` (Windows 10/11, 64-bit), `linux-x64`
+(current distributions) and `linux-legacy-x64` (older glibc; built on Debian Bullseye). On
+Linux, launch from a terminal so you can see the log.
 
-1. Open the extracted folder.
-2. Run the executable:
-   - Windows: `TinyTouch.exe`
-   - Linux: `TinyTouch`
+> **Upgrading from 8.0.x or earlier:** this version reads only the current project
+> layout (`data/<video>/state/<video>.db`). Older folders — `Labeled_data/…`, a
+> `<video>_unified.csv` working file, source videos in `Videos/` — are **not
+> converted**, and opening one shows an empty project rather than an error. Keep those
+> folders as archives, keep a copy of their `*_export.csv` files (which this version
+> still reads for Analysis), and start new labeling in a fresh project.
 
-Tip (Linux): If you want to see logs, run the app from a terminal using `./TinyTouch-<version>`.
+<details>
+<summary><b>Run from source</b></summary>
 
----
-### From Source (Python)
-
-#### Step 1: Clone the Repository
-
-1. Open a terminal and run:
-```bash
-git clone -b master --single-branch https://github.com/ctu-vras/touch-coder.git
-
-cd touch-coder
-```
-#### Step 2: Install Python 3.12
-
-```bash
-sudo apt update
-sudo apt install -y python3.12 python3.12-venv python3.12-tk python3-pip
-```
-
-#### Step 3: Create and Activate a Virtual Environment
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-```
-#### Step 4: Run the Application
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). On Debian/Ubuntu you also need
+the Tk bindings: `sudo apt install python3.12-tk`.
 
 ```bash
-python3 src/main.py
+git clone https://github.com/Humanoids-CTU/tiny-touch.git
+cd tiny-touch
+uv venv
+uv pip install -r requirements.txt
+uv run python src/main.py
 ```
 
----
+Build a standalone executable with `uv run pyinstaller TinyTouch.spec`; the result lands in
+`dist/`. Run the test suite with `uv run pytest` (GUI end-to-end tests are excluded by
+default; add `-m gui` to include them).
 
-## Application Workflow
+</details>
 
-1. **Prepare Video and Frames:**
+## Quick start
 
-   - After the GUI loads you can start by clicking on `Load Video`.
-   - You will be asked to select if you want to normaly label of if you want to do the reliability.
-   - If you have selected new video the application will extract frames (it can take some time).
+1. **Load Video** — choose `Normal` or `Reliability`, then pick the video file. TinyTouch
+   copies it into `videos/` and extracts every frame into `data/<video>/frames/`. This runs
+   once per video and can take several minutes.
+2. **Clothes** — mark the body zones covered by clothing. Saved with the project and
+   recorded in the export metadata.
+3. **Select a limb** with the radio buttons under the diagram.
+4. **Mark the onset** — navigate to the first frame of the contact and **left-click** the
+   body diagram where the touch occurs. A green dot appears.
+5. **Mark the offset** — navigate to the first frame after the contact ends and
+   **right-click** the same area. A red dot appears and the episode is closed.
+6. **Add gaze and parameters** with the buttons on the right; type per-frame remarks in the
+   note box and click **Save Note**.
+7. **Save** — writes `data/<video>/export/<video>_export.csv` and
+   `data/<video>/export/<video>_metadata.json`. TinyTouch also saves on close.
 
-2. **Select Clothing Zones:**
-   - Click on the `Clothes` button to select the zones that are covered with clothes.
-   - The data will be saved after closing the `Clothes` window.
+| Input | Action |
+| --- | --- |
+| `←` / `→` | Previous / next frame |
+| `Shift`+`←` / `Shift`+`→`, `<<` / `>>` | Fast jump back / forward |
+| Mouse wheel | Previous / next frame |
+| `Space`, **Play** / **Stop** | Toggle playback |
+| Left-click on diagram | Touch onset (green dot) |
+| Right-click on diagram | Touch offset (red dot) |
+| Middle-click on diagram, or `d` | Delete the nearest dot |
+| Click a timeline | Jump to that frame |
+| **Save** | Write the working state and the export |
 
-3. **Navigate Through Frames:**
-   - Use the left and right arrow keys, the mouse wheel or the buttons next to the current frame number to move between frames.
-   - You can also navigate by clicking in the Timeline 1 or Timeline 2.
+The full coding manual — modes, zones, parameters, and the mistakes worth avoiding — is in
+[docs/ANNOTATION_GUIDE.md](docs/ANNOTATION_GUIDE.md).
 
-4. **Select Limb:**
-   - Choose a limb using the radio buttons located under the diagram.
+## Output data
 
-5. **Code Touches:**
-   - You can mark start of a touch by left-clicking on the diagram (a green dot will appear).
-   - Mark end of a touch by right-clicking (a red dot will appear).
-   - Middle-click on a dot to remove it (you can also aim on the dot and press `d` on your keyboard).
-   - Touches will be indicated by a yellow color on the Timeline.
-   - You can also add additional information by using `Looking` and `Parameter` buttons.
-   - You can add note by writing into `Note Entry` and clicking on `Save Note`.
+Each labeled video gets a self-contained folder:
 
-6. **Save Labeled Touches:**
-   - Periodically save your work by clicking the `Save` button.
-   - You can find the labeled data in `Labeled_data/name_of_video/data/export/name_of_video_export.csv`
+```
+data/<video>/
+├── export/     <video>_export.csv + <video>_metadata.json   <- the published dataset
+├── state/      <video>.db          working state, internal
+├── frames/     frame0.jpg …        extracted video frames
+└── plots/                          analysis dashboards
+```
 
-7. **Close the Application:**
-   - The application will automatically save your data when you close it.
+Only the two files under `export/` are meant to be read by anything other than TinyTouch.
+The CSV has one row per frame with per-limb coordinates, onset/offset markers and zone
+lists; the JSON records program version, frame rate, labeling mode, clothing zones,
+parameter labels and total labeling time.
 
-### Watch the Tutorial
+**The export format is unchanged from earlier TinyTouch versions** — same columns, same
+order, same cell encoding — so existing analysis pipelines keep working. The full
+specification, including the semantics analysis code must follow, is in
+[docs/DATA_FORMAT.md](docs/DATA_FORMAT.md).
 
-The tutorial was created for now a bit outdated version but might still help.
-[Watch the tutorial video (download it)](./assets/tutorial.mp4)
+## Analysis
 
-## Additional Notes
+The **Analysis** button computes per-limb statistics from the export and writes an
+interactive Plotly dashboard to `data/<video>/plots/`, opening it in your browser: touch
+counts and durations, percentage of time in contact, touch rate, zone-transition heatmaps
+per limb, a click-trajectory plot drawn over the limb diagrams, and duration/onset
+histograms. Touches left without an offset are reported separately as censored and excluded
+from duration statistics.
 
-- **Settings Button:**
+## Citing
 
-  - Use the `Settings` button to change diagram size, dot size (touch markers), and video resolution.
-  - Tip: Lower video resolution runs faster.
+A paper describing TinyTouch is in preparation. Until it appears, please cite the software
+by its repository URL and the version string recorded in your dataset's metadata sidecar
+(`Program Version`).
 
-- **New Template:**
+An example of the kind of analysis this coding scheme supports:
 
-  - by changing parameter `new_template` in the `config.json` to `true` you can label on the new template"
+> Khoury, J., Popescu, S. T., Gama, F., Marcel, V. and Hoffmann, M. (2022), Self-touch and
+> other spontaneous behavior patterns in early infancy, in *IEEE International Conference
+> on Development and Learning (ICDL)*, pp. 148-155.
+> [PDF](https://drive.google.com/file/d/1iVgMr-8eJFPH8jU31ksDNmv4xWY_4s5q/view?usp=sharing)
 
-- **Infant’s Gaze:**
+## License
 
-  - Indicate whether the infant is looking, not looking, or if you’re unsure. This only needs to be entered once per touch. The state is indicated by the green color of the corresponding button.
+Copyright (c) 2026 Czech Technical University in Prague.
 
-- **Parameters:**
+TinyTouch -- the software, its documentation and the bundled assets -- is licensed under the
+[Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+You may copy, redistribute and adapt it for any purpose, including commercially, provided you
+give appropriate credit (see [Citing](#citing)), link to the license, and indicate if changes
+were made. The software is provided as is, without warranty of any kind. The full license text
+is in [LICENSE](LICENSE).
 
-  - Parameters names can be customized by editing `config.json`. They can be used to for example track if parent is present or whatever you want.
+## Contact
 
-- **Boxes:**
+Developed at the Vision for Robotics and Autonomous Systems (VRAS) group, Czech Technical
+University in Prague.
 
-  - Six boxes on the diagram can be used to label touches of ground or whatever you want.
+Maintainer: navarlu2@fel.cvut.cz
 
-- **Reliability:**
+## Reporting a problem
 
-  - by selecting the `reliability` mode the saved files will end with `_reliability`.
+TinyTouch writes one diagnostic log for every session. Open **Settings -> Open Logs
+Folder**, then attach the newest `tinytouch_*.log` file to the bug report. The log includes
+application details, errors, and the local annotation activity--including note text--needed
+to understand what happened. It stays on your computer and is never transmitted
+automatically.
 
-- **Performance Tips:**
+If a log file cannot be created, TinyTouch continues running and reports diagnostics in
+the terminal window instead.
 
-  - If you experience performance issues, consider making the application window smaller. Smaller pictures will load faster.
+## Documentation
 
-- **Opening Data Files:**
-
-  - Please avoid opening `.csv` and other files during labeling.
-
-- **Labeling Multiple Videos:**
-
-  - After labeling one video, close the application before opening a new one.
-
-- **Loading Indicator:**
-
-  - If you see a red `Buffer Loading` label instead of a green `Buffer Loaded` label, just wait a bit for the section to load.
-
-- **Terminal Window:**
-  - A terminal window will open with the application. Do not close it. If you encounter a bug, describe it and send a picture of the terminal window. It may contain error messages that will help with debugging.
-
-## Bugs
-
-- **Timeline Issues:**
-  - Sometimes, the timeline may not turn yellow as expected. However, the touch still exists if you see green and red dots.
-- **Trajectory Plot Alignment:**
-  - In Analysis, trajectory plots may appear misaligned. You can manually fix this using the pan tool on the top right of the graph.
-
-## Contact information
-
-navarlu2@fel.cvut.cz
-
-## Related publications
-
-Example of analysis based on this type of coding is:
-Khoury, J., Popescu, S. T., Gama, F., Marcel, V. and Hoffmann, M. (2022), Self-touch and other spontaneous behavior patterns in early infancy, in 'IEEE International Conference on Development and Learning (ICDL)', pp. 148-155. [link to pdf](https://drive.google.com/file/d/1iVgMr-8eJFPH8jU31ksDNmv4xWY_4s5q/view?usp=sharing)
+[Annotation guide](docs/ANNOTATION_GUIDE.md) for annotators, [data format](docs/DATA_FORMAT.md)
+for data consumers, [ARCHITECTURE.md](ARCHITECTURE.md) for developers, and a
+[full index](docs/README.md) of everything else.
