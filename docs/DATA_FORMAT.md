@@ -153,7 +153,7 @@ literal UTF-8 (no `\uXXXX` escaping), keys in this exact order:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `Program Version` | str | The TinyTouch build that wrote the export, e.g. `"8.0.0 (Windows)"`. Matches the release tag. |
+| `Program Version` | str | The TinyTouch build that wrote the export, e.g. `"9.0.0 (Windows)"`. Matches the release tag. |
 | `Video Name` | str | Project folder name. Carries the `_reliability` suffix when the file came from a Reliability pass. |
 | `Labeling Mode` | str | `"Normal"` or `"Reliability"`. |
 | `Frame Rate` | float | Frames per second as probed from the video, rounded to one decimal. May be `0.0` — see "Zero frame rate". |
@@ -166,7 +166,7 @@ Example:
 
 ```json
 {
-  "Program Version": "8.0.0 (Windows)",
+  "Program Version": "9.0.0 (Windows)",
   "Video Name": "infant_042",
   "Labeling Mode": "Normal",
   "Frame Rate": 25.0,

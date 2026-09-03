@@ -4,7 +4,7 @@ Frame-by-frame annotation of infant self-touch, for behavioral research.
 
 ![TinyTouch main window](assets/readme_images/showcase.png)
 
-![version](https://img.shields.io/badge/version-8.0.0-blue) ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![python](https://img.shields.io/badge/python-3.12-blue) ![license](https://img.shields.io/badge/license-CC%20BY%204.0-green)
+![version](https://img.shields.io/badge/version-9.0.0-blue) ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![python](https://img.shields.io/badge/python-3.12-blue) ![license](https://img.shields.io/badge/license-CC%20BY%204.0-green)
 
 ## What it does
 
@@ -18,7 +18,7 @@ sidecar, ready for statistical analysis.
 ## Install
 
 Download the ZIP for your system from the
-[Releases page](https://github.com/ctu-vras/TinyTouch/releases), extract it anywhere, and
+[Releases page](https://github.com/Humanoids-CTU/tiny-touch/releases), extract it anywhere, and
 run the executable inside — `TinyTouch-<tag>.exe` on Windows, `TinyTouch-<tag>` on Linux.
 No installation step and no Python required.
 
@@ -40,8 +40,8 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). On Debian/Ubuntu you 
 the Tk bindings: `sudo apt install python3.12-tk`.
 
 ```bash
-git clone https://github.com/ctu-vras/TinyTouch.git
-cd TinyTouch
+git clone https://github.com/Humanoids-CTU/tiny-touch.git
+cd tiny-touch
 uv venv
 uv pip install -r requirements.txt
 uv run python src/main.py

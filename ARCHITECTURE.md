@@ -30,7 +30,7 @@ The full pinned list lives in [requirements.txt](requirements.txt).
 ## Project Structure
 
 ```
-touch-coder/
+tiny-touch/
 ├── src/                          # Application source
 │   ├── main.py                   # Entry point: builds and runs LabelingApp.mainloop()
 │   ├── labeling_app.py           # Main controller (~2.3k LOC): video, annotation, persistence,
