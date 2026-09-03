@@ -18,7 +18,7 @@ sidecar, ready for statistical analysis.
 ## Install
 
 Download the ZIP for your system from the
-[Releases page](https://github.com/ctu-vras/touch-coder/releases), extract it anywhere, and
+[Releases page](https://github.com/ctu-vras/TinyTouch/releases), extract it anywhere, and
 run the executable inside — `TinyTouch-<tag>.exe` on Windows, `TinyTouch-<tag>` on Linux.
 No installation step and no Python required.
 
@@ -40,8 +40,8 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). On Debian/Ubuntu you 
 the Tk bindings: `sudo apt install python3.12-tk`.
 
 ```bash
-git clone https://github.com/ctu-vras/touch-coder.git
-cd touch-coder
+git clone https://github.com/ctu-vras/TinyTouch.git
+cd TinyTouch
 uv venv
 uv pip install -r requirements.txt
 uv run python src/main.py
@@ -131,8 +131,7 @@ An example of the kind of analysis this coding scheme supports:
 
 ## License
 
-Copyright (c) 2026 Czech Technical University in Prague, Vision for Robotics and Autonomous
-Systems (VRAS) group.
+Copyright (c) 2026 Czech Technical University in Prague.
 
 TinyTouch -- the software, its documentation and the bundled assets -- is licensed under the
 [Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
