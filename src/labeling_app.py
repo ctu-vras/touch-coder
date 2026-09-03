@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import webbrowser
 import logging
@@ -57,6 +58,16 @@ annotation_logger = logging.getLogger("annot")
 HOLD_START_DELAY_MS = 500
 HOLD_RELEASE_TIMEOUT_MS = 100
 HOLD_WATCHDOG_INTERVAL_MS = 50
+# Mouse-wheel navigation. Notches are queued and consumed one frame per video
+# frame interval, so a fast flick moves at playback speed (like holding an
+# arrow key) instead of racing the redraw. The queue is capped at
+# WHEEL_BACKLOG_S worth of frames so motion stops shortly after the wheel does.
+# WHEEL_NOTCH_DELTA is Tk's <MouseWheel> delta for one notch on Windows;
+# high-resolution wheels report fractions of it, which are accumulated.
+WHEEL_BACKLOG_S = 0.2
+WHEEL_NOTCH_DELTA = 120
+WHEEL_DEFAULT_INTERVAL_MS = 40
+WHEEL_BUFFER_POLL_MS = 50
 # Dev guard (H1): when True, the main render/timeline methods raise if called
 # off the Tk main thread, so any future thread-boundary regression fails loudly
 # at the offending call site instead of crashing Tcl intermittently.
@@ -340,6 +351,12 @@ class LabelingApp(tk.Tk):
         self._last_arrow_press_ms = 0.0       # heartbeat: time of most recent KeyPress
         self._hold_watchdog_id = None         # after() id for the release-detection watchdog
         self._hold_play_active = False        # True while arrow-hold-driven playback is running
+
+        # Mouse-wheel pacing state (see WHEEL_* constants).
+        self._wheel_backlog = 0               # signed frames still to step (+ forward, - back)
+        self._wheel_tick_id = None            # after() id of the paced stepper
+        self._wheel_delta_accum = 0           # sub-notch <MouseWheel> delta carried over
+        self._wheel_next_due = None           # monotonic deadline of the next paced step
 
         # Thread → UI boundary (H1). Workers never touch Tk widgets directly:
         # they advance plain state and schedule redraws via self.after(0, ...).
@@ -673,11 +690,90 @@ class LabelingApp(tk.Tk):
         if self.video:
             self.display_first_frame()
 
+    # --- Mouse-wheel navigation, paced at the video frame rate ---------------
     def on_mouse_wheel(self, event):
-        if event.delta > 0 or getattr(event, "num", None) == 4:
-            self._request_buffered_step(-1)
-        elif event.delta < 0 or getattr(event, "num", None) == 5:
-            self._request_buffered_step(1)
+        if self.video is None:
+            return
+        notches = self._wheel_notches(event)
+        if notches == 0:
+            return
+        if self._wheel_backlog and (self._wheel_backlog > 0) != (notches > 0):
+            self._wheel_backlog = 0  # direction reversal: drop the stale queue
+        cap = self._wheel_backlog_cap()
+        self._wheel_backlog = max(-cap, min(cap, self._wheel_backlog + notches))
+        if self._wheel_tick_id is None:
+            self._wheel_tick()  # first notch paints immediately (tap feel)
+
+    def _wheel_notches(self, event) -> int:
+        """Signed frame steps for one wheel event (+1 = forward)."""
+        num = getattr(event, "num", None)
+        if num == 4:
+            return -1
+        if num == 5:
+            return 1
+        delta = getattr(event, "delta", 0) or 0
+        if sys.platform != "win32":
+            # macOS reports small per-event deltas; treat each event as a notch.
+            return -1 if delta > 0 else (1 if delta < 0 else 0)
+        self._wheel_delta_accum += delta
+        notches = int(self._wheel_delta_accum / WHEEL_NOTCH_DELTA)
+        self._wheel_delta_accum -= notches * WHEEL_NOTCH_DELTA
+        return -notches  # wheel up (positive delta) = previous frame
+
+    def _wheel_backlog_cap(self) -> int:
+        fps = getattr(self, "frame_rate", None) or (1000.0 / WHEEL_DEFAULT_INTERVAL_MS)
+        return max(1, round(fps * WHEEL_BACKLOG_S))
+
+    def _frame_interval_ms(self) -> int:
+        fps = getattr(self, "frame_rate", None)
+        if fps and fps > 0:
+            return max(1, round(1000.0 / fps))
+        return WHEEL_DEFAULT_INTERVAL_MS
+
+    def _wheel_tick(self):
+        self._wheel_tick_id = None
+        if self.video is None or self._wheel_backlog == 0:
+            self._wheel_backlog = 0
+            self._wheel_next_due = None
+            return
+        direction = 1 if self._wheel_backlog > 0 else -1
+        current = self.video.current_frame
+        target = max(0, min(self.video.total_frames, current + direction))
+        if target == current:
+            self._wheel_backlog = 0  # at the first/last frame: nothing left to do
+            return
+        if target not in self.frame_buffer:
+            # Not decoded yet: ask for it and retry without consuming a notch.
+            self.frame_buffer.request_priority(target)
+            self._wheel_tick_id = self.after(WHEEL_BUFFER_POLL_MS, self._wheel_tick)
+            return
+        # Pace against a running deadline, not "interval after the redraw":
+        # the redraw itself costs ~20 ms, and adding it to every wait would
+        # make a 25 fps video scroll at ~16 fps. An idle or badly lagging
+        # clock restarts from now so we never try to catch up with a burst.
+        now = time.monotonic()
+        interval_s = self._frame_interval_ms() / 1000.0
+        due = self._wheel_next_due
+        if due is None or due < now - interval_s:
+            due = now
+        due += interval_s
+        self._wheel_next_due = due
+        self._wheel_backlog -= direction
+        self.next_frame(direction)
+        # Stay armed until the deadline even with an empty queue: notches
+        # arriving inside that window are queued instead of painting at once.
+        delay_ms = max(1, round((due - time.monotonic()) * 1000.0))
+        self._wheel_tick_id = self.after(delay_ms, self._wheel_tick)
+
+    def _cancel_wheel_scroll(self):
+        """Drop queued wheel steps. Used when the video is unloaded."""
+        if self._wheel_tick_id is not None:
+            try: self.after_cancel(self._wheel_tick_id)
+            except Exception: pass
+            self._wheel_tick_id = None
+        self._wheel_backlog = 0
+        self._wheel_delta_accum = 0
+        self._wheel_next_due = None
 
     def _request_buffered_step(self, delta):
         if self.video is None:

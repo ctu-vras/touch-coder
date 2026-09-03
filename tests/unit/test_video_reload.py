@@ -41,6 +41,7 @@ def _app(events, save_result=True, cloth_app=None):
         _last_step_sign=1,
         stop_video=lambda: events.append("stop_play"),
         _cancel_arrow_hold_state=lambda: events.append("cancel_hold"),
+        _cancel_wheel_scroll=lambda: None,
         save_data=lambda: events.append("save") or save_result,
         save_last_position=lambda: events.append("last_position"),
         _finalize_video_time=lambda: events.append("finalize_time"),
