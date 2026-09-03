@@ -966,9 +966,19 @@ class LabelingApp(tk.Tk):
         b = self.video.frames.get(frame, {}) if self.video else {}
         params = (b.get("Params") or {})
         # If any param ON => green; else if any OFF => red; else None
-        if any(v == "ON" for v in params.values()): return theme.TL_ONSET_MARK
-        if any(v == "OFF" for v in params.values()): return theme.TL_OFFSET_MARK
+        if any(v == "ON" for v in params.values()): return theme.TL_PARAM_ON_MARK
+        if any(v == "OFF" for v in params.values()): return theme.TL_PARAM_OFF_MARK
         return None
+
+    @staticmethod
+    def _draw_param_tick(canvas, x, top, bottom, color):
+        """Parameter marks are secondary to onset/offset edges: thin and dashed."""
+        return canvas.create_line(
+            x, top, x, bottom,
+            fill=color,
+            width=theme.TL_PARAM_MARK_WIDTH,
+            dash=theme.TL_PARAM_MARK_DASH,
+        )
 
     @staticmethod
     def _update_timeline_playhead(canvas, item_ids, x, top, bottom):
@@ -1062,7 +1072,7 @@ class LabelingApp(tk.Tk):
                     param_color = self.parameter_color_at_frame(frame_offset)
                     if param_color is not None:
                         mid_x = (left + right) / 2
-                        self.timeline_canvas.create_line(mid_x, top, mid_x, bottom, fill=param_color, width=2)
+                        self._draw_param_tick(self.timeline_canvas, mid_x, top, bottom, param_color)
 
                     # NEW: per-limb ticks for Param1..3 on this frame
                     colors = self.limb_parameter_colors_at_frame(frame_offset)
@@ -1070,7 +1080,7 @@ class LabelingApp(tk.Tk):
                     offsets = (-2, 0, 2)
                     for col, dx in zip(colors, offsets):
                         if col:
-                            self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
+                            self._draw_param_tick(self.timeline_canvas, mid_x + dx, top, bottom, col)
 
                     if frame == self.video.number_frames_in_zone - 1:
                         if self.video.current_frame_zone + 1 < len(self.video.touch_to_next_zone):
@@ -1084,7 +1094,7 @@ class LabelingApp(tk.Tk):
                 offsets = (-2, 0, 2)  # horizontal pixel offsets for Param1..3
                 for col, dx in zip(colors, offsets):
                     if col:
-                        self.timeline_canvas.create_line(mid_x + dx, top, mid_x + dx, bottom, fill=col, width=2)
+                        self._draw_param_tick(self.timeline_canvas, mid_x + dx, top, bottom, col)
 
                 # Draw one shared grid over borderless fills; shared edges stay 1 px.
                 self.timeline_canvas.create_rectangle(
@@ -1213,11 +1223,11 @@ class LabelingApp(tk.Tk):
 
                 # 2) Global parameter lines
                 for x, c in param_lines:
-                    self.timeline2_canvas.create_line(x, top, x, bottom, fill=c, width=2)
+                    self._draw_param_tick(self.timeline2_canvas, x, top, bottom, c)
 
                 #    Limb-specific parameter ticks for the selected limb
                 for x, c in limb_param_lines:
-                    self.timeline2_canvas.create_line(x, top, x, bottom, fill=c, width=2)
+                    self._draw_param_tick(self.timeline2_canvas, x, top, bottom, c)
 
                 # 3) On/Off edge markers
                 for x in on_lines:
@@ -1663,9 +1673,9 @@ class LabelingApp(tk.Tk):
             key = self._limb_param_key_for_index(i)
             val = limb_params.get(key)
             if val == "ON":
-                colors.append(theme.TL_ONSET_MARK)
+                colors.append(theme.TL_PARAM_ON_MARK)
             elif val == "OFF":
-                colors.append(theme.TL_OFF)
+                colors.append(theme.TL_PARAM_OFF_MARK)
             else:
                 colors.append(None)
         return colors
@@ -1957,6 +1967,7 @@ class LabelingApp(tk.Tk):
         # Stop playback / arrow-hold before the video identity changes.
         self.stop_video()
         self._cancel_arrow_hold_state()
+        self._cancel_wheel_scroll()
 
         # A leftover Clothes window writes its dots through the CURRENT repo
         # on close, so close it now, while that repo is still the right one.

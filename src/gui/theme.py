@@ -32,6 +32,12 @@ TL_DURING = "#d9f0db"
 TL_OFF = OFF_RED
 TL_ONSET_MARK = "#2f8f57"
 TL_OFFSET_MARK = "#c0392b"
+# Parameter ticks are secondary to onset/offset edges: muted hues, 1 px and
+# dashed, so a parameter OFF can never be mistaken for a touch OFF.
+TL_PARAM_ON_MARK = "#74b58c"
+TL_PARAM_OFF_MARK = "#dc9088"
+TL_PARAM_MARK_WIDTH = 1
+TL_PARAM_MARK_DASH = (3, 2)
 PLAYHEAD = ACCENT
 
 # Status chips use small semantic dots rather than filled backgrounds.
