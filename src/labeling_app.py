@@ -203,6 +203,7 @@ def custom_confirm_close(root) -> bool:
         text="Do you want to close the application?\n\nYour progress will be saved.",
         font=theme.FONT_TITLE,
         justify="center",
+        anchor="center",
         wraplength=350
     )
     msg.pack(expand=True, fill="both")
